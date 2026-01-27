@@ -122,7 +122,7 @@ export interface MatchEvent {
   x?: number
   y?: number
   reboundType?: "offensive" | "defensive"
-  foulType?: "personal" | "technical" | "unsportsmanlike"
+  foulType?: "personal" | "technical" | "unsportsmanlike" | "disqualifying" | "fight"
   period: number
   timestamp: Date
   gameTime: string // MM:SS

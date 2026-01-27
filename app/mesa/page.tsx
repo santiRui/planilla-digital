@@ -267,9 +267,9 @@ export default function MesaPage() {
                   {/* Action Button */}
                   {match.status === "en_juego" ? (
                     <Button className="w-full" size="lg" asChild>
-                      <Link href={`/mesa/planilla/${match.id}`}>
+                      <Link href={`/mesa/planilla/${match.id}/pre`}>
                         <Play className="mr-2 h-5 w-5" />
-                        Continuar Planilla
+                        Iniciar Acta
                       </Link>
                     </Button>
                   ) : (

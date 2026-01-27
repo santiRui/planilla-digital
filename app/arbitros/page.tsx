@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { useEffect, useMemo, useState } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -10,6 +11,7 @@ import { EmptyState } from "@/components/ui/empty-state"
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser"
 
 export default function ArbitrosPage() {
+  const router = useRouter()
   const supabase = useMemo(() => createSupabaseBrowserClient(), [])
 
   const [loading, setLoading] = useState(true)
@@ -154,6 +156,9 @@ export default function ArbitrosPage() {
     }
 
     setMatches((prev) => prev.map((m) => (m.id === matchId ? { ...m, status: "en_juego" } : m)))
+    
+    // Redirigir a la pre planilla del partido
+    router.push(`/mesa/planilla/${matchId}/pre`)
   }
 
   return (

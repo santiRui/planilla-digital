@@ -38,6 +38,21 @@ import { createSupabaseBrowserClient } from "@/lib/supabase/browser"
 
 type SyncStatus = "synced" | "pending" | "syncing" | "error"
 
+type DbMatchRow = {
+  id: string
+  homeTeamId: string
+  awayTeamId: string
+  status: "programado" | "en_juego" | "finalizado"
+  homeScore: number | null
+  awayScore: number | null
+}
+
+type DbTeamRow = {
+  id: string
+  name: string
+  primaryColor: string
+}
+
 export default function PlanillaPage() {
   const params = useParams()
   const router = useRouter()
@@ -60,6 +75,34 @@ export default function PlanillaPage() {
   const [dbAwayTeam, setDbAwayTeam] = useState<DbTeamRow | null>(null)
   const [dbHomePlayers, setDbHomePlayers] = useState<Player[]>([])
   const [dbAwayPlayers, setDbAwayPlayers] = useState<Player[]>([])
+
+  // Función para obtener datos de la pre planilla
+  const getPrePlanillaData = () => {
+    if (typeof window === "undefined") return null
+    const raw = window.localStorage.getItem(`preplanilla:${matchId}`)
+    if (!raw) return null
+    try {
+      return JSON.parse(raw)
+    } catch {
+      return null
+    }
+  }
+
+  // Función para obtener el staff seleccionado de la pre planilla
+  const getSelectedStaff = () => {
+    const prePlanilla = getPrePlanillaData()
+    if (!prePlanilla) return { homeStaff: [], awayStaff: [] }
+    
+    // Aquí deberíamos cargar los datos del staff de la base de datos
+    // y filtrar según los IDs seleccionados en la pre planilla
+    return { 
+      homeStaff: prePlanilla.home.staffIds || [], 
+      awayStaff: prePlanilla.away.staffIds || [] 
+    }
+  }
+
+  // Cargar datos del staff de la base de datos
+  const [staffData, setStaffData] = useState<Record<string, any>>({})
 
   useEffect(() => {
     const run = async () => {
@@ -173,8 +216,50 @@ export default function PlanillaPage() {
 
   const homeTeam = storeHomeTeam ?? (dbHomeTeam as any)
   const awayTeam = storeAwayTeam ?? (dbAwayTeam as any)
-  const homePlayers = storeMatch ? storeHomePlayers : dbHomePlayers
-  const awayPlayers = storeMatch ? storeAwayPlayers : dbAwayPlayers
+  
+  // Obtener datos de la pre planilla
+  const prePlanillaData = getPrePlanillaData()
+  
+  // Filtrar jugadores para mostrar solo titulares y capitanes de la pre planilla
+  const homePlayers = useMemo(() => {
+    const allPlayers = storeMatch ? storeHomePlayers : dbHomePlayers
+    if (!prePlanillaData) {
+      return allPlayers // Si no hay datos de pre planilla, mostrar todos
+    }
+    
+    // Obtener IDs de titulares y capitanes
+    const starterAndCaptainIds = [
+      ...(prePlanillaData.home.starters || []),
+      prePlanillaData.home.captainId
+    ].filter(Boolean) as string[]
+    
+    // Si no hay titulares definidos, mostrar todos los jugadores seleccionados
+    if (starterAndCaptainIds.length === 0 && prePlanillaData.home.selectedPlayerIds?.length > 0) {
+      return allPlayers.filter(player => prePlanillaData.home.selectedPlayerIds.includes(player.id))
+    }
+    
+    return allPlayers.filter(player => starterAndCaptainIds.includes(player.id))
+  }, [storeMatch, storeHomePlayers, dbHomePlayers, prePlanillaData])
+  
+  const awayPlayers = useMemo(() => {
+    const allPlayers = storeMatch ? storeAwayPlayers : dbAwayPlayers
+    if (!prePlanillaData) {
+      return allPlayers // Si no hay datos de pre planilla, mostrar todos
+    }
+    
+    // Obtener IDs de titulares y capitanes
+    const starterAndCaptainIds = [
+      ...(prePlanillaData.away.starters || []),
+      prePlanillaData.away.captainId
+    ].filter(Boolean) as string[]
+    
+    // Si no hay titulares definidos, mostrar todos los jugadores seleccionados
+    if (starterAndCaptainIds.length === 0 && prePlanillaData.away.selectedPlayerIds?.length > 0) {
+      return allPlayers.filter(player => prePlanillaData.away.selectedPlayerIds.includes(player.id))
+    }
+    
+    return allPlayers.filter(player => starterAndCaptainIds.includes(player.id))
+  }, [storeMatch, storeAwayPlayers, dbAwayPlayers, prePlanillaData])
 
   const [homeScore, setHomeScore] = useState(0)
   const [awayScore, setAwayScore] = useState(0)
@@ -196,13 +281,49 @@ export default function PlanillaPage() {
   const [showAdvanceDialog, setShowAdvanceDialog] = useState(false)
   const [showFreeThrowDialog, setShowFreeThrowDialog] = useState(false)
   const [freeThrowDialogPlayer, setFreeThrowDialogPlayer] = useState<
-    { id: string; jerseyNumber: number | null; name: string; teamSide: "home" | "away" } | null
+    { id: string; teamSide: "home" | "away" } | null
   >(null)
-  const [selectedFreeThrowFoulId, setSelectedFreeThrowFoulId] = useState<string | null>(null)
   const [freeThrowTotal, setFreeThrowTotal] = useState<1 | 2 | 3>(2)
-  const [freeThrowAttempts, setFreeThrowAttempts] = useState<{ 1?: "made" | "missed"; 2?: "made" | "missed"; 3?: "made" | "missed" }>({})
+  const [freeThrowAttempts, setFreeThrowAttempts] = useState<Record<1 | 2 | 3, "made" | "missed" | null>>({ 1: null, 2: null, 3: null })
+  const [selectedFreeThrowFoulId, setSelectedFreeThrowFoulId] = useState<string | null>(null)
   const [localEvents, setLocalEvents] = useState<MatchEvent[]>([])
   const [mainTab, setMainTab] = useState<"cancha" | "historial" | "otros" | "configuracion" | "estadisticas">("cancha")
+  
+  // Estados para faltas
+  const [showPersonalFoulDialog, setShowPersonalFoulDialog] = useState(false)
+  const [showOtherFoulDialog, setShowOtherFoulDialog] = useState(false)
+  const [personalFoulPlayerId, setPersonalFoulPlayerId] = useState<string | null>(null)
+  const [personalFoulTeamSide, setPersonalFoulTeamSide] = useState<"home" | "away" | null>(null)
+  const [selectedFoulType, setSelectedFoulType] = useState<"unsportsmanlike" | "disqualifying" | "fight" | "technical">("unsportsmanlike")
+  const [selectedFoulTeam, setSelectedFoulTeam] = useState<"home" | "away">("home")
+  const [teamFoulWarning, setTeamFoulWarning] = useState<{ home: boolean; away: boolean }>({ home: false, away: false })
+
+  // Cargar datos del staff seleccionado
+  useEffect(() => {
+    const loadStaffData = async () => {
+      if (!homeTeam || !awayTeam) return
+      
+      const selectedStaff = getSelectedStaff()
+      const allStaffIds = [...selectedStaff.homeStaff, ...selectedStaff.awayStaff]
+      
+      if (allStaffIds.length === 0) return
+      
+      const { data } = await supabase
+        .from("coaching_staff")
+        .select("id, team_id, first_name, last_name, role")
+        .in("id", allStaffIds)
+      
+      if (data) {
+        const staffMap: Record<string, any> = {}
+        data.forEach(staff => {
+          staffMap[staff.id] = staff
+        })
+        setStaffData(staffMap)
+      }
+    }
+    
+    loadStaffData()
+  }, [homeTeam, awayTeam, prePlanillaData])
 
   useEffect(() => {
     if (!match) return
@@ -270,6 +391,56 @@ export default function PlanillaPage() {
     [localEvents, opponentTeamIdForFreeThrows],
   )
 
+  // Contadores de faltas por equipo en el período actual
+  const teamFoulsInPeriod = useMemo(() => {
+    if (!homeTeam || !awayTeam) return { home: 0, away: 0 }
+    
+    const fouls = localEvents.filter(e => e.type === "foul" && e.period === period)
+    const homeFouls = fouls.filter(e => e.teamId === homeTeam.id).length
+    const awayFouls = fouls.filter(e => e.teamId === awayTeam.id).length
+    return { home: homeFouls, away: awayFouls }
+  }, [localEvents, period, homeTeam?.id, awayTeam?.id, homeTeam, awayTeam])
+
+  // Verificar si equipos están en infracción
+  useEffect(() => {
+    setTeamFoulWarning({
+      home: teamFoulsInPeriod.home >= 4,
+      away: teamFoulsInPeriod.away >= 4
+    })
+  }, [teamFoulsInPeriod])
+
+  // Función para verificar si un jugador está descalificado
+  const isPlayerDisqualified = (playerId: string): boolean => {
+    const playerEvents = localEvents.filter(e => e.playerId === playerId && e.type === "foul")
+    
+    const personalFouls = playerEvents.filter(e => e.foulType === "personal").length
+    const technicalFouls = playerEvents.filter(e => e.foulType === "technical").length
+    const unsportsmanlikeFouls = playerEvents.filter(e => e.foulType === "unsportsmanlike").length
+    const disqualifyingFouls = playerEvents.filter(e => e.foulType === "disqualifying").length
+    const fightFouls = playerEvents.filter(e => e.foulType === "fight").length
+    
+    // Reglas de descalificación
+    return (
+      personalFouls >= 5 ||
+      technicalFouls >= 2 ||
+      unsportsmanlikeFouls >= 2 ||
+      (technicalFouls >= 1 && unsportsmanlikeFouls >= 1) ||
+      disqualifyingFouls >= 1 ||
+      fightFouls >= 1
+    )
+  }
+
+  // Actualizar lista de jugadores descalificados
+  const disqualifiedPlayers = useMemo(() => {
+    const disqualified = new Set<string>()
+    ;[...homePlayers, ...awayPlayers].forEach(player => {
+      if (isPlayerDisqualified(player.id)) {
+        disqualified.add(player.id)
+      }
+    })
+    return disqualified
+  }, [localEvents, homePlayers, awayPlayers])
+
   const getFreeThrowCountForFoul = (foul: MatchEvent): 1 | 2 | 3 => {
     const type = foul.foulType
     if (type === "technical") return 1
@@ -278,16 +449,29 @@ export default function PlanillaPage() {
     return 3
   }
 
+  // Función para determinar si una falta personal da tiros libres por infracción de equipo
+  const getTeamFoulFreeThrows = (teamSide: "home" | "away"): 0 | 2 => {
+    const fouls = teamFoulsInPeriod[teamSide]
+    return fouls >= 5 ? 2 : 0 // A partir de 5 faltas, 2 tiros libres
+  }
+
   // Add foul
   const addFoul = useCallback(
-    (playerId: string, teamSide: "home" | "away") => {
-      if (match?.status !== "en_juego") return
+    (playerId: string, teamSide: "home" | "away", foulType: MatchEvent["foulType"] = "personal") => {
+      if (match?.status !== "en_juego" || !homeTeam || !awayTeam) return
+      
+      // Verificar si el jugador está descalificado (excepto para personal técnico)
+      if (!playerId.startsWith("tech-") && !playerId.startsWith("assist-") && isPlayerDisqualified(playerId)) {
+        return // No permitir registrar faltas a jugadores descalificados
+      }
+      
       const event: MatchEvent = {
         id: `ev-${Date.now()}`,
         matchId,
         playerId,
-        teamId: teamSide === "home" ? homeTeam!.id : awayTeam!.id,
+        teamId: teamSide === "home" ? homeTeam.id : awayTeam.id,
         type: "foul",
+        foulType,
         period,
         timestamp: new Date(),
         gameTime: formatTime(gameTime),
@@ -296,8 +480,21 @@ export default function PlanillaPage() {
       setLocalEvents((prev) => [...prev, event])
       addMatchEvent(event)
       setSyncStatus("pending")
+      
+      // Verificar si después de esta falta el jugador queda descalificado
+      if (!playerId.startsWith("tech-") && !playerId.startsWith("assist-") && isPlayerDisqualified(playerId)) {
+        // El jugador queda descalificado, podría mostrar una notificación
+        console.log(`Jugador ${playerId} descalificado por acumulación de faltas`)
+      }
+      
+      // Verificar si el equipo entra en infracción con esta falta
+      const currentTeamFouls = teamFoulsInPeriod[teamSide] + 1
+      if (currentTeamFouls === 4) {
+        // El equipo acaba de entrar en infracción
+        console.log(`Equipo ${teamSide} entra en infracción (4 faltas)`)
+      }
     },
-    [matchId, homeTeam, awayTeam, period, gameTime, addMatchEvent],
+    [matchId, homeTeam, awayTeam, period, gameTime, addMatchEvent, isPlayerDisqualified, teamFoulsInPeriod],
   )
 
   // Undo last action
@@ -619,12 +816,14 @@ export default function PlanillaPage() {
     }, 0)
 
     const isSelected = selectedPlayerId === player.id
+    const isDisqualified = disqualifiedPlayers.has(player.id)
 
     return (
-      <div className={`rounded-lg border bg-card p-2 ${isSelected ? "border-primary" : ""}`}>
+      <div className={`rounded-lg border bg-card p-2 ${isSelected ? "border-primary" : ""} ${isDisqualified ? "border-red-500 bg-red-50" : ""}`}>
         <button
           type="button"
           className="w-full"
+          disabled={isDisqualified}
           onClick={() => {
             if (pendingFreeThrow) {
               return
@@ -644,12 +843,13 @@ export default function PlanillaPage() {
         >
           <div className="flex items-center justify-between mb-1.5">
             <div className="flex items-center gap-1.5">
-              <span className="h-8 w-8 rounded-full bg-muted flex items-center justify-center font-bold text-xs">
+              <span className={`h-8 w-8 rounded-full flex items-center justify-center font-bold text-xs ${isDisqualified ? "bg-red-500 text-white" : "bg-muted"}`}>
                 {player.jerseyNumber}
               </span>
               <div>
-                <p className="font-medium text-xs">
+                <p className={`font-medium text-xs ${isDisqualified ? "text-red-700" : ""}`}>
                   {player.firstName} {player.lastName.charAt(0)}.
+                  {isDisqualified && " ⛔"}
                 </p>
                 <p className="text-[11px] text-muted-foreground">
                   {playerPoints} pts | {playerFouls} faltas
@@ -663,8 +863,12 @@ export default function PlanillaPage() {
             size="sm"
             variant="secondary"
             className="h-8 flex-1 text-xs font-medium px-2"
-            onClick={() => addFoul(player.id, teamSide)}
-            disabled={!!pendingReboundTeamId || !!pendingAssistTeamId || !!pendingFreeThrow}
+            onClick={() => {
+              setPersonalFoulPlayerId(player.id)
+              setPersonalFoulTeamSide(teamSide)
+              setShowPersonalFoulDialog(true)
+            }}
+            disabled={!!pendingReboundTeamId || !!pendingAssistTeamId || !!pendingFreeThrow || isDisqualified}
           >
             Falta
           </Button>
@@ -762,6 +966,12 @@ export default function PlanillaPage() {
                   <div className="min-w-0">
                     <div className="truncate text-xs text-muted-foreground">LOCAL</div>
                     <div className="truncate text-sm font-semibold">{homeTeam.name}</div>
+                    <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
+                      <span>Faltas:</span>
+                      <div className={`px-1.5 py-0.5 rounded font-medium ${teamFoulWarning.home ? "bg-red-100 text-red-700" : "bg-muted"}`}>
+                        {teamFoulsInPeriod.home}
+                      </div>
+                    </div>
                   </div>
                   <div className="text-2xl font-bold tabular-nums">{homeScore}</div>
                 </div>
@@ -814,6 +1024,12 @@ export default function PlanillaPage() {
                   <div className="min-w-0 text-right">
                     <div className="truncate text-xs text-muted-foreground">VISITANTE</div>
                     <div className="truncate text-sm font-semibold">{awayTeam.name}</div>
+                    <div className="flex items-center justify-end gap-1 text-xs text-muted-foreground mt-1">
+                      <div className={`px-1.5 py-0.5 rounded font-medium ${teamFoulWarning.away ? "bg-red-100 text-red-700" : "bg-muted"}`}>
+                        {teamFoulsInPeriod.away}
+                      </div>
+                      <span>Faltas:</span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -935,6 +1151,18 @@ export default function PlanillaPage() {
                       onShot={registerShot}
                     />
                   </div>
+                  
+                  {/* Botón de Otras Faltas debajo de la cancha */}
+                  <div className="px-3 py-2 border-t">
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => setShowOtherFoulDialog(true)}
+                      disabled={match.status !== "en_juego"}
+                    >
+                      Otras Faltas
+                    </Button>
+                  </div>
                 </div>
               </div>
 
@@ -1002,6 +1230,16 @@ export default function PlanillaPage() {
                         const player = [...homePlayers, ...awayPlayers].find((p) => p.id === e.playerId)
                         const isHome = e.teamId === homeTeam.id
                         const teamName = isHome ? homeTeam.name : awayTeam.name
+                        
+                        // Manejar nombres para personal técnico
+                        let personName = ""
+                        if (e.foulType === "technical" && e.playerId.startsWith("tech-")) {
+                          personName = "Técnico"
+                        } else if (e.foulType === "technical" && e.playerId.startsWith("assist-")) {
+                          personName = "Asistente"
+                        } else if (player) {
+                          personName = `${player.lastName.toUpperCase()}, ${player.firstName}`
+                        }
                         const title =
                           e.type === "points"
                             ? `+${e.points}`
@@ -1012,7 +1250,14 @@ export default function PlanillaPage() {
                                 : e.type === "rebound"
                                   ? `Rebote ${e.reboundType === "offensive" ? "O" : "D"}`
                                   : e.type === "foul"
-                                    ? "Falta"
+                                    ? (() => {
+                                        const type = e.foulType
+                                        if (type === "technical") return "Falta Técnica"
+                                        if (type === "unsportsmanlike") return "Falta Antideportiva"
+                                        if (type === "disqualifying") return "Falta Descalificante"
+                                        if (type === "fight") return "Reyerta"
+                                        return "Falta Personal"
+                                      })()
                                     : e.type
 
                         return (
@@ -1021,7 +1266,7 @@ export default function PlanillaPage() {
                               <div className="text-sm font-semibold truncate">{title}</div>
                               <div className="text-xs text-muted-foreground truncate">
                                 {e.gameTime} | {teamName}
-                                {player ? ` | ${player.lastName.toUpperCase()}, ${player.firstName}` : ""}
+                                {personName && ` | ${personName}`}
                               </div>
                             </div>
                             <div
@@ -1134,18 +1379,18 @@ export default function PlanillaPage() {
               <div className="my-4">
                 <div className="flex items-center justify-center gap-8 text-foreground">
                   <div className="text-center">
-                    <p className="font-semibold">{homeTeam.name}</p>
-                    <p className="text-4xl font-bold">{homeScore}</p>
+                    <div className="font-semibold">{homeTeam.name}</div>
+                    <div className="text-4xl font-bold">{homeScore}</div>
                   </div>
                   <span className="text-2xl text-muted-foreground">-</span>
                   <div className="text-center">
-                    <p className="font-semibold">{awayTeam.name}</p>
-                    <p className="text-4xl font-bold">{awayScore}</p>
+                    <div className="font-semibold">{awayTeam.name}</div>
+                    <div className="text-4xl font-bold">{awayScore}</div>
                   </div>
                 </div>
-                <p className="text-center mt-4 text-sm">
+                <div className="text-center mt-4 text-sm">
                   ¿Confirmas que deseas finalizar el partido con este resultado?
-                </p>
+                </div>
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -1359,6 +1604,267 @@ export default function PlanillaPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Diálogo de Faltas Personales */}
+      <Dialog open={showPersonalFoulDialog} onOpenChange={setShowPersonalFoulDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Falta Personal</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <div className="text-sm text-muted-foreground mb-2">
+                Jugador que cometió la falta:{" "}
+                {personalFoulPlayerId && (() => {
+                  const player = [...homePlayers, ...awayPlayers].find(p => p.id === personalFoulPlayerId)
+                  return player ? `${player.firstName} ${player.lastName}` : ""
+                })()}
+              </div>
+            </div>
+            
+            {/* Información sobre tiros libres por infracción de equipo */}
+            {personalFoulTeamSide && (
+              <div className={`p-2 rounded text-xs ${teamFoulWarning[personalFoulTeamSide] ? "bg-red-50 text-red-700 border border-red-200" : "bg-blue-50 text-blue-700 border border-blue-200"}`}>
+                {teamFoulWarning[personalFoulTeamSide] 
+                  ? `⚠️ Equipo en infracción: ${teamFoulsInPeriod[personalFoulTeamSide]}/5 faltas. Próxima falta = 2 tiros libres`
+                  : `Equipo con ${teamFoulsInPeriod[personalFoulTeamSide]}/4 faltas. A las 4 faltas entra en infracción`
+                }
+              </div>
+            )}
+            
+            <div>
+              <div className="text-xs text-muted-foreground mb-1">Seleccionar jugador rival que recibió la falta</div>
+              <div className="space-y-2 max-h-60 overflow-auto">
+                {(personalFoulTeamSide === "home" ? awayPlayers : homePlayers).map((player) => (
+                  <Button
+                    key={player.id}
+                    variant="outline"
+                    className="w-full justify-start"
+                    onClick={() => {
+                      if (personalFoulPlayerId && personalFoulTeamSide) {
+                        addFoul(personalFoulPlayerId, personalFoulTeamSide, "personal")
+                        setShowPersonalFoulDialog(false)
+                        setPersonalFoulPlayerId(null)
+                        setPersonalFoulTeamSide(null)
+                      }
+                    }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="h-6 w-6 rounded-full bg-muted flex items-center justify-center font-bold text-xs">
+                        {player.jerseyNumber}
+                      </span>
+                      <span className="text-sm">
+                        {player.firstName} {player.lastName}
+                      </span>
+                    </div>
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => {
+              setShowPersonalFoulDialog(false)
+              setPersonalFoulPlayerId(null)
+              setPersonalFoulTeamSide(null)
+            }}>
+              Cancelar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Diálogo de Otras Faltas */}
+      <Dialog open={showOtherFoulDialog} onOpenChange={setShowOtherFoulDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Otras Faltas</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            {/* Paso 1: Seleccionar tipo de falta */}
+            <div>
+              <div className="text-sm font-semibold mb-2">Tipo de falta</div>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  variant={selectedFoulType === "unsportsmanlike" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setSelectedFoulType("unsportsmanlike")}
+                >
+                  Antideportiva
+                </Button>
+                <Button
+                  variant={selectedFoulType === "disqualifying" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setSelectedFoulType("disqualifying")}
+                >
+                  Descalificante
+                </Button>
+                <Button
+                  variant={selectedFoulType === "fight" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setSelectedFoulType("fight")}
+                >
+                  Reyerta
+                </Button>
+                <Button
+                  variant={selectedFoulType === "technical" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setSelectedFoulType("technical")}
+                >
+                  Técnica
+                </Button>
+              </div>
+            </div>
+
+            {/* Paso 2: Seleccionar equipo */}
+            <div>
+              <div className="text-sm font-semibold mb-2">Equipo</div>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  variant={selectedFoulTeam === "home" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setSelectedFoulTeam("home")}
+                  style={selectedFoulTeam === "home" ? { backgroundColor: homeTeam?.primaryColor } : {}}
+                  disabled={!homeTeam}
+                >
+                  {homeTeam?.name || "Local"}
+                </Button>
+                <Button
+                  variant={selectedFoulTeam === "away" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setSelectedFoulTeam("away")}
+                  style={selectedFoulTeam === "away" ? { backgroundColor: awayTeam?.primaryColor } : {}}
+                  disabled={!awayTeam}
+                >
+                  {awayTeam?.name || "Visitante"}
+                </Button>
+              </div>
+            </div>
+
+            {/* Paso 3: Seleccionar persona */}
+            <div>
+              <div className="text-sm font-semibold mb-2">
+                {selectedFoulType === "unsportsmanlike" || selectedFoulType === "disqualifying" || selectedFoulType === "fight" 
+                  ? "Jugadores y Personal Técnico" 
+                  : selectedFoulType === "technical" 
+                    ? "Jugadores y Personal Técnico" 
+                    : "Jugadores"
+                }
+              </div>
+              
+              {/* Mostrar jugadores para todos los tipos de falta excepto personal */}
+              {selectedFoulType !== "technical" && selectedFoulType !== "unsportsmanlike" && selectedFoulType !== "disqualifying" && selectedFoulType !== "fight" ? (
+                // Faltas personales: solo jugadores
+                <div className="space-y-1 max-h-48 overflow-auto">
+                  {(selectedFoulTeam === "home" ? homePlayers : awayPlayers).map((player) => (
+                    <Button
+                      key={player.id}
+                      variant="outline"
+                      size="sm"
+                      className="w-full justify-start text-xs"
+                      onClick={() => {
+                        addFoul(player.id, selectedFoulTeam, selectedFoulType)
+                        setShowOtherFoulDialog(false)
+                      }}
+                      disabled={isPlayerDisqualified(player.id)}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="w-6 text-center font-medium">{player.jerseyNumber}</span>
+                        <span>{player.lastName.toUpperCase()}, {player.firstName}</span>
+                      </div>
+                    </Button>
+                  ))}
+                </div>
+              ) : (
+                // Faltas técnicas, antideportivas, descalificantes y por reyerta: jugadores + staff
+                <div className="space-y-2">
+                  {/* Sección de Jugadores */}
+                  <div>
+                    <div className="text-xs font-medium text-muted-foreground mb-1">Jugadores</div>
+                    <div className="space-y-1 max-h-32 overflow-auto">
+                      {(selectedFoulTeam === "home" ? homePlayers : awayPlayers).map((player) => (
+                        <Button
+                          key={player.id}
+                          variant="outline"
+                          size="sm"
+                          className="w-full justify-start text-xs"
+                          onClick={() => {
+                            addFoul(player.id, selectedFoulTeam, selectedFoulType)
+                            setShowOtherFoulDialog(false)
+                          }}
+                          disabled={isPlayerDisqualified(player.id)}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="w-6 text-center font-medium">{player.jerseyNumber}</span>
+                            <span>{player.lastName.toUpperCase()}, {player.firstName}</span>
+                          </div>
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  {/* Sección de Personal Técnico (excepto para antideportivas) */}
+                  {selectedFoulType !== "unsportsmanlike" && (
+                    <div>
+                      <div className="text-xs font-medium text-muted-foreground mb-1">Personal Técnico</div>
+                      {(() => {
+                        const selectedStaff = getSelectedStaff()
+                        const staffIds = selectedFoulTeam === "home" ? selectedStaff.homeStaff : selectedStaff.awayStaff
+                        
+                        if (staffIds.length === 0) {
+                          return (
+                            <p className="text-xs text-muted-foreground">
+                              No hay personal técnico seleccionado en la pre planilla
+                            </p>
+                          )
+                        }
+                        
+                        return staffIds.map((staffId: string) => {
+                          const staff = staffData[staffId]
+                          if (!staff) return null
+                          
+                          const isTechnical = staff.role === "tecnico"
+                          const staffType = isTechnical ? "tech" : "assist"
+                          const staffIdFull = `${staffType}-${selectedFoulTeam === "home" ? homeTeam?.id : awayTeam?.id}`
+                          
+                          return (
+                            <Button
+                              key={staff.id}
+                              variant="outline"
+                              className="w-full justify-start text-xs"
+                              onClick={() => {
+                                if (homeTeam && awayTeam) {
+                                  addFoul(staffIdFull, selectedFoulTeam, selectedFoulType)
+                                  setShowOtherFoulDialog(false)
+                                }
+                              }}
+                              disabled={!homeTeam || !awayTeam}
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-medium text-primary">
+                                  {isTechnical ? "DT" : "AS"}
+                                </span>
+                                <span>
+                                  {staff.last_name.toUpperCase()}, {staff.first_name}
+                                </span>
+                              </div>
+                            </Button>
+                          )
+                        })
+                      })()}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowOtherFoulDialog(false)}>
+              Cancelar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -1387,8 +1893,6 @@ function ShotMap({
   }
 
   const mapToModelCoords = (pos: { x: number; y: number }) => {
-    // El modelo existente asume cancha vertical (aros arriba/abajo).
-    // En la UI mostramos la cancha horizontal: convertimos coords landscape -> portrait.
     return { x: 1 - pos.y, y: pos.x }
   }
 
@@ -1439,16 +1943,13 @@ function ShotMap({
               aria-hidden="true"
             >
               <line x1="500" y1="18" x2="500" y2="518" stroke="rgba(255,255,255,0.95)" strokeWidth="6" />
-
               <circle cx="500" cy="268" r="110" fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth="6" />
 
               <g>
                 <rect x="18" y="158" width="190" height="220" fill="#2a5bd7" fillOpacity="0.95" stroke="rgba(255,255,255,0.95)" strokeWidth="6" />
                 <line x1="208" y1="158" x2="208" y2="378" stroke="rgba(255,255,255,0.95)" strokeWidth="6" />
                 <path d="M 208 208 A 60 60 0 0 1 208 328" fill="none" stroke="rgba(255,255,255,0.75)" strokeWidth="6" />
-
                 <circle cx="55" cy="268" r="7" fill="none" stroke="rgba(255,255,255,0.95)" strokeWidth="3" />
-
                 <line x1="18" y1="52" x2="200" y2="52" stroke="rgba(255,255,255,0.9)" strokeWidth="6" />
                 <line x1="18" y1="484" x2="200" y2="484" stroke="rgba(255,255,255,0.9)" strokeWidth="6" />
                 <path d="M 200 52 A 260 260 0 0 1 200 484" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="6" />
@@ -1458,9 +1959,7 @@ function ShotMap({
                 <rect x="18" y="158" width="190" height="220" fill="#2a5bd7" fillOpacity="0.95" stroke="rgba(255,255,255,0.95)" strokeWidth="6" />
                 <line x1="208" y1="158" x2="208" y2="378" stroke="rgba(255,255,255,0.95)" strokeWidth="6" />
                 <path d="M 208 208 A 60 60 0 0 1 208 328" fill="none" stroke="rgba(255,255,255,0.75)" strokeWidth="6" />
-
                 <circle cx="55" cy="268" r="7" fill="none" stroke="rgba(255,255,255,0.95)" strokeWidth="3" />
-
                 <line x1="18" y1="52" x2="200" y2="52" stroke="rgba(255,255,255,0.9)" strokeWidth="6" />
                 <line x1="18" y1="484" x2="200" y2="484" stroke="rgba(255,255,255,0.9)" strokeWidth="6" />
                 <path d="M 200 52 A 260 260 0 0 1 200 484" fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth="6" />
@@ -1480,19 +1979,4 @@ function ShotMap({
       </div>
     </div>
   )
-}
-
-type DbMatchRow = {
-  id: string
-  homeTeamId: string
-  awayTeamId: string
-  status: "programado" | "en_juego" | "finalizado"
-  homeScore: number | null
-  awayScore: number | null
-}
-
-type DbTeamRow = {
-  id: string
-  name: string
-  primaryColor: string
 }
