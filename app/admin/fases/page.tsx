@@ -511,46 +511,70 @@ export default function FasesPage() {
                   <p className="text-center text-muted-foreground py-4">No hay datos de posiciones</p>
                 ) : (
                   <div className="space-y-2">
-                    {categoryStandings.map((standing, index) => (
-                      <div
-                        key={standing.teamId}
-                        className={`flex items-center justify-between p-3 rounded-lg ${
-                          index < playoffConfig.qualifiedTeams
-                            ? "bg-[var(--color-success)]/10 border border-[var(--color-success)]/20"
-                            : "bg-muted/50"
-                        }`}
-                      >
-                        <div className="flex items-center gap-3">
-                          <span className="w-6 text-center font-bold text-lg">{index + 1}</span>
-                          {getTeamLogo(standing.teamId) ? (
-                            <div
-                              className="h-8 w-8 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0"
-                              style={{ borderColor: getTeamColor(standing.teamId) }}
-                            >
-                              <img
-                                src={getTeamLogo(standing.teamId)}
-                                alt={getTeamName(standing.teamId)}
-                                className="h-full w-full object-cover"
-                              />
-                            </div>
-                          ) : (
-                            <div
-                              className="h-8 w-8 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0"
-                              style={{ backgroundColor: getTeamColor(standing.teamId) }}
-                            >
-                              {getTeamName(standing.teamId).substring(0, 2).toUpperCase()}
-                            </div>
-                          )}
-                          <span className="font-medium">{getTeamName(standing.teamId)}</span>
-                        </div>
-                        <div className="flex items-center gap-4 text-sm">
-                          <span className="text-muted-foreground">
-                            {standing.won}G - {standing.lost}P
-                          </span>
-                          <span className="font-bold">{standing.points} pts</span>
-                        </div>
+                    {/* Encabezado de columnas */}
+                    <div className="flex justify-end pr-1">
+                      <div className="grid grid-cols-8 gap-2 min-w-[280px] sm:min-w-[360px] text-[11px] sm:text-xs text-muted-foreground uppercase tracking-wide text-center">
+                        <span>PJ</span>
+                        <span>G</span>
+                        <span>P</span>
+                        <span>Pts</span>
+                        <span>Pts+</span>
+                        <span>Pts-</span>
+                        <span>Dif</span>
+                        <span>Prom</span>
                       </div>
-                    ))}
+                    </div>
+                    {categoryStandings.map((standing, index) => {
+                      const diff = standing.pointsFor - standing.pointsAgainst
+                      const avg = standing.played > 0 ? (standing.pointsFor / standing.played).toFixed(1) : "0.0"
+                      return (
+                        <div
+                          key={standing.teamId}
+                          className={`flex items-center justify-between p-3 rounded-lg ${
+                            index < playoffConfig.qualifiedTeams
+                              ? "bg-[var(--color-success)]/10 border border-[var(--color-success)]/20"
+                              : "bg-muted/50"
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <span className="w-6 text-center font-bold text-lg">{index + 1}</span>
+                            {getTeamLogo(standing.teamId) ? (
+                              <div
+                                className="h-8 w-8 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0"
+                                style={{ borderColor: getTeamColor(standing.teamId) }}
+                              >
+                                <img
+                                  src={getTeamLogo(standing.teamId)}
+                                  alt={getTeamName(standing.teamId)}
+                                  className="h-full w-full object-cover"
+                                />
+                              </div>
+                            ) : (
+                              <div
+                                className="h-8 w-8 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0"
+                                style={{ backgroundColor: getTeamColor(standing.teamId) }}
+                              >
+                                {getTeamName(standing.teamId).substring(0, 2).toUpperCase()}
+                              </div>
+                            )}
+                            <span className="font-medium">{getTeamName(standing.teamId)}</span>
+                          </div>
+                          {/* Valores alineados bajo el encabezado */}
+                          <div className="flex justify-end pr-1">
+                            <div className="grid grid-cols-8 gap-2 min-w-[280px] sm:min-w-[360px] text-xs sm:text-sm text-foreground text-center">
+                              <span>{standing.played}</span>
+                              <span>{standing.won}</span>
+                              <span>{standing.lost}</span>
+                              <span>{standing.points}</span>
+                              <span>{standing.pointsFor}</span>
+                              <span>{standing.pointsAgainst}</span>
+                              <span>{diff > 0 ? `+${diff}` : diff}</span>
+                              <span>{avg}</span>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
               </CardContent>
@@ -848,7 +872,8 @@ function computeStandings(teams: Team[], matches: MatchRow[]): StandingRow[] {
 
   const list = Array.from(rows.values())
   for (const r of list) {
-    r.points = r.won * 2
+    // 2 puntos por victoria, 1 punto por derrota
+    r.points = r.won * 2 + r.lost * 1
   }
 
   list.sort((a, b) => {

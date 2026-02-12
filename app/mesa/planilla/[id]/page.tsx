@@ -53,6 +53,70 @@ type DbTeamRow = {
   primaryColor: string
 }
 
+// Tipos auxiliares para filas de Supabase
+type MatchRow = {
+  id: string
+  home_team_id: string
+  away_team_id: string
+  status: "programado" | "en_juego" | "finalizado"
+  home_score: number | null
+  away_score: number | null
+}
+
+type TeamRow = {
+  id: string
+  name: string
+  primary_color: string | null
+}
+
+type PersistedMatchState = {
+  homeScore: number
+  awayScore: number
+  period: number
+  gameTime: number
+  isRunning: boolean
+  selectedTeam: "home" | "away"
+  selectedPlayerId: string | null
+  pendingReboundTeamId: string | null
+  pendingPersonalFoul: {
+    committerId: string
+    committerTeamSide: "home" | "away"
+    targetTeamSide: "home" | "away"
+  } | null
+  pendingBlock: {
+    blockerId: string
+    blockerTeamSide: "home" | "away"
+    targetTeamSide: "home" | "away"
+  } | null
+  pendingTurnover: {
+    loserId: string
+    loserTeamSide: "home" | "away"
+    targetTeamSide: "home" | "away"
+  } | null
+  pendingAssistTeamId: string | null
+  pendingAssistScorerId: string | null
+  pendingFreeThrow: {
+    playerId: string
+    teamId: string
+    teamSide: "home" | "away"
+    total: 1 | 2 | 3
+    current: number
+  } | null
+  lastScoreFlash: { teamSide: "home" | "away"; points: 2 | 3 } | null
+  localEvents: MatchEvent[]
+  mainTab: "cancha" | "historial" | "otros" | "configuracion" | "estadisticas"
+  onCourtPlayers: { home: string[]; away: string[] }
+  timeoutDialogTeamSide: "home" | "away" | null
+  timeoutTeamSide: "home" | "away" | null
+  timeoutCountdown: number | null
+  timeoutMinimized: boolean
+  homeColorOverride: string | null
+  awayColorOverride: string | null
+  showClockEditor: boolean
+  pendingEventIds: string[]
+  pendingDeleteEventIds: string[]
+}
+
 export default function PlanillaPage() {
   const params = useParams()
   const router = useRouter()
@@ -114,7 +178,7 @@ export default function PlanillaPage() {
         .from("matches")
         .select("id, home_team_id, away_team_id, status, home_score, away_score")
         .eq("id", matchId)
-        .maybeSingle()
+        .maybeSingle<MatchRow>()
 
       if (matchError || !matchRow) {
         setDbError(matchError?.message ?? "Partido no encontrado")
@@ -137,12 +201,12 @@ export default function PlanillaPage() {
           .from("teams")
           .select("id, name, primary_color")
           .eq("id", mappedMatch.homeTeamId)
-          .maybeSingle(),
+          .maybeSingle<TeamRow>(),
         supabase
           .from("teams")
           .select("id, name, primary_color")
           .eq("id", mappedMatch.awayTeamId)
-          .maybeSingle(),
+          .maybeSingle<TeamRow>(),
         supabase
           .from("players")
           .select("id, team_id, first_name, last_name, jersey_number, is_federated, photo_url")
@@ -220,61 +284,74 @@ export default function PlanillaPage() {
   // Obtener datos de la pre planilla
   const prePlanillaData = getPrePlanillaData()
   
-  // Filtrar jugadores para mostrar solo titulares y capitanes de la pre planilla
+  // Jugadores disponibles para el partido (titulares + banco) según pre planilla
   const homePlayers = useMemo(() => {
     const allPlayers = storeMatch ? storeHomePlayers : dbHomePlayers
-    if (!prePlanillaData) {
-      return allPlayers // Si no hay datos de pre planilla, mostrar todos
+    if (!prePlanillaData || !prePlanillaData.home?.selectedPlayerIds?.length) {
+      // Sin pre planilla o sin selección: usar todos los jugadores del equipo
+      return allPlayers
     }
-    
-    // Obtener IDs de titulares y capitanes
-    const starterAndCaptainIds = [
-      ...(prePlanillaData.home.starters || []),
-      prePlanillaData.home.captainId
-    ].filter(Boolean) as string[]
-    
-    // Si no hay titulares definidos, mostrar todos los jugadores seleccionados
-    if (starterAndCaptainIds.length === 0 && prePlanillaData.home.selectedPlayerIds?.length > 0) {
-      return allPlayers.filter(player => prePlanillaData.home.selectedPlayerIds.includes(player.id))
-    }
-    
-    return allPlayers.filter(player => starterAndCaptainIds.includes(player.id))
+
+    return allPlayers.filter((player) => prePlanillaData.home.selectedPlayerIds.includes(player.id))
   }, [storeMatch, storeHomePlayers, dbHomePlayers, prePlanillaData])
-  
+
   const awayPlayers = useMemo(() => {
     const allPlayers = storeMatch ? storeAwayPlayers : dbAwayPlayers
-    if (!prePlanillaData) {
-      return allPlayers // Si no hay datos de pre planilla, mostrar todos
+    if (!prePlanillaData || !prePlanillaData.away?.selectedPlayerIds?.length) {
+      return allPlayers
     }
-    
-    // Obtener IDs de titulares y capitanes
-    const starterAndCaptainIds = [
-      ...(prePlanillaData.away.starters || []),
-      prePlanillaData.away.captainId
-    ].filter(Boolean) as string[]
-    
-    // Si no hay titulares definidos, mostrar todos los jugadores seleccionados
-    if (starterAndCaptainIds.length === 0 && prePlanillaData.away.selectedPlayerIds?.length > 0) {
-      return allPlayers.filter(player => prePlanillaData.away.selectedPlayerIds.includes(player.id))
-    }
-    
-    return allPlayers.filter(player => starterAndCaptainIds.includes(player.id))
+
+    return allPlayers.filter((player) => prePlanillaData.away.selectedPlayerIds.includes(player.id))
   }, [storeMatch, storeAwayPlayers, dbAwayPlayers, prePlanillaData])
 
   const [homeScore, setHomeScore] = useState(0)
   const [awayScore, setAwayScore] = useState(0)
+  const [restoredFromStorage, setRestoredFromStorage] = useState(false)
   const [period, setPeriod] = useState(1)
-  const [gameTime, setGameTime] = useState(10 * 60) // in seconds
+  const [gameTime, setGameTime] = useState(() => {
+    if (typeof window === "undefined") return 10 * 60
+    try {
+      const raw = window.localStorage.getItem(`planilla-state:${matchId}`)
+      if (!raw) return 10 * 60
+      const data = JSON.parse(raw) as Partial<PersistedMatchState>
+      return typeof data.gameTime === "number" ? data.gameTime : 10 * 60
+    } catch {
+      return 10 * 60
+    }
+  }) // in seconds
   const [isRunning, setIsRunning] = useState(false)
   const [selectedTeam, setSelectedTeam] = useState<"home" | "away">("home")
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null)
   const [pendingReboundTeamId, setPendingReboundTeamId] = useState<string | null>(null)
+  // Falta personal: selección pendiente del jugador que la recibe (ya sabemos quién la comete)
+  const [pendingPersonalFoul, setPendingPersonalFoul] = useState<
+    { committerId: string; committerTeamSide: "home" | "away"; targetTeamSide: "home" | "away" } | null
+  >(null)
+  // Tapa: selección pendiente del jugador rival que recibe la tapa
+  const [pendingBlock, setPendingBlock] = useState<
+    { blockerId: string; blockerTeamSide: "home" | "away"; targetTeamSide: "home" | "away" } | null
+  >(null)
+  // Pérdida/Recuperación: jugador que pierde la pelota y rival que recupera (opcional)
+  const [pendingTurnover, setPendingTurnover] = useState<
+    { loserId: string; loserTeamSide: "home" | "away"; targetTeamSide: "home" | "away" } | null
+  >(null)
   const [pendingAssistTeamId, setPendingAssistTeamId] = useState<string | null>(null)
   const [pendingAssistScorerId, setPendingAssistScorerId] = useState<string | null>(null)
   const [pendingFreeThrow, setPendingFreeThrow] = useState<
     { playerId: string; teamId: string; teamSide: "home" | "away"; total: 1 | 2 | 3; current: number } | null
   >(null)
   const [lastScoreFlash, setLastScoreFlash] = useState<{ teamSide: "home" | "away"; points: 2 | 3 } | null>(null)
+  const [pendingDeleteEventIds, setPendingDeleteEventIds] = useState<string[]>(() => {
+    if (typeof window === "undefined") return []
+    try {
+      const raw = window.localStorage.getItem(`planilla-state:${matchId}`)
+      if (!raw) return []
+      const data = JSON.parse(raw) as Partial<PersistedMatchState>
+      return data.pendingDeleteEventIds ?? []
+    } catch {
+      return []
+    }
+  })
   const [isOnline, setIsOnline] = useState(true)
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("synced")
   const [showEndDialog, setShowEndDialog] = useState(false)
@@ -287,16 +364,98 @@ export default function PlanillaPage() {
   const [freeThrowAttempts, setFreeThrowAttempts] = useState<Record<1 | 2 | 3, "made" | "missed" | null>>({ 1: null, 2: null, 3: null })
   const [selectedFreeThrowFoulId, setSelectedFreeThrowFoulId] = useState<string | null>(null)
   const [localEvents, setLocalEvents] = useState<MatchEvent[]>([])
+  const [pendingEventIds, setPendingEventIds] = useState<string[]>([])
   const [mainTab, setMainTab] = useState<"cancha" | "historial" | "otros" | "configuracion" | "estadisticas">("cancha")
+  // Sustituciones: jugadores en cancha y diálogo
+  const [onCourtPlayers, setOnCourtPlayers] = useState<{ home: string[]; away: string[] }>({ home: [], away: [] })
+  const [showSubsDialog, setShowSubsDialog] = useState(false)
+  const [subsDialogTeamSide, setSubsDialogTeamSide] = useState<"home" | "away">("home")
+  const [subsSelection, setSubsSelection] = useState<string[]>([])
+  // Tiempo muerto: diálogo de confirmación y cuenta regresiva de 60s
+  const [timeoutDialogTeamSide, setTimeoutDialogTeamSide] = useState<"home" | "away" | null>(null)
+  const [timeoutTeamSide, setTimeoutTeamSide] = useState<"home" | "away" | null>(null)
+  const [timeoutCountdown, setTimeoutCountdown] = useState<number | null>(null)
+  const [timeoutMinimized, setTimeoutMinimized] = useState(false)
+  // Overrides de color solo para este partido
+  const [homeColorOverride, setHomeColorOverride] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null
+    try {
+      const raw = window.localStorage.getItem(`planilla-state:${matchId}`)
+      if (!raw) return null
+      const data = JSON.parse(raw) as Partial<PersistedMatchState>
+      return (data.homeColorOverride as string | null | undefined) ?? null
+    } catch {
+      return null
+    }
+  })
+  const [awayColorOverride, setAwayColorOverride] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null
+    try {
+      const raw = window.localStorage.getItem(`planilla-state:${matchId}`)
+      if (!raw) return null
+      const data = JSON.parse(raw) as Partial<PersistedMatchState>
+      return (data.awayColorOverride as string | null | undefined) ?? null
+    } catch {
+      return null
+    }
+  })
+  const [showClockEditor, setShowClockEditor] = useState(false)
+  const [showClockEditorWarning, setShowClockEditorWarning] = useState(false)
   
   // Estados para faltas
   const [showPersonalFoulDialog, setShowPersonalFoulDialog] = useState(false)
   const [showOtherFoulDialog, setShowOtherFoulDialog] = useState(false)
   const [personalFoulPlayerId, setPersonalFoulPlayerId] = useState<string | null>(null)
   const [personalFoulTeamSide, setPersonalFoulTeamSide] = useState<"home" | "away" | null>(null)
-  const [selectedFoulType, setSelectedFoulType] = useState<"unsportsmanlike" | "disqualifying" | "fight" | "technical">("unsportsmanlike")
+  const [selectedFoulType, setSelectedFoulType] = useState<
+    "unsportsmanlike" | "disqualifying" | "fight" | "technical"
+  >("unsportsmanlike")
   const [selectedFoulTeam, setSelectedFoulTeam] = useState<"home" | "away">("home")
   const [teamFoulWarning, setTeamFoulWarning] = useState<{ home: boolean; away: boolean }>({ home: false, away: false })
+
+  // Colores efectivos para este partido (base de equipo + override local)
+  const homeColor = homeColorOverride ?? homeTeam?.primaryColor ?? "#666"
+  const awayColor = awayColorOverride ?? awayTeam?.primaryColor ?? "#666"
+
+  // Enviar un evento individual al backend cuando haya conexión
+  const sendEventToServer = useCallback(
+    async (event: MatchEvent): Promise<boolean> => {
+      if (!isOnline) {
+        console.log("[events] Skipping send, offline", { id: event.id, type: event.type })
+        return false
+      }
+
+      try {
+        const { data: sessionData } = await supabase.auth.getSession()
+        const token = sessionData.session?.access_token
+        if (!token) {
+          return false
+        }
+
+        const res = await fetch(`/api/mesa/matches/${matchId}/events`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            event: {
+              ...event,
+              timestamp: event.timestamp.toISOString(),
+            },
+          }),
+        })
+
+        if (!res.ok) return false
+
+        return true
+      } catch {
+        // Si falla, dejamos que la persistencia local sea la fuente de verdad
+        return false
+      }
+    },
+    [isOnline, supabase, matchId],
+  )
 
   // Cargar datos del staff seleccionado
   useEffect(() => {
@@ -312,10 +471,18 @@ export default function PlanillaPage() {
         .from("coaching_staff")
         .select("id, team_id, first_name, last_name, role")
         .in("id", allStaffIds)
-      
-      if (data) {
+
+      const rows = (data ?? []) as {
+        id: string
+        team_id: string
+        first_name: string
+        last_name: string
+        role: string
+      }[]
+
+      if (rows.length) {
         const staffMap: Record<string, any> = {}
-        data.forEach(staff => {
+        rows.forEach((staff) => {
           staffMap[staff.id] = staff
         })
         setStaffData(staffMap)
@@ -325,11 +492,339 @@ export default function PlanillaPage() {
     loadStaffData()
   }, [homeTeam, awayTeam, prePlanillaData])
 
+  // Inicializar jugadores en cancha desde pre planilla o primeros 5
+  useEffect(() => {
+    if (!homePlayers.length && !awayPlayers.length) return
+
+    setOnCourtPlayers((prev) => {
+      if (prev.home.length || prev.away.length) return prev
+
+      const homeBase = homePlayers.map((p) => p.id)
+      const awayBase = awayPlayers.map((p) => p.id)
+
+      const homeInitial =
+        prePlanillaData?.home?.starters?.length
+          ? prePlanillaData.home.starters
+          : homeBase.slice(0, 5)
+
+      const awayInitial =
+        prePlanillaData?.away?.starters?.length
+          ? prePlanillaData.away.starters
+          : awayBase.slice(0, 5)
+
+      return {
+        home: homeInitial,
+        away: awayInitial,
+      }
+    })
+  }, [homePlayers, awayPlayers, prePlanillaData])
+
+  // Restaurar estado del partido desde localStorage (si existe)
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const raw = window.localStorage.getItem(`planilla-state:${matchId}`)
+    if (!raw) return
+
+    try {
+      const data = JSON.parse(raw) as PersistedMatchState
+
+      setHomeScore(data.homeScore)
+      setAwayScore(data.awayScore)
+      setPeriod(data.period)
+      setGameTime(data.gameTime)
+      setIsRunning(data.isRunning)
+      setSelectedTeam(data.selectedTeam)
+      setSelectedPlayerId(data.selectedPlayerId)
+      setPendingReboundTeamId(data.pendingReboundTeamId)
+      setPendingPersonalFoul(data.pendingPersonalFoul)
+      setPendingBlock(data.pendingBlock)
+      setPendingTurnover(data.pendingTurnover)
+      setPendingAssistTeamId(data.pendingAssistTeamId)
+      setPendingAssistScorerId(data.pendingAssistScorerId)
+      setPendingFreeThrow(data.pendingFreeThrow)
+      setLastScoreFlash(data.lastScoreFlash)
+
+      const restoredEvents = (data.localEvents ?? []).map((e) => ({
+        ...e,
+        timestamp: new Date(e.timestamp),
+      }))
+      setLocalEvents(restoredEvents)
+      setPendingEventIds(data.pendingEventIds ?? [])
+      setPendingDeleteEventIds(data.pendingDeleteEventIds ?? [])
+
+      // Recalcular marcador a partir del historial por si los campos de score no son fiables
+      if (restoredEvents.length > 0) {
+        let restoredHomeScore = 0
+        let restoredAwayScore = 0
+
+        restoredEvents.forEach((ev) => {
+          const isHome = ev.teamId === homeTeam?.id
+
+          if (ev.type === "points" && ev.points) {
+            if (isHome) restoredHomeScore += ev.points
+            else restoredAwayScore += ev.points
+          }
+
+          if (ev.type === "shot" && ev.made && ev.shotType) {
+            if (isHome) restoredHomeScore += ev.shotType
+            else restoredAwayScore += ev.shotType
+          }
+
+          if (ev.type === "free_throw" && ev.made) {
+            if (isHome) restoredHomeScore += 1
+            else restoredAwayScore += 1
+          }
+        })
+
+        setHomeScore(restoredHomeScore)
+        setAwayScore(restoredAwayScore)
+      }
+
+      setMainTab(data.mainTab)
+      setOnCourtPlayers(data.onCourtPlayers)
+      setTimeoutDialogTeamSide(data.timeoutDialogTeamSide)
+      setTimeoutTeamSide(data.timeoutTeamSide)
+      setTimeoutCountdown(data.timeoutCountdown)
+      setTimeoutMinimized(data.timeoutMinimized)
+      setHomeColorOverride(data.homeColorOverride)
+      setAwayColorOverride(data.awayColorOverride)
+      setShowClockEditor(data.showClockEditor)
+      setRestoredFromStorage(true)
+    } catch {
+      // Si hay datos corruptos, los ignoramos
+    }
+  }, [matchId])
+
+  // Guardar estado del partido en localStorage en cada cambio relevante
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const payload: PersistedMatchState = {
+      homeScore,
+      awayScore,
+      period,
+      gameTime,
+      isRunning,
+      selectedTeam,
+      selectedPlayerId,
+      pendingReboundTeamId,
+      pendingPersonalFoul,
+      pendingBlock,
+      pendingTurnover,
+      pendingAssistTeamId,
+      pendingAssistScorerId,
+      pendingFreeThrow,
+      lastScoreFlash,
+      localEvents,
+      mainTab,
+      onCourtPlayers,
+      timeoutDialogTeamSide,
+      timeoutTeamSide,
+      timeoutCountdown,
+      timeoutMinimized,
+      homeColorOverride,
+      awayColorOverride,
+      showClockEditor,
+      pendingEventIds,
+      pendingDeleteEventIds,
+    }
+
+    try {
+      window.localStorage.setItem(`planilla-state:${matchId}`, JSON.stringify(payload))
+    } catch {
+      // Ignorar errores de almacenamiento (p.ej. quota excedida)
+    }
+  }, [
+    matchId,
+    homeScore,
+    awayScore,
+    period,
+    gameTime,
+    isRunning,
+    selectedTeam,
+    selectedPlayerId,
+    pendingReboundTeamId,
+    pendingPersonalFoul,
+    pendingBlock,
+    pendingTurnover,
+    pendingAssistTeamId,
+    pendingAssistScorerId,
+    pendingFreeThrow,
+    lastScoreFlash,
+    localEvents,
+    mainTab,
+    onCourtPlayers,
+    timeoutDialogTeamSide,
+    timeoutTeamSide,
+    timeoutCountdown,
+    timeoutMinimized,
+    homeColorOverride,
+    awayColorOverride,
+    showClockEditor,
+    pendingEventIds,
+  ])
+
+  // Reintentar subir eventos pendientes cuando volvemos a estar online
+  useEffect(() => {
+    if (!isOnline) return
+    if (!pendingEventIds.length) return
+
+    const retryPending = async () => {
+      console.log("[events] Retry pending events start", { pendingEventIds })
+      const eventsToRetry = localEvents.filter((e) => pendingEventIds.includes(e.id))
+      if (!eventsToRetry.length) {
+        console.log("[events] No local events found for pending ids, clearing queue")
+        setPendingEventIds([])
+        return
+      }
+
+      const succeeded: string[] = []
+      for (const ev of eventsToRetry) {
+        try {
+          const ok = await sendEventToServer(ev)
+          if (ok) {
+            succeeded.push(ev.id)
+          } else {
+            console.warn("[events] Retry send failed, will keep pending", { id: ev.id })
+          }
+        } catch {
+          // se queda pendiente
+          console.error("[events] Retry send threw error", { id: ev.id })
+        }
+      }
+
+      if (succeeded.length) {
+        console.log("[events] Retry succeeded for some events, removing from queue", { succeeded })
+        setPendingEventIds((prev) => prev.filter((id) => !succeeded.includes(id)))
+      }
+    }
+
+    void retryPending()
+  }, [isOnline, pendingEventIds, localEvents, sendEventToServer])
+
+  // Reintentar borrar eventos deshechos cuando volvemos a estar online
+  useEffect(() => {
+    if (!isOnline) return
+    if (!pendingDeleteEventIds.length) return
+
+    const processDeletes = async () => {
+      try {
+        const { data: sessionData } = await supabase.auth.getSession()
+        const token = sessionData.session?.access_token
+        if (!token) return
+
+        const succeeded: string[] = []
+
+        for (const id of pendingDeleteEventIds) {
+          try {
+            const res = await fetch(`/api/mesa/matches/${matchId}/events`, {
+              method: "DELETE",
+              headers: {
+                "content-type": "application/json",
+                authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({ eventId: id }),
+            })
+
+            // Si la API devuelve 200, o 400/404 (evento ya no existe o request invalida),
+            // consideramos que ya no hace falta reintentar y sacamos el id de la cola.
+            if (res.ok || res.status === 400 || res.status === 404) {
+              succeeded.push(id)
+            }
+          } catch (error) {
+            // Si hay error de red, mantenemos el id en la cola para reintentar luego.
+          }
+        }
+
+        if (succeeded.length) {
+          setPendingDeleteEventIds((prev) => prev.filter((id) => !succeeded.includes(id)))
+        }
+      } catch {
+        // Si falla el procesamiento completo, dejamos la cola como está para reintentar luego.
+      }
+    }
+
+    void processDeletes()
+  }, [isOnline, pendingDeleteEventIds, supabase, matchId])
+
+  // Hidratar historial y marcador desde Supabase si no hay historial local significativo
+  useEffect(() => {
+    // Si ya restauramos desde localStorage y hay eventos, no pisamos nada
+    if (restoredFromStorage && localEvents.length > 0) return
+    if (!matchId) return
+    if (!homeTeam || !awayTeam) return
+
+    const loadEventsFromDb = async () => {
+      try {
+        const { data: rows, error } = await supabase
+          .from("match_events")
+          .select(
+            "id, match_id, team_id, player_id, type, points, period, game_time, occurred_at, shot_type, made, x, y, rebound_type, foul_type",
+          )
+          .eq("match_id", matchId)
+          .order("occurred_at", { ascending: true })
+
+        if (error || !rows || rows.length === 0) return
+
+        const mapped: MatchEvent[] = rows.map((r: any) => ({
+          id: r.id,
+          matchId: r.match_id,
+          teamId: r.team_id,
+          playerId: r.player_id,
+          type: r.type,
+          points: r.points ?? undefined,
+          period: r.period,
+          gameTime: r.game_time,
+          timestamp: new Date(r.occurred_at),
+          shotType: r.shot_type ?? undefined,
+          made: r.made ?? undefined,
+          x: r.x ?? undefined,
+          y: r.y ?? undefined,
+          reboundType: r.rebound_type ?? undefined,
+          foulType: r.foul_type ?? undefined,
+        }))
+
+        setLocalEvents(mapped)
+
+        // Recalcular marcador desde los eventos de BD
+        let restoredHomeScore = 0
+        let restoredAwayScore = 0
+
+        mapped.forEach((ev) => {
+          const isHome = ev.teamId === homeTeam?.id
+
+          if (ev.type === "points" && ev.points) {
+            if (isHome) restoredHomeScore += ev.points
+            else restoredAwayScore += ev.points
+          }
+
+          if (ev.type === "shot" && ev.made && ev.shotType) {
+            if (isHome) restoredHomeScore += ev.shotType
+            else restoredAwayScore += ev.shotType
+          }
+
+          if (ev.type === "free_throw" && ev.made) {
+            if (isHome) restoredHomeScore += 1
+            else restoredAwayScore += 1
+          }
+        })
+
+        setHomeScore(restoredHomeScore)
+        setAwayScore(restoredAwayScore)
+      } catch {
+        // Si falla, mantenemos la fuente local
+      }
+    }
+
+    void loadEventsFromDb()
+  }, [matchId, supabase, restoredFromStorage, localEvents.length, homeTeam, awayTeam])
+
   useEffect(() => {
     if (!match) return
+    // Si ya restauramos desde localStorage, no pisamos el marcador
+    if (restoredFromStorage) return
     setHomeScore(match.homeScore ?? 0)
     setAwayScore(match.awayScore ?? 0)
-  }, [match?.homeScore, match?.awayScore, match?.id])
+  }, [match?.homeScore, match?.awayScore, match?.id, restoredFromStorage])
 
   // Online status
   useEffect(() => {
@@ -376,6 +871,53 @@ export default function PlanillaPage() {
     return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`
   }
 
+  const adjustGameTime = (deltaSeconds: number) => {
+    if (isRunning) return
+    setGameTime((prev) => {
+      const max = 99 * 60 + 59
+      const next = Math.max(0, Math.min(max, prev + deltaSeconds))
+      return next
+    })
+  }
+
+  const adjustTimeDigit = (position: 0 | 1 | 2 | 3, delta: -1 | 1) => {
+    if (isRunning || !showClockEditor) return
+
+    setGameTime((prev) => {
+      let mins = Math.floor(prev / 60)
+      let secs = prev % 60
+
+      const d0 = Math.floor(mins / 10)
+      const d1 = mins % 10
+      const d2 = Math.floor(secs / 10)
+      const d3 = secs % 10
+
+      let nd0 = d0
+      let nd1 = d1
+      let nd2 = d2
+      let nd3 = d3
+
+      const apply = (d: number, max: number) => {
+        let next = d + delta
+        if (next < 0) next = max
+        if (next > max) next = 0
+        return next
+      }
+
+      if (position === 0) nd0 = apply(d0, 9)
+      if (position === 1) nd1 = apply(d1, 9)
+      if (position === 2) nd2 = apply(d2, 5)
+      if (position === 3) nd3 = apply(d3, 9)
+
+      mins = nd0 * 10 + nd1
+      secs = nd2 * 10 + nd3
+
+      const maxTotal = 99 * 60 + 59
+      const total = Math.max(0, Math.min(maxTotal, mins * 60 + secs))
+      return total
+    })
+  }
+
   const opponentTeamIdForFreeThrows = useMemo(() => {
     if (!freeThrowDialogPlayer) return null
     if (!homeTeam || !awayTeam) return null
@@ -409,37 +951,186 @@ export default function PlanillaPage() {
     })
   }, [teamFoulsInPeriod])
 
-  // Función para verificar si un jugador está descalificado
-  const isPlayerDisqualified = (playerId: string): boolean => {
-    const playerEvents = localEvents.filter(e => e.playerId === playerId && e.type === "foul")
-    
-    const personalFouls = playerEvents.filter(e => e.foulType === "personal").length
-    const technicalFouls = playerEvents.filter(e => e.foulType === "technical").length
-    const unsportsmanlikeFouls = playerEvents.filter(e => e.foulType === "unsportsmanlike").length
-    const disqualifyingFouls = playerEvents.filter(e => e.foulType === "disqualifying").length
-    const fightFouls = playerEvents.filter(e => e.foulType === "fight").length
-    
-    // Reglas de descalificación
-    return (
-      personalFouls >= 5 ||
-      technicalFouls >= 2 ||
-      unsportsmanlikeFouls >= 2 ||
-      (technicalFouls >= 1 && unsportsmanlikeFouls >= 1) ||
-      disqualifyingFouls >= 1 ||
-      fightFouls >= 1
+  // Contadores de tiempos muertos por equipo
+  const teamTimeouts = useMemo(
+    () => {
+      if (!homeTeam || !awayTeam) {
+        return {
+          home: { firstHalf: 0, secondHalf: 0, overtime: 0 },
+          away: { firstHalf: 0, secondHalf: 0, overtime: 0 },
+        }
+      }
+
+      const base = {
+        home: { firstHalf: 0, secondHalf: 0, overtime: 0 },
+        away: { firstHalf: 0, secondHalf: 0, overtime: 0 },
+      }
+
+      const timeouts = localEvents.filter((e) => e.type === "timeout")
+
+      timeouts.forEach((e) => {
+        const teamSide: "home" | "away" = e.teamId === homeTeam.id ? "home" : "away"
+
+        if (e.period <= 2) {
+          // Primera mitad: se cuentan hasta 2 tiempos muertos
+          base[teamSide].firstHalf += 1
+        } else if (e.period <= 4) {
+          // Segunda mitad: se cuentan hasta 3 tiempos muertos
+          base[teamSide].secondHalf += 1
+        } else if (e.period === period) {
+          // En prórrogas solo contamos los tiempos del período actual
+          base[teamSide].overtime += 1
+        }
+      })
+
+      // Regla FIBA adicional: en los últimos 2 minutos del último cuarto,
+      // si un equipo aún NO usó ningún tiempo muerto en la segunda mitad
+      // (tenía disponibles los 3), pierde uno automáticamente y solo puede
+      // pedir 2 en total en esa mitad.
+      if (period === 4 && gameTime <= 120) {
+        (['home', 'away'] as const).forEach((side) => {
+          if (base[side].secondHalf === 0) {
+            base[side].secondHalf = 1
+          }
+        })
+      }
+
+      return base
+    },
+    [homeTeam, awayTeam, localEvents, period, gameTime],
+  )
+
+  // Función para verificar si una entidad (jugador, técnico, asistente o banca) está descalificada
+  const isEntityDisqualified = (entityId: string): boolean => {
+    const isStaff = entityId.startsWith("tech-") || entityId.startsWith("assist-") || entityId.startsWith("bench-")
+
+    // Jugadores: reglas estándar de 5 faltas y combinaciones especiales
+    if (!isStaff) {
+      const playerEvents = localEvents.filter((e) => e.playerId === entityId && e.type === "foul")
+
+      const personalFouls = playerEvents.filter((e) => e.foulType === "personal").length
+      const technicalFouls = playerEvents.filter((e) => e.foulType === "technical").length
+      const unsportsmanlikeFouls = playerEvents.filter((e) => e.foulType === "unsportsmanlike").length
+      const disqualifyingFouls = playerEvents.filter((e) => e.foulType === "disqualifying").length
+      const fightFouls = playerEvents.filter((e) => e.foulType === "fight").length
+
+      return (
+        personalFouls >= 5 ||
+        technicalFouls >= 2 ||
+        unsportsmanlikeFouls >= 2 ||
+        (technicalFouls >= 1 && unsportsmanlikeFouls >= 1) ||
+        disqualifyingFouls >= 1 ||
+        fightFouls >= 1
+      )
+    }
+
+    // Cuerpo técnico y banca
+    const [kind, ...rest] = entityId.split("-")
+    const teamId = rest.join("-") // UUID puede tener guiones
+
+    const coachId = `tech-${teamId}`
+    const benchId = `bench-${teamId}`
+
+    const coachEvents = localEvents.filter((e) => e.type === "foul" && e.playerId === coachId)
+    const benchEvents = localEvents.filter(
+      (e) => e.type === "foul" && e.playerId === benchId && e.foulType === "technical",
     )
+
+    const coachTechs = coachEvents.filter((e) => e.foulType === "technical").length
+    const coachDisq = coachEvents.filter((e) => e.foulType === "disqualifying").length
+    const coachFight = coachEvents.filter((e) => e.foulType === "fight").length
+    const benchTechs = benchEvents.length
+
+    // Técnicos y asistentes: 2 técnicas, o 1 descalificante, o 1 reyerta
+    if (kind === "assist") {
+      const selfEvents = localEvents.filter((e) => e.type === "foul" && e.playerId === entityId)
+      const selfTechs = selfEvents.filter((e) => e.foulType === "technical").length
+      const selfDisq = selfEvents.filter((e) => e.foulType === "disqualifying").length
+      const selfFight = selfEvents.filter((e) => e.foulType === "fight").length
+      return selfTechs >= 2 || selfDisq >= 1 || selfFight >= 1
+    }
+
+    // Head coach: 2 técnicas propias, o descalificante/reyerta, o
+    // 3 técnicas a la banca, o 2 a la banca + 1 al técnico (regla combinada)
+    if (kind === "tech") {
+      const baseEject = coachTechs >= 2 || coachDisq >= 1 || coachFight >= 1
+      const benchCombo = benchTechs >= 3 || (benchTechs >= 2 && coachTechs >= 1)
+      return baseEject || benchCombo
+    }
+
+    // Banca: se considera "agotada" al llegar a 3 técnicas o a la combinación con el DT
+    if (kind === "bench") {
+      const benchCombo = benchTechs >= 3 || (benchTechs >= 2 && coachTechs >= 1)
+      return benchCombo
+    }
+
+    return false
   }
+
+  // Asegurar que los jugadores descalificados nunca queden en onCourtPlayers
+  useEffect(() => {
+    setOnCourtPlayers((prev) => ({
+      home: prev.home.filter((id) => !isEntityDisqualified(id)),
+      away: prev.away.filter((id) => !isEntityDisqualified(id)),
+    }))
+  }, [localEvents])
 
   // Actualizar lista de jugadores descalificados
   const disqualifiedPlayers = useMemo(() => {
     const disqualified = new Set<string>()
     ;[...homePlayers, ...awayPlayers].forEach(player => {
-      if (isPlayerDisqualified(player.id)) {
+      if (isEntityDisqualified(player.id)) {
         disqualified.add(player.id)
       }
     })
     return disqualified
   }, [localEvents, homePlayers, awayPlayers])
+
+  // Estadísticas por jugador derivadas de los eventos locales
+  const getPlayerStats = useCallback(
+    (playerId: string) => {
+      const events = localEvents.filter((e) => e.playerId === playerId)
+
+      let points = 0
+      let fouls = 0
+      let rebounds = 0
+      let blocks = 0
+      let turnovers = 0
+      let assists = 0
+
+      for (const e of events) {
+        if (e.type === "points" && e.points) points += e.points
+        else if (e.type === "shot" && e.made && e.shotType) points += e.shotType
+        else if (e.type === "free_throw" && e.made) points += 1
+
+        if (e.type === "foul") fouls += 1
+        if (e.type === "rebound") rebounds += 1
+        if (e.type === "block") blocks += 1
+        if (e.type === "turnover") turnovers += 1
+        if (e.type === "assist") assists += 1
+      }
+
+      return { points, fouls, rebounds, blocks, turnovers, assists }
+    },
+    [localEvents],
+  )
+
+  // Jugadores visibles en paneles (solo los en cancha si hay definición)
+  const visibleHomePlayers = useMemo(
+    () =>
+      onCourtPlayers.home.length
+        ? homePlayers.filter((p) => onCourtPlayers.home.includes(p.id))
+        : homePlayers,
+    [homePlayers, onCourtPlayers.home],
+  )
+
+  const visibleAwayPlayers = useMemo(
+    () =>
+      onCourtPlayers.away.length
+        ? awayPlayers.filter((p) => onCourtPlayers.away.includes(p.id))
+        : awayPlayers,
+    [awayPlayers, onCourtPlayers.away],
+  )
 
   const getFreeThrowCountForFoul = (foul: MatchEvent): 1 | 2 | 3 => {
     const type = foul.foulType
@@ -455,16 +1146,114 @@ export default function PlanillaPage() {
     return fouls >= 5 ? 2 : 0 // A partir de 5 faltas, 2 tiros libres
   }
 
+  // Solicitar tiempo muerto para un equipo
+  const requestTimeout = useCallback(
+    (teamSide: "home" | "away") => {
+      if (match?.status !== "en_juego") return false
+      if (!homeTeam || !awayTeam) return false
+      if (
+        pendingReboundTeamId ||
+        pendingAssistTeamId ||
+        pendingFreeThrow ||
+        pendingPersonalFoul ||
+        pendingBlock ||
+        pendingTurnover
+      ) {
+        return false
+      }
+
+      const teamId = teamSide === "home" ? homeTeam.id : awayTeam.id
+      const timeouts = teamTimeouts[teamSide]
+      const totalUsed = timeouts.firstHalf + timeouts.secondHalf
+
+      // Reglas: 2 tiempos en la primera mitad (P1-2), 3 en la segunda mitad (P3-4), total 5.
+      // En prórrogas: 1 tiempo por equipo y por prórroga, independiente de los anteriores.
+      if (period <= 2) {
+        if (timeouts.firstHalf >= 2) return false
+        if (totalUsed >= 5) return false
+      } else if (period <= 4) {
+        if (timeouts.secondHalf >= 3) return false
+        if (totalUsed >= 5) return false
+      } else {
+        if (timeouts.overtime >= 1) return false
+      }
+
+      const event: MatchEvent = {
+        id: `ev-${Date.now()}`,
+        matchId,
+        playerId: teamId,
+        teamId,
+        type: "timeout",
+        period,
+        timestamp: new Date(),
+        gameTime: formatTime(gameTime),
+      }
+
+      // Detenemos el reloj al registrar un tiempo muerto
+      setIsRunning(false)
+      setLocalEvents((prev) => [...prev, event])
+      addMatchEvent(event)
+      setSyncStatus("pending")
+
+      if (!isOnline) {
+        console.log("[events] Timeout created offline, marking as pending", { id: event.id })
+        setPendingEventIds((prev) => (prev.includes(event.id) ? prev : [...prev, event.id]))
+      } else {
+        void (async () => {
+          const ok = await sendEventToServer(event)
+          if (!ok) {
+            console.log("[events] Timeout send failed, marking as pending", { id: event.id })
+            setPendingEventIds((prev) => (prev.includes(event.id) ? prev : [...prev, event.id]))
+          }
+        })()
+      }
+      return true
+    },
+    [
+      match?.status,
+      homeTeam,
+      awayTeam,
+      teamTimeouts,
+      period,
+      gameTime,
+      matchId,
+      pendingReboundTeamId,
+      pendingAssistTeamId,
+      pendingFreeThrow,
+      pendingPersonalFoul,
+      pendingBlock,
+      pendingTurnover,
+      addMatchEvent,
+    ],
+  )
+
+  // Cuenta regresiva visual de tiempo muerto (60s)
+  useEffect(() => {
+    if (timeoutCountdown === null) return
+    if (timeoutCountdown <= 0) {
+      setTimeoutCountdown(null)
+      setTimeoutTeamSide(null)
+      setTimeoutMinimized(false)
+      return
+    }
+
+    const id = window.setInterval(() => {
+      setTimeoutCountdown((prev) => (prev !== null ? Math.max(prev - 1, 0) : null))
+    }, 1000)
+
+    return () => window.clearInterval(id)
+  }, [timeoutCountdown])
+
   // Add foul
   const addFoul = useCallback(
     (playerId: string, teamSide: "home" | "away", foulType: MatchEvent["foulType"] = "personal") => {
       if (match?.status !== "en_juego" || !homeTeam || !awayTeam) return
-      
-      // Verificar si el jugador está descalificado (excepto para personal técnico)
-      if (!playerId.startsWith("tech-") && !playerId.startsWith("assist-") && isPlayerDisqualified(playerId)) {
-        return // No permitir registrar faltas a jugadores descalificados
+
+      // Verificar si la entidad (jugador / staff / banca) ya está descalificada
+      if (isEntityDisqualified(playerId)) {
+        return
       }
-      
+
       const event: MatchEvent = {
         id: `ev-${Date.now()}`,
         matchId,
@@ -480,21 +1269,72 @@ export default function PlanillaPage() {
       setLocalEvents((prev) => [...prev, event])
       addMatchEvent(event)
       setSyncStatus("pending")
-      
-      // Verificar si después de esta falta el jugador queda descalificado
-      if (!playerId.startsWith("tech-") && !playerId.startsWith("assist-") && isPlayerDisqualified(playerId)) {
-        // El jugador queda descalificado, podría mostrar una notificación
-        console.log(`Jugador ${playerId} descalificado por acumulación de faltas`)
+
+      if (!isOnline) {
+        console.log("[events] Foul created offline, marking as pending", { id: event.id, foulType })
+        setPendingEventIds((prev) => (prev.includes(event.id) ? prev : [...prev, event.id]))
+      } else {
+        void (async () => {
+          const ok = await sendEventToServer(event)
+          if (!ok) {
+            console.log("[events] Foul send failed, marking as pending", { id: event.id, foulType })
+            setPendingEventIds((prev) => (prev.includes(event.id) ? prev : [...prev, event.id]))
+          }
+        })()
       }
-      
+
       // Verificar si el equipo entra en infracción con esta falta
       const currentTeamFouls = teamFoulsInPeriod[teamSide] + 1
       if (currentTeamFouls === 4) {
         // El equipo acaba de entrar en infracción
         console.log(`Equipo ${teamSide} entra en infracción (4 faltas)`)
       }
+
+      // Si esta falta provoca que el jugador quede descalificado, sacarlo de la cancha y abrir sustitución.
+      // Solo aplicamos esta lógica para jugadores (no staff/banca), que son los que aparecen en onCourtPlayers.
+      const nextEventsForPlayer = [...localEvents, event].filter((e) => e.playerId === playerId && e.type === "foul")
+      const personalFouls = nextEventsForPlayer.filter((e) => e.foulType === "personal").length
+      const technicalFouls = nextEventsForPlayer.filter((e) => e.foulType === "technical").length
+      const unsportsmanlikeFouls = nextEventsForPlayer.filter((e) => e.foulType === "unsportsmanlike").length
+      const disqualifyingFouls = nextEventsForPlayer.filter((e) => e.foulType === "disqualifying").length
+      const fightFouls = nextEventsForPlayer.filter((e) => e.foulType === "fight").length
+
+      const nowDisqualified =
+        personalFouls >= 5 ||
+        technicalFouls >= 2 ||
+        unsportsmanlikeFouls >= 2 ||
+        (technicalFouls >= 1 && unsportsmanlikeFouls >= 1) ||
+        disqualifyingFouls >= 1 ||
+        fightFouls >= 1
+
+      if (nowDisqualified) {
+        // Sacar al jugador de la cancha si estaba en onCourtPlayers
+        const currentOnCourt = onCourtPlayers[teamSide].filter((id) => id !== playerId)
+        if (currentOnCourt.length !== onCourtPlayers[teamSide].length) {
+          setOnCourtPlayers((prev) => ({ ...prev, [teamSide]: currentOnCourt }))
+        }
+
+        // Abrir diálogo de sustituciones para este equipo, proponiendo como selección actual
+        // los jugadores que permanecen en cancha (sin el expulsado).
+        setSubsDialogTeamSide(teamSide)
+        setSubsSelection(currentOnCourt)
+        setShowSubsDialog(true)
+      }
     },
-    [matchId, homeTeam, awayTeam, period, gameTime, addMatchEvent, isPlayerDisqualified, teamFoulsInPeriod],
+    [
+      matchId,
+      homeTeam,
+      awayTeam,
+      period,
+      gameTime,
+      addMatchEvent,
+      isEntityDisqualified,
+      teamFoulsInPeriod,
+      isOnline,
+      sendEventToServer,
+      localEvents,
+      onCourtPlayers,
+    ],
   )
 
   // Undo last action
@@ -502,6 +1342,8 @@ export default function PlanillaPage() {
     if (localEvents.length === 0) return
 
     const lastEvent = localEvents[localEvents.length - 1]
+    const teamSideForEvent: "home" | "away" | null =
+      lastEvent.teamId === homeTeam?.id ? "home" : lastEvent.teamId === awayTeam?.id ? "away" : null
 
     if (lastEvent.type === "points" && lastEvent.points) {
       if (lastEvent.teamId === homeTeam?.id) setHomeScore((prev) => Math.max(0, prev - lastEvent.points!))
@@ -522,12 +1364,106 @@ export default function PlanillaPage() {
       setPendingReboundTeamId(null)
     }
 
+    // Deshacer sustituciones: mover jugadores de vuelta según el último evento
+    if (teamSideForEvent && lastEvent.type === "substitution_in" && lastEvent.playerId) {
+      setOnCourtPlayers((prev) => ({
+        ...prev,
+        [teamSideForEvent]: prev[teamSideForEvent].filter((id) => id !== lastEvent.playerId),
+      }))
+    }
+
+    if (teamSideForEvent && lastEvent.type === "substitution_out" && lastEvent.playerId) {
+      setOnCourtPlayers((prev) => {
+        const current = prev[teamSideForEvent]
+        if (current.includes(lastEvent.playerId!)) return prev
+        return {
+          ...prev,
+          [teamSideForEvent]: [...current, lastEvent.playerId!],
+        }
+      })
+    }
+
+    // Deshacer una falta que podía haber descalificado al jugador: si al quitarla ya no está descalificado,
+    // permitir que vuelva a estar en cancha (si no fue sustituido después).
+    if (teamSideForEvent && lastEvent.type === "foul" && lastEvent.playerId) {
+      const remainingFouls = localEvents
+        .slice(0, -1)
+        .filter((e) => e.playerId === lastEvent.playerId && e.type === "foul")
+
+      const personalFouls = remainingFouls.filter((e) => e.foulType === "personal").length
+      const technicalFouls = remainingFouls.filter((e) => e.foulType === "technical").length
+      const unsportsmanlikeFouls = remainingFouls.filter((e) => e.foulType === "unsportsmanlike").length
+      const disqualifyingFouls = remainingFouls.filter((e) => e.foulType === "disqualifying").length
+      const fightFouls = remainingFouls.filter((e) => e.foulType === "fight").length
+
+      const stillDisqualified =
+        personalFouls >= 5 ||
+        technicalFouls >= 2 ||
+        unsportsmanlikeFouls >= 2 ||
+        (technicalFouls >= 1 && unsportsmanlikeFouls >= 1) ||
+        disqualifyingFouls >= 1 ||
+        fightFouls >= 1
+
+      if (!stillDisqualified) {
+        setOnCourtPlayers((prev) => {
+          const current = prev[teamSideForEvent]
+          if (current.includes(lastEvent.playerId!)) return prev
+          // Lo agregamos de vuelta al final; si no hay lugar por una sustitución posterior, el usuario puede ajustar.
+          return {
+            ...prev,
+            [teamSideForEvent]: [...current, lastEvent.playerId!],
+          }
+        })
+      }
+    }
+
     setPendingAssistTeamId(null)
     setPendingAssistScorerId(null)
     setPendingFreeThrow(null)
 
     setLocalEvents((prev) => prev.slice(0, -1))
     removeLastMatchEvent(matchId)
+
+    if (!isOnline) {
+      // Guardar borrado pendiente para cuando vuelva la conexión
+      setPendingDeleteEventIds((prev) => (prev.includes(lastEvent.id) ? prev : [...prev, lastEvent.id]))
+    } else {
+      void (async () => {
+        try {
+          const { data: sessionData } = await supabase.auth.getSession()
+          const token = sessionData.session?.access_token
+          if (!token) {
+            setPendingDeleteEventIds((prev) => (prev.includes(lastEvent.id) ? prev : [...prev, lastEvent.id]))
+            return
+          }
+
+          const res = await fetch(`/api/mesa/matches/${matchId}/events`, {
+            method: "DELETE",
+            headers: {
+              "content-type": "application/json",
+              authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ eventId: lastEvent.id }),
+          })
+
+          if (!res.ok) {
+            console.error("[events] Failed to delete event on undo (status)", { id: lastEvent.id, status: res.status })
+            setPendingDeleteEventIds((prev) => (prev.includes(lastEvent.id) ? prev : [...prev, lastEvent.id]))
+          }
+        } catch (error) {
+          console.error("[events] Failed to delete event on undo", { id: lastEvent.id, error })
+          setPendingDeleteEventIds((prev) => (prev.includes(lastEvent.id) ? prev : [...prev, lastEvent.id]))
+        }
+      })()
+    }
+  }
+
+  // Cancelar la visualización del tiempo muerto (skipping del minuto en pantalla)
+  // El tiempo muerto ya quedó registrado como evento y se cuenta para el equipo.
+  const cancelActiveTimeout = () => {
+    setTimeoutCountdown(null)
+    setTimeoutTeamSide(null)
+    setTimeoutMinimized(false)
   }
 
   const persistMatch = useCallback(
@@ -651,6 +1587,9 @@ export default function PlanillaPage() {
     if (!selectedPlayerId) return
     if (pendingReboundTeamId) return
     if (pendingFreeThrow) return
+    if (pendingPersonalFoul) return
+    if (pendingBlock) return
+    if (pendingTurnover) return
 
     // Si había una asistencia pendiente del tiro anterior y se realiza un nuevo tiro,
     // descartamos la asistencia pendiente.
@@ -698,12 +1637,30 @@ export default function PlanillaPage() {
     setLocalEvents((prev) => [...prev, event])
     addMatchEvent(event)
     setSyncStatus("pending")
+
+    // Si no hay conexión en este momento, marcamos el evento como pendiente
+    // para que el efecto de reintento lo envíe cuando vuelva internet.
+    if (!isOnline) {
+      console.log("[events] Shot created offline, marking as pending", { id: event.id })
+      setPendingEventIds((prev) => (prev.includes(event.id) ? prev : [...prev, event.id]))
+      return
+    }
+
+    // Si hay conexión, intentamos enviarlo ahora mismo; si falla, también lo dejamos pendiente.
+    void (async () => {
+      const ok = await sendEventToServer(event)
+      if (!ok) {
+        console.log("[events] Shot send failed, marking as pending", { id: event.id })
+        setPendingEventIds((prev) => (prev.includes(event.id) ? prev : [...prev, event.id]))
+      }
+    })()
   }
 
   const startFreeThrows = (total: 1 | 2 | 3) => {
     if (match.status !== "en_juego") return
     if (!selectedPlayerId) return
-    if (pendingReboundTeamId || pendingAssistTeamId || pendingFreeThrow) return
+    if (pendingReboundTeamId || pendingAssistTeamId || pendingFreeThrow || pendingPersonalFoul || pendingBlock || pendingTurnover)
+      return
 
     const playerTeam = getPlayerTeam(selectedPlayerId)
     if (!playerTeam) return
@@ -746,6 +1703,19 @@ export default function PlanillaPage() {
     addMatchEvent(event)
     setSyncStatus("pending")
 
+    if (!isOnline) {
+      console.log("[events] Free throw created offline, marking as pending", { id: event.id })
+      setPendingEventIds((prev) => (prev.includes(event.id) ? prev : [...prev, event.id]))
+    } else {
+      void (async () => {
+        const ok = await sendEventToServer(event)
+        if (!ok) {
+          console.log("[events] Free throw send failed, marking as pending", { id: event.id })
+          setPendingEventIds((prev) => (prev.includes(event.id) ? prev : [...prev, event.id]))
+        }
+      })()
+    }
+
     if (current >= total) {
       setPendingFreeThrow(null)
     } else {
@@ -755,6 +1725,9 @@ export default function PlanillaPage() {
 
   const registerAssist = (playerId: string) => {
     if (match.status !== "en_juego") return
+    if (pendingPersonalFoul) return
+    if (pendingBlock) return
+    if (pendingTurnover) return
     if (!pendingAssistTeamId || !pendingAssistScorerId) return
     if (playerId === pendingAssistScorerId) return
 
@@ -778,10 +1751,27 @@ export default function PlanillaPage() {
     setLocalEvents((prev) => [...prev, event])
     addMatchEvent(event)
     setSyncStatus("pending")
+
+    if (!isOnline) {
+      console.log("[events] Assist created offline, marking as pending", { id: event.id })
+      setPendingEventIds((prev) => (prev.includes(event.id) ? prev : [...prev, event.id]))
+      return
+    }
+
+    void (async () => {
+      const ok = await sendEventToServer(event)
+      if (!ok) {
+        console.log("[events] Assist send failed, marking as pending", { id: event.id })
+        setPendingEventIds((prev) => (prev.includes(event.id) ? prev : [...prev, event.id]))
+      }
+    })()
   }
 
   const registerRebound = (playerId: string) => {
     if (match.status !== "en_juego") return
+    if (pendingPersonalFoul) return
+    if (pendingBlock) return
+    if (pendingTurnover) return
     if (!pendingReboundTeamId) return
     const playerTeam = getPlayerTeam(playerId)
     if (!playerTeam) return
@@ -803,29 +1793,172 @@ export default function PlanillaPage() {
     setLocalEvents((prev) => [...prev, event])
     addMatchEvent(event)
     setSyncStatus("pending")
+
+    if (!isOnline) {
+      console.log("[events] Rebound created offline, marking as pending", { id: event.id })
+      setPendingEventIds((prev) => (prev.includes(event.id) ? prev : [...prev, event.id]))
+      return
+    }
+
+    void (async () => {
+      const ok = await sendEventToServer(event)
+      if (!ok) {
+        console.log("[events] Rebound send failed, marking as pending", { id: event.id })
+        setPendingEventIds((prev) => (prev.includes(event.id) ? prev : [...prev, event.id]))
+      }
+    })()
+  }
+
+  const finalizeTurnover = (stealerId: string | null) => {
+    if (!pendingTurnover) return
+    const loserTeam = getPlayerTeam(pendingTurnover.loserId)
+    if (!loserTeam) {
+      setPendingTurnover(null)
+      return
+    }
+
+    const baseEvent: MatchEvent = {
+      id: `ev-${Date.now()}`,
+      matchId,
+      playerId: pendingTurnover.loserId,
+      teamId: loserTeam.teamId,
+      type: "turnover",
+      period,
+      timestamp: new Date(),
+      gameTime: formatTime(gameTime),
+    }
+
+    const events: MatchEvent[] = [baseEvent]
+
+    if (stealerId) {
+      const stealerTeam = getPlayerTeam(stealerId)
+      if (stealerTeam) {
+        events.push({
+          id: `ev-${Date.now()}-st`,
+          matchId,
+          playerId: stealerId,
+          teamId: stealerTeam.teamId,
+          type: "steal",
+          period,
+          timestamp: new Date(),
+          gameTime: formatTime(gameTime),
+        })
+      }
+    }
+
+    setLocalEvents((prev) => [...prev, ...events])
+    events.forEach((ev) => addMatchEvent(ev))
+    setSyncStatus("pending")
+
+    if (!isOnline) {
+      console.log("[events] Turnover/steal created offline, marking as pending", {
+        ids: events.map((e) => e.id),
+      })
+      setPendingEventIds((prev) => {
+        const next = [...prev]
+        events.forEach((ev) => {
+          if (!next.includes(ev.id)) next.push(ev.id)
+        })
+        return next
+      })
+    } else {
+      void (async () => {
+        const failed: string[] = []
+        for (const ev of events) {
+          const ok = await sendEventToServer(ev)
+          if (!ok) failed.push(ev.id)
+        }
+        if (failed.length) {
+          console.log("[events] Some turnover/steal events failed to send, marking as pending", { failed })
+          setPendingEventIds((prev) => {
+            const next = [...prev]
+            failed.forEach((id) => {
+              if (!next.includes(id)) next.push(id)
+            })
+            return next
+          })
+        }
+      })()
+    }
+    setPendingTurnover(null)
   }
 
   const PlayerButton = ({ player, teamSide }: { player: Player; teamSide: "home" | "away" }) => {
-    const playerEvents = localEvents.filter((e) => e.playerId === player.id)
-    const playerFouls = playerEvents.filter((e) => e.type === "foul").length
-    const playerPoints = playerEvents.reduce((acc, e) => {
-      if (e.type === "points" && e.points) return acc + e.points
-      if (e.type === "shot" && e.made && e.shotType) return acc + e.shotType
-      if (e.type === "free_throw" && e.made) return acc + 1
-      return acc
-    }, 0)
+    const { points: playerPoints, fouls: playerFouls } = getPlayerStats(player.id)
 
     const isSelected = selectedPlayerId === player.id
     const isDisqualified = disqualifiedPlayers.has(player.id)
 
+    const baseBgColor = teamSide === "home" ? `${homeColor}14` : `${awayColor}14`
+
     return (
-      <div className={`rounded-lg border bg-card p-2 ${isSelected ? "border-primary" : ""} ${isDisqualified ? "border-red-500 bg-red-50" : ""}`}>
+      <div
+        className={`rounded-lg border p-2 ${isSelected ? "border-primary" : ""} ${isDisqualified ? "border-red-500 bg-red-50" : ""}`}
+        style={!isDisqualified ? { backgroundColor: baseBgColor } : undefined}
+      >
         <button
           type="button"
           className="w-full"
           disabled={isDisqualified}
           onClick={() => {
             if (pendingFreeThrow) {
+              return
+            }
+            // Si hay una falta personal pendiente, este jugador es quien LA RECIBE.
+            // La falta se contabiliza sobre el jugador que la cometió (botón que inició la acción).
+            if (pendingPersonalFoul) {
+              if (pendingPersonalFoul.targetTeamSide === teamSide) {
+                addFoul(pendingPersonalFoul.committerId, pendingPersonalFoul.committerTeamSide, "personal")
+                setPendingPersonalFoul(null)
+              }
+              return
+            }
+            // Pérdida/Recuperación: este jugador es quien RECUPERA la pelota
+            if (pendingTurnover) {
+              if (pendingTurnover.targetTeamSide === teamSide) {
+                finalizeTurnover(player.id)
+              }
+              return
+            }
+            // Si hay una tapa pendiente, este jugador es quien RECIBE la tapa.
+            if (pendingBlock) {
+              if (pendingBlock.targetTeamSide === teamSide) {
+                const blockerTeam = getPlayerTeam(pendingBlock.blockerId)
+                const targetTeam = getPlayerTeam(player.id)
+                if (blockerTeam) {
+                  const event: MatchEvent = {
+                    id: `ev-${Date.now()}`,
+                    matchId,
+                    playerId: pendingBlock.blockerId,
+                    teamId: blockerTeam.teamId,
+                    type: "block",
+                    period,
+                    timestamp: new Date(),
+                    gameTime: formatTime(gameTime),
+                  }
+                  setLocalEvents((prev) => [...prev, event])
+                  addMatchEvent(event)
+                  setSyncStatus("pending")
+
+                  if (!isOnline) {
+                    console.log("[events] Block created offline, marking as pending", { id: event.id })
+                    setPendingEventIds((prev) => (prev.includes(event.id) ? prev : [...prev, event.id]))
+                  } else {
+                    void (async () => {
+                      const ok = await sendEventToServer(event)
+                      if (!ok) {
+                        console.log("[events] Block send failed, marking as pending", { id: event.id })
+                        setPendingEventIds((prev) => (prev.includes(event.id) ? prev : [...prev, event.id]))
+                      }
+                    })()
+                  }
+                }
+                if (targetTeam) {
+                  // Después de la tapa, permitir registrar rebote para cualquiera de los equipos
+                  setPendingReboundTeamId(targetTeam.teamId)
+                }
+                setPendingBlock(null)
+              }
               return
             }
             if (pendingAssistTeamId && pendingAssistScorerId) {
@@ -851,7 +1984,7 @@ export default function PlanillaPage() {
                   {player.firstName} {player.lastName.charAt(0)}.
                   {isDisqualified && " ⛔"}
                 </p>
-                <p className="text-[11px] text-muted-foreground">
+                <p className="text-[11px] text-muted-foreground whitespace-nowrap">
                   {playerPoints} pts | {playerFouls} faltas
                 </p>
               </div>
@@ -861,14 +1994,35 @@ export default function PlanillaPage() {
         <div className="mt-1.5 flex gap-1.5">
           <Button
             size="sm"
-            variant="secondary"
-            className="h-8 flex-1 text-xs font-medium px-2"
+            variant="outline"
+            className="h-8 flex-1 text-xs font-medium px-2 border-muted-foreground/20 bg-background hover:bg-muted"
             onClick={() => {
-              setPersonalFoulPlayerId(player.id)
-              setPersonalFoulTeamSide(teamSide)
-              setShowPersonalFoulDialog(true)
+              if (
+                pendingReboundTeamId ||
+                pendingAssistTeamId ||
+                pendingFreeThrow ||
+                pendingPersonalFoul ||
+                pendingBlock ||
+                pendingTurnover
+              )
+                return
+              // Iniciar selección de jugador rival que RECIBE la falta.
+              const targetTeamSide: "home" | "away" = teamSide === "home" ? "away" : "home"
+              setPendingPersonalFoul({
+                committerId: player.id,
+                committerTeamSide: teamSide,
+                targetTeamSide,
+              })
             }}
-            disabled={!!pendingReboundTeamId || !!pendingAssistTeamId || !!pendingFreeThrow || isDisqualified}
+            disabled={
+              !!pendingReboundTeamId ||
+              !!pendingAssistTeamId ||
+              !!pendingFreeThrow ||
+              isDisqualified ||
+              !!pendingPersonalFoul ||
+              !!pendingBlock ||
+              !!pendingTurnover
+            }
           >
             Falta
           </Button>
@@ -877,7 +2031,7 @@ export default function PlanillaPage() {
             variant="outline"
             className="h-8 flex-1 text-[11px] font-medium px-2"
             onClick={() => {
-              if (pendingReboundTeamId || pendingAssistTeamId || pendingFreeThrow) return
+              if (pendingReboundTeamId || pendingAssistTeamId || pendingFreeThrow || isDisqualified) return
               setSelectedPlayerId(player.id)
               setSelectedTeam(teamSide)
               const rivalTeamId = teamSide === "home" ? awayTeam?.id : homeTeam?.id
@@ -898,14 +2052,12 @@ export default function PlanillaPage() {
               }
               setFreeThrowDialogPlayer({
                 id: player.id,
-                jerseyNumber: (player as any).jerseyNumber ?? null,
-                name: `${player.firstName} ${player.lastName}`,
                 teamSide,
               })
-              setFreeThrowAttempts({})
+              setFreeThrowAttempts({ 1: null, 2: null, 3: null })
               setShowFreeThrowDialog(true)
             }}
-            disabled={!!pendingReboundTeamId || !!pendingAssistTeamId || !!pendingFreeThrow}
+            disabled={!!pendingReboundTeamId || !!pendingAssistTeamId || !!pendingFreeThrow || isDisqualified}
           >
             Tiros Libres
           </Button>
@@ -918,13 +2070,13 @@ export default function PlanillaPage() {
     <div className="min-h-screen bg-background flex flex-col overflow-hidden">
       <header className="sticky top-0 z-10 border-b bg-card">
         <div className="flex items-center justify-between gap-3 p-2">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <Button variant="ghost" size="icon" onClick={() => router.push("/mesa")}>
               <ArrowLeft className="h-5 w-5" />
             </Button>
-            <div className="hidden sm:flex items-center gap-2">
+            <div className="hidden sm:flex flex-col items-start gap-0.5">
               <div
-                className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
+                className={`flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium ${
                   syncStatus === "synced"
                     ? "bg-[var(--color-success)]/10 text-[var(--color-success)]"
                     : syncStatus === "pending"
@@ -937,41 +2089,106 @@ export default function PlanillaPage() {
                 {syncStatus === "synced" && <CheckCircle className="h-3 w-3" />}
                 {syncStatus === "pending" && <AlertTriangle className="h-3 w-3" />}
                 {syncStatus === "syncing" && <Loader2 className="h-3 w-3 animate-spin" />}
-                {syncStatus === "synced"
-                  ? "Sincronizado"
-                  : syncStatus === "pending"
-                    ? "Pendiente"
-                    : syncStatus === "syncing"
-                      ? "Sincronizando"
-                      : "Error"}
+                <span className="leading-none">
+                  {syncStatus === "synced"
+                    ? "Sincronizado"
+                    : syncStatus === "pending"
+                      ? "Pendiente"
+                      : syncStatus === "syncing"
+                        ? "Sincronizando"
+                        : "Error"}
+                </span>
               </div>
-              <div
-                className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${
-                  isOnline ? "bg-[var(--color-success)]/10 text-[var(--color-success)]" : "bg-destructive/10 text-destructive"
-                }`}
-              >
+              <div className="flex items-center gap-1 text-[10px] text-muted-foreground pl-1">
                 {isOnline ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
+                <span>{isOnline ? "Online" : "Offline"}</span>
               </div>
             </div>
           </div>
 
           <div className="flex-1">
-            <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+            <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-1.5">
               {/* Local */}
               <div
                 className="rounded-md border px-2 py-1.5"
-                style={{ borderLeftColor: homeTeam.primaryColor, borderLeftWidth: 6 }}
+                style={{ borderLeftColor: homeColor, borderLeftWidth: 6 }}
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <div className="truncate text-xs text-muted-foreground">LOCAL</div>
-                    <div className="truncate text-sm font-semibold">{homeTeam.name}</div>
+                    <div
+                      className="truncate text-sm font-semibold cursor-pointer hover:underline"
+                      onClick={() => {
+                        setSubsDialogTeamSide("home")
+                        setSubsSelection(
+                          onCourtPlayers.home.length ? onCourtPlayers.home : homePlayers.map((p) => p.id),
+                        )
+                        setShowSubsDialog(true)
+                      }}
+                    >
+                      {homeTeam.name}
+                    </div>
                     <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
                       <span>Faltas:</span>
                       <div className={`px-1.5 py-0.5 rounded font-medium ${teamFoulWarning.home ? "bg-red-100 text-red-700" : "bg-muted"}`}>
                         {teamFoulsInPeriod.home}
                       </div>
                     </div>
+                    {period <= 4 ? (
+                      <div className="flex items-center gap-1 text-[11px] text-muted-foreground mt-0.5">
+                        <span>TM 1T:</span>
+                        <div className="flex gap-0.5">
+                          {[0, 1].map((i) => {
+                            const used = Math.min(teamTimeouts.home.firstHalf, 2)
+                            const active = i < used
+                            return (
+                              <span
+                                key={i}
+                                className={`h-4 w-4 rounded border bg-muted flex items-center justify-center text-[10px] leading-none cursor-pointer ${active ? "font-bold" : ""}`}
+                                onClick={() => setTimeoutDialogTeamSide("home")}
+                              >
+                                {active ? "X" : ""}
+                              </span>
+                            )
+                          })}
+                        </div>
+                        <span>2T:</span>
+                        <div className="flex gap-0.5">
+                          {[0, 1, 2].map((i) => {
+                            const used = Math.min(teamTimeouts.home.secondHalf, 3)
+                            const active = i < used
+                            return (
+                              <span
+                                key={i}
+                                className={`h-4 w-4 rounded border bg-muted flex items-center justify-center text-[10px] leading-none cursor-pointer ${active ? "font-bold" : ""}`}
+                                onClick={() => setTimeoutDialogTeamSide("home")}
+                              >
+                                {active ? "X" : ""}
+                              </span>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1 text-[11px] text-muted-foreground mt-0.5">
+                        <span>TM:</span>
+                        <div className="flex gap-0.5">
+                          {[0].map((i) => {
+                            const used = Math.min(teamTimeouts.home.overtime, 1)
+                            const active = i < used
+                            return (
+                              <span
+                                key={i}
+                                className={`h-4 w-4 rounded border bg-muted flex items-center justify-center text-[10px] leading-none cursor-pointer ${active ? "font-bold" : ""}`}
+                                onClick={() => setTimeoutDialogTeamSide("home")}
+                              >
+                                {active ? "X" : ""}
+                              </span>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div className="text-2xl font-bold tabular-nums">{homeScore}</div>
                 </div>
@@ -984,32 +2201,77 @@ export default function PlanillaPage() {
                   {isRunning ? (
                     <div className="text-2xl font-mono font-bold tabular-nums">{formatTime(gameTime)}</div>
                   ) : (
-                    <Input
-                      value={formatTime(gameTime)}
-                      onChange={(e) => {
-                        const v = e.target.value
-                        const m = v.match(/^(\d{1,2}):(\d{2})$/)
-                        if (!m) return
-                        const mins = Number(m[1])
-                        const secs = Number(m[2])
-                        setGameTime(Math.max(0, mins * 60 + secs))
-                      }}
-                      className="h-9 w-[92px] text-center font-mono text-xl font-bold mx-auto"
-                    />
+                    <div className="h-9 w-[92px] text-center font-mono text-xl font-bold mx-auto flex items-center justify-center">
+                      {formatTime(gameTime)}
+                    </div>
                   )}
 
-                  <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => setIsRunning(!isRunning)}>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-9 w-9"
+                    onClick={() => {
+                      if (!isRunning && showClockEditor) {
+                        setShowClockEditorWarning(true)
+                        return
+                      }
+                      setIsRunning((prev) => !prev)
+                    }}
+                  >
                     {isRunning ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                   </Button>
                   {lastScoreFlash && (
                     <div
                       className="rounded-full px-2 py-0.5 text-xs font-semibold text-white shadow-sm animate-in fade-in zoom-in duration-150"
                       style={{
-                        backgroundColor: lastScoreFlash.teamSide === "home" ? homeTeam.primaryColor : awayTeam.primaryColor,
+                        backgroundColor: lastScoreFlash.teamSide === "home" ? homeColor : awayColor,
                       }}
                     >
                       +{lastScoreFlash.points}
                     </div>
+                  )}
+                  {timeoutCountdown !== null && timeoutTeamSide && !timeoutMinimized && (
+                    <div className="fixed inset-0 z-40 flex items-center justify-center">
+                      <div className="relative w-[min(320px,90vw)] rounded-xl border bg-background px-4 py-3 shadow-xl">
+                        <div className="absolute right-8 top-2 flex items-center gap-1">
+                          <button
+                            type="button"
+                            className="flex h-6 w-6 items-center justify-center rounded-full border bg-muted text-muted-foreground text-xs"
+                            onClick={() => setTimeoutMinimized(true)}
+                          >
+                            <ChevronRight className="h-3 w-3 -rotate-90" />
+                          </button>
+                          <button
+                            type="button"
+                            className="flex h-6 w-6 items-center justify-center rounded-full border bg-muted text-destructive text-xs"
+                            onClick={cancelActiveTimeout}
+                          >
+                            <XIcon className="h-3 w-3" />
+                          </button>
+                        </div>
+                        <div className="flex flex-col items-center justify-center gap-2 pt-4 pb-1">
+                          <div className="text-xs font-medium text-muted-foreground">
+                            Tiempo muerto
+                          </div>
+                          <div className="text-sm font-semibold">
+                            {timeoutTeamSide === "home" ? homeTeam.name : awayTeam.name}
+                          </div>
+                          <div className="font-mono text-3xl font-semibold tracking-tight">
+                            {formatTime(timeoutCountdown)}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {timeoutCountdown !== null && timeoutTeamSide && timeoutMinimized && (
+                    <button
+                      type="button"
+                      className="fixed bottom-4 right-4 z-40 flex h-16 w-16 flex-col items-center justify-center rounded-full bg-primary text-[11px] text-primary-foreground shadow-lg"
+                      onClick={() => setTimeoutMinimized(false)}
+                    >
+                      <span className="leading-tight">TM</span>
+                      <span className="font-mono text-sm font-semibold">{formatTime(timeoutCountdown)}</span>
+                    </button>
                   )}
                 </div>
               </div>
@@ -1017,19 +2279,85 @@ export default function PlanillaPage() {
               {/* Visitante */}
               <div
                 className="rounded-md border px-2 py-1.5"
-                style={{ borderRightColor: awayTeam.primaryColor, borderRightWidth: 6 }}
+                style={{ borderRightColor: awayColor, borderRightWidth: 6 }}
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-2xl font-bold tabular-nums">{awayScore}</div>
                   <div className="min-w-0 text-right">
                     <div className="truncate text-xs text-muted-foreground">VISITANTE</div>
-                    <div className="truncate text-sm font-semibold">{awayTeam.name}</div>
+                    <div
+                      className="truncate text-sm font-semibold cursor-pointer hover:underline"
+                      onClick={() => {
+                        setSubsDialogTeamSide("away")
+                        setSubsSelection(
+                          onCourtPlayers.away.length ? onCourtPlayers.away : awayPlayers.map((p) => p.id),
+                        )
+                        setShowSubsDialog(true)
+                      }}
+                    >
+                      {awayTeam.name}
+                    </div>
                     <div className="flex items-center justify-end gap-1 text-xs text-muted-foreground mt-1">
                       <div className={`px-1.5 py-0.5 rounded font-medium ${teamFoulWarning.away ? "bg-red-100 text-red-700" : "bg-muted"}`}>
                         {teamFoulsInPeriod.away}
                       </div>
                       <span>Faltas:</span>
                     </div>
+                    {period <= 4 ? (
+                      <div className="flex items-center justify-end gap-1 text-[11px] text-muted-foreground mt-0.5">
+                        <span>TM 1T:</span>
+                        <div className="flex gap-0.5">
+                          {[0, 1].map((i) => {
+                            const used = Math.min(teamTimeouts.away.firstHalf, 2)
+                            const active = i < used
+                            return (
+                              <span
+                                key={i}
+                                className={`h-4 w-4 rounded border bg-muted flex items-center justify-center text-[10px] leading-none cursor-pointer ${active ? "font-bold" : ""}`}
+                                onClick={() => setTimeoutDialogTeamSide("away")}
+                              >
+                                {active ? "X" : ""}
+                              </span>
+                            )
+                          })}
+                        </div>
+                        <span>2T:</span>
+                        <div className="flex gap-0.5">
+                          {[0, 1, 2].map((i) => {
+                            const used = Math.min(teamTimeouts.away.secondHalf, 3)
+                            const active = i < used
+                            return (
+                              <span
+                                key={i}
+                                className={`h-4 w-4 rounded border bg-muted flex items-center justify-center text-[10px] leading-none cursor-pointer ${active ? "font-bold" : ""}`}
+                                onClick={() => setTimeoutDialogTeamSide("away")}
+                              >
+                                {active ? "X" : ""}
+                              </span>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-end gap-1 text-[11px] text-muted-foreground mt-0.5">
+                        <span>TM:</span>
+                        <div className="flex gap-0.5">
+                          {[0].map((i) => {
+                            const used = Math.min(teamTimeouts.away.overtime, 1)
+                            const active = i < used
+                            return (
+                              <span
+                                key={i}
+                                className={`h-4 w-4 rounded border bg-muted flex items-center justify-center text-[10px] leading-none cursor-pointer ${active ? "font-bold" : ""}`}
+                                onClick={() => setTimeoutDialogTeamSide("away")}
+                              >
+                                {active ? "X" : ""}
+                              </span>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1078,15 +2406,25 @@ export default function PlanillaPage() {
 
       <div className="flex-1 overflow-hidden">
         <Tabs value={mainTab} onValueChange={(v) => setMainTab(v as any)} className="h-full">
-          <TabsContent value="cancha" className="m-0 h-full">
+          <TabsContent value="cancha" className="m-0 h-full pb-16 md:pb-4">
             <div className="h-full grid grid-cols-1 gap-2 p-3 md:grid-cols-12">
               <div className="hidden md:block md:col-span-3 overflow-hidden">
                 <div className="rounded-lg border bg-card overflow-hidden flex flex-col">
-                  <div className="px-3 py-2 text-sm font-semibold" style={{ borderLeftColor: homeTeam.primaryColor, borderLeftWidth: 6 }}>
+                  <div
+                    className="px-3 py-2 text-sm font-semibold cursor-pointer"
+                    style={{ borderLeftColor: homeColor, borderLeftWidth: 6 }}
+                    onClick={() => {
+                      setSubsDialogTeamSide("home")
+                      setSubsSelection(
+                        onCourtPlayers.home.length ? onCourtPlayers.home : homePlayers.map((p) => p.id),
+                      )
+                      setShowSubsDialog(true)
+                    }}
+                  >
                     {homeTeam.name}
                   </div>
                   <div className="flex-1 overflow-auto p-2 space-y-2">
-                    {homePlayers.map((player) => (
+                    {visibleHomePlayers.map((player) => (
                       <PlayerButton key={player.id} player={player} teamSide="home" />
                     ))}
                   </div>
@@ -1099,13 +2437,19 @@ export default function PlanillaPage() {
                     <div>
                       <div className="text-sm font-semibold">Cancha</div>
                       <div className="text-xs text-muted-foreground">
-                        {pendingAssistTeamId && pendingAssistScorerId
-                          ? "Asistencia pendiente: tocá un compañero para asignarla o seguí sin asistencia"
-                          : selectedPlayerId
-                            ? pendingReboundTeamId
-                              ? "Rebote pendiente: tocá un jugador para asignarlo o continuá sin rebote"
-                              : "Tap = tiro fallado | Mantener presionado = tiro convertido"
-                            : "Seleccioná un jugador para habilitar el mapa"}
+                        {pendingTurnover
+                          ? "Pérdida pendiente: tocá un jugador rival que recupera o 'Sin recuperación'"
+                          : pendingBlock
+                            ? "Tapa pendiente: tocá un jugador del equipo rival que recibe la tapa"
+                            : pendingPersonalFoul
+                              ? "Falta personal pendiente: tocá un jugador del equipo rival que la recibe"
+                              : pendingAssistTeamId && pendingAssistScorerId
+                                ? "Asistencia pendiente: tocá un compañero para asignarla o seguí sin asistencia"
+                                : selectedPlayerId
+                                  ? pendingReboundTeamId
+                                    ? "Rebote pendiente: tocá un jugador para asignarlo o continuá sin rebote"
+                                    : "Tap = tiro fallado | Mantener presionado = tiro convertido"
+                                  : "Seleccioná un jugador para habilitar el mapa"}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -1132,6 +2476,17 @@ export default function PlanillaPage() {
                           Sin rebote
                         </Button>
                       )}
+                      {!pendingFreeThrow && pendingTurnover && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            finalizeTurnover(null)
+                          }}
+                        >
+                          Sin recuperación
+                        </Button>
+                      )}
                       <Button
                         size="sm"
                         variant="outline"
@@ -1145,20 +2500,112 @@ export default function PlanillaPage() {
                     </div>
                   </div>
 
-                  <div className="flex-1 overflow-auto p-3">
+                  <div className="p-3 pb-2">
                     <ShotMap
-                      disabled={!selectedPlayerId || match.status !== "en_juego" || !!pendingReboundTeamId || !!pendingFreeThrow}
+                      disabled={
+                        !selectedPlayerId ||
+                        match.status !== "en_juego" ||
+                        !!pendingReboundTeamId ||
+                        !!pendingFreeThrow ||
+                        !!pendingPersonalFoul ||
+                        !!pendingBlock ||
+                        !!pendingTurnover
+                      }
                       onShot={registerShot}
                     />
                   </div>
-                  
+
                   {/* Botón de Otras Faltas debajo de la cancha */}
                   <div className="px-3 py-2 border-t">
                     <Button
                       variant="outline"
+                      className="w-full mb-2"
+                      onClick={() => {
+                        if (!selectedPlayerId) return
+                        if (
+                          pendingReboundTeamId ||
+                          pendingAssistTeamId ||
+                          pendingFreeThrow ||
+                          pendingPersonalFoul ||
+                          pendingBlock ||
+                          pendingTurnover
+                        )
+                          return
+
+                        const blockerTeam = getPlayerTeam(selectedPlayerId)
+                        if (!blockerTeam) return
+                        const targetTeamSide: "home" | "away" =
+                          blockerTeam.teamSide === "home" ? "away" : "home"
+                        setPendingBlock({
+                          blockerId: selectedPlayerId,
+                          blockerTeamSide: blockerTeam.teamSide,
+                          targetTeamSide,
+                        })
+                      }}
+                      disabled={
+                        !selectedPlayerId ||
+                        match.status !== "en_juego" ||
+                        !!pendingReboundTeamId ||
+                        !!pendingAssistTeamId ||
+                        !!pendingFreeThrow ||
+                        !!pendingPersonalFoul ||
+                        !!pendingBlock ||
+                        !!pendingTurnover
+                      }
+                    >
+                      Tapa
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => {
+                        if (!selectedPlayerId) return
+                        if (
+                          pendingReboundTeamId ||
+                          pendingAssistTeamId ||
+                          pendingFreeThrow ||
+                          pendingPersonalFoul ||
+                          pendingBlock ||
+                          pendingTurnover
+                        )
+                          return
+
+                        const turnoverTeam = getPlayerTeam(selectedPlayerId)
+                        if (!turnoverTeam) return
+                        const targetTeamSide: "home" | "away" =
+                          turnoverTeam.teamSide === "home" ? "away" : "home"
+                        setPendingTurnover({
+                          loserId: selectedPlayerId,
+                          loserTeamSide: turnoverTeam.teamSide,
+                          targetTeamSide,
+                        })
+                      }}
+                      disabled={
+                        !selectedPlayerId ||
+                        match.status !== "en_juego" ||
+                        !!pendingReboundTeamId ||
+                        !!pendingAssistTeamId ||
+                        !!pendingFreeThrow ||
+                        !!pendingPersonalFoul ||
+                        !!pendingBlock ||
+                        !!pendingTurnover
+                      }
+                    >
+                      Pérdida
+                    </Button>
+                    <Button
+                      variant="outline"
                       className="w-full"
                       onClick={() => setShowOtherFoulDialog(true)}
-                      disabled={match.status !== "en_juego"}
+                      disabled={
+                        match.status !== "en_juego" ||
+                        !!pendingReboundTeamId ||
+                        !!pendingAssistTeamId ||
+                        !!pendingFreeThrow ||
+                        !!pendingPersonalFoul ||
+                        !!pendingBlock ||
+                        !!pendingTurnover
+                      }
                     >
                       Otras Faltas
                     </Button>
@@ -1174,7 +2621,7 @@ export default function PlanillaPage() {
                       variant={selectedTeam === "home" ? "secondary" : "outline"}
                       className="flex-1 justify-start"
                       onClick={() => setSelectedTeam("home")}
-                      style={{ borderLeftColor: homeTeam.primaryColor, borderLeftWidth: 6 }}
+                      style={{ borderLeftColor: homeColor, borderLeftWidth: 6 }}
                     >
                       {homeTeam.name}
                     </Button>
@@ -1183,13 +2630,13 @@ export default function PlanillaPage() {
                       variant={selectedTeam === "away" ? "secondary" : "outline"}
                       className="flex-1 justify-start"
                       onClick={() => setSelectedTeam("away")}
-                      style={{ borderRightColor: awayTeam.primaryColor, borderRightWidth: 6 }}
+                      style={{ borderRightColor: awayColor, borderRightWidth: 6 }}
                     >
                       {awayTeam.name}
                     </Button>
                   </div>
                   <div className="flex-1 overflow-auto p-2 space-y-2">
-                    {(selectedTeam === "home" ? homePlayers : awayPlayers).map((player) => (
+                    {(selectedTeam === "home" ? visibleHomePlayers : visibleAwayPlayers).map((player) => (
                       <PlayerButton
                         key={player.id}
                         player={player}
@@ -1202,11 +2649,21 @@ export default function PlanillaPage() {
 
               <div className="hidden md:block md:col-span-3 overflow-hidden">
                 <div className="rounded-lg border bg-card overflow-hidden flex flex-col">
-                  <div className="px-3 py-2 text-sm font-semibold text-right" style={{ borderRightColor: awayTeam.primaryColor, borderRightWidth: 6 }}>
+                  <div
+                    className="px-3 py-2 text-sm font-semibold text-right cursor-pointer"
+                    style={{ borderRightColor: awayColor, borderRightWidth: 6 }}
+                    onClick={() => {
+                      setSubsDialogTeamSide("away")
+                      setSubsSelection(
+                        onCourtPlayers.away.length ? onCourtPlayers.away : awayPlayers.map((p) => p.id),
+                      )
+                      setShowSubsDialog(true)
+                    }}
+                  >
                     {awayTeam.name}
                   </div>
                   <div className="flex-1 overflow-auto p-2 space-y-2">
-                    {awayPlayers.map((player) => (
+                    {visibleAwayPlayers.map((player) => (
                       <PlayerButton key={player.id} player={player} teamSide="away" />
                     ))}
                   </div>
@@ -1232,33 +2689,70 @@ export default function PlanillaPage() {
                         const teamName = isHome ? homeTeam.name : awayTeam.name
                         
                         // Manejar nombres para personal técnico
+                        // Nombre / descripción de la persona involucrada
                         let personName = ""
-                        if (e.foulType === "technical" && e.playerId.startsWith("tech-")) {
-                          personName = "Técnico"
-                        } else if (e.foulType === "technical" && e.playerId.startsWith("assist-")) {
-                          personName = "Asistente"
-                        } else if (player) {
-                          personName = `${player.lastName.toUpperCase()}, ${player.firstName}`
+
+                        // Manejo especial para sustituciones: agrupar sale / entra
+                        if (e.type === "substitution_out") {
+                          // No mostramos directamente el evento de salida; se mostrará junto al de entrada
+                          return null
                         }
-                        const title =
-                          e.type === "points"
-                            ? `+${e.points}`
-                            : e.type === "shot"
-                              ? `${e.made ? "Anotó" : "Falló"} ${e.shotType}P`
-                              : e.type === "free_throw"
-                                ? `${e.made ? "Anotó" : "Falló"} TL`
-                                : e.type === "rebound"
-                                  ? `Rebote ${e.reboundType === "offensive" ? "O" : "D"}`
-                                  : e.type === "foul"
-                                    ? (() => {
-                                        const type = e.foulType
-                                        if (type === "technical") return "Falta Técnica"
-                                        if (type === "unsportsmanlike") return "Falta Antideportiva"
-                                        if (type === "disqualifying") return "Falta Descalificante"
-                                        if (type === "fight") return "Reyerta"
-                                        return "Falta Personal"
-                                      })()
-                                    : e.type
+
+                        let title: string
+
+                        if (e.type === "substitution_in") {
+                          // Buscar el evento de salida asociado (misma jugada)
+                          const pairedOut = localEvents.find(
+                            (ev) =>
+                              ev.type === "substitution_out" &&
+                              ev.teamId === e.teamId &&
+                              ev.gameTime === e.gameTime &&
+                              Math.abs(new Date(ev.timestamp).getTime() - new Date(e.timestamp).getTime()) < 2000,
+                          )
+
+                          const inPlayer = player
+                          const outPlayer = pairedOut
+                            ? [...homePlayers, ...awayPlayers].find((p) => p.id === pairedOut.playerId)
+                            : undefined
+
+                          const inName = inPlayer
+                            ? `${inPlayer.lastName.toUpperCase()}, ${inPlayer.firstName}`
+                            : "Jugador entra"
+                          const outName = outPlayer
+                            ? `${outPlayer.lastName.toUpperCase()}, ${outPlayer.firstName}`
+                            : "Jugador sale"
+
+                          title = `Cambio: sale ${outName} / entra ${inName}`
+                          personName = "" // Ya incluimos nombres en el título
+                        } else {
+                          if (e.foulType === "technical" && e.playerId.startsWith("tech-")) {
+                            personName = "Técnico"
+                          } else if (e.foulType === "technical" && e.playerId.startsWith("assist-")) {
+                            personName = "Asistente"
+                          } else if (player) {
+                            personName = `${player.lastName.toUpperCase()}, ${player.firstName}`
+                          }
+
+                          title =
+                            e.type === "points"
+                              ? `+${e.points}`
+                              : e.type === "shot"
+                                ? `${e.made ? "Anotó" : "Falló"} ${e.shotType}P`
+                                : e.type === "free_throw"
+                                  ? `${e.made ? "Anotó" : "Falló"} TL`
+                                  : e.type === "rebound"
+                                    ? `Rebote ${e.reboundType === "offensive" ? "O" : "D"}`
+                                    : e.type === "foul"
+                                      ? (() => {
+                                          const type = e.foulType
+                                          if (type === "technical") return "Falta Técnica"
+                                          if (type === "unsportsmanlike") return "Falta Antideportiva"
+                                          if (type === "disqualifying") return "Falta Descalificante"
+                                          if (type === "fight") return "Reyerta"
+                                          return "Falta Personal"
+                                        })()
+                                      : e.type
+                        }
 
                         return (
                           <div key={e.id} className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
@@ -1271,7 +2765,7 @@ export default function PlanillaPage() {
                             </div>
                             <div
                               className="h-2.5 w-2.5 rounded-full"
-                              style={{ backgroundColor: isHome ? homeTeam.primaryColor : awayTeam.primaryColor }}
+                              style={{ backgroundColor: isHome ? homeColor : awayColor }}
                             />
                           </div>
                         )
@@ -1287,6 +2781,31 @@ export default function PlanillaPage() {
               <div className="rounded-lg border bg-card">
                 <div className="border-b px-3 py-2 text-sm font-semibold">Partido</div>
                 <div className="p-3 space-y-2">
+                  <div className="text-xs text-muted-foreground space-y-1">
+                    {period <= 4 ? (
+                      <>
+                        <div>
+                          <span className="font-semibold">Tiempos muertos Local:</span>{" "}
+                          TM 1T {Math.min(teamTimeouts.home.firstHalf, 2)}/2 – 2T {Math.min(teamTimeouts.home.secondHalf, 3)}/3 – Tot {Math.min(teamTimeouts.home.firstHalf + teamTimeouts.home.secondHalf, 5)}/5
+                        </div>
+                        <div>
+                          <span className="font-semibold">Tiempos muertos Visitante:</span>{" "}
+                          TM 1T {Math.min(teamTimeouts.away.firstHalf, 2)}/2 – 2T {Math.min(teamTimeouts.away.secondHalf, 3)}/3 – Tot {Math.min(teamTimeouts.away.firstHalf + teamTimeouts.away.secondHalf, 5)}/5
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div>
+                          <span className="font-semibold">Tiempos muertos Local – Prórroga {period - 4}:</span>{" "}
+                          {Math.min(teamTimeouts.home.overtime, 1)}/1
+                        </div>
+                        <div>
+                          <span className="font-semibold">Tiempos muertos Visitante – Prórroga {period - 4}:</span>{" "}
+                          {Math.min(teamTimeouts.away.overtime, 1)}/1
+                        </div>
+                      </>
+                    )}
+                  </div>
                   <Button
                     className="w-full"
                     variant="outline"
@@ -1296,6 +2815,38 @@ export default function PlanillaPage() {
                     }}
                   >
                     {period <= 4 ? "Cerrar Cuarto" : "Cerrar Prórroga"}
+                  </Button>
+                  <Button
+                    className="w-full"
+                    variant="outline"
+                    onClick={() => requestTimeout("home")}
+                    disabled={
+                      match.status !== "en_juego" ||
+                      !!pendingReboundTeamId ||
+                      !!pendingAssistTeamId ||
+                      !!pendingFreeThrow ||
+                      !!pendingPersonalFoul ||
+                      !!pendingBlock ||
+                      !!pendingTurnover
+                    }
+                  >
+                    Tiempo muerto Local
+                  </Button>
+                  <Button
+                    className="w-full"
+                    variant="outline"
+                    onClick={() => requestTimeout("away")}
+                    disabled={
+                      match.status !== "en_juego" ||
+                      !!pendingReboundTeamId ||
+                      !!pendingAssistTeamId ||
+                      !!pendingFreeThrow ||
+                      !!pendingPersonalFoul ||
+                      !!pendingBlock ||
+                      !!pendingTurnover
+                    }
+                  >
+                    Tiempo muerto Visitante
                   </Button>
                   <Button
                     className="w-full"
@@ -1314,32 +2865,113 @@ export default function PlanillaPage() {
             <div className="rounded-lg border bg-card">
               <div className="border-b px-3 py-2 text-sm font-semibold">Configuración</div>
               <div className="p-3 grid gap-3 lg:grid-cols-2">
+                <div className="rounded-md border p-3 flex flex-col items-center gap-3">
+                  <div className="text-center">
+                    <div className="text-sm font-semibold">Reloj</div>
+                    <div className="text-xs text-muted-foreground">Editar cuando está detenido</div>
+                  </div>
+
+                  <div className="h-12 w-[140px] rounded-md border bg-muted/60 flex items-center justify-center font-mono text-2xl font-bold">
+                    {formatTime(gameTime)}
+                  </div>
+
+                  {showClockEditor && (
+                    <div className="flex items-center gap-3 mt-1">
+                      {/* Dígitos de minutos y segundos MM:SS */}
+                      {[0, 1, 2, 3].map((pos) => {
+                        const minutes = Math.floor(gameTime / 60)
+                        const seconds = gameTime % 60
+                        const str = `${minutes.toString().padStart(2, "0")}${seconds
+                          .toString()
+                          .padStart(2, "0")}`
+                        const digit = str[pos]
+
+                        return (
+                          <div key={pos} className="flex flex-col items-center">
+                            <button
+                              type="button"
+                              className="h-5 w-7 flex items-center justify-center text-xs rounded hover:bg-muted disabled:opacity-50"
+                              disabled={isRunning}
+                              onClick={() => adjustTimeDigit(pos as 0 | 1 | 2 | 3, 1)}
+                            >
+                              ▲
+                            </button>
+                            <div className="h-8 w-7 flex items-center justify-center font-mono text-lg font-semibold border rounded">
+                              {digit}
+                            </div>
+                            <button
+                              type="button"
+                              className="h-5 w-7 flex items-center justify-center text-xs rounded hover:bg-muted disabled:opacity-50"
+                              disabled={isRunning}
+                              onClick={() => adjustTimeDigit(pos as 0 | 1 | 2 | 3, -1)}
+                            >
+                              ▼
+                            </button>
+                          </div>
+                        )
+                      })}
+                      <div className="text-lg font-mono font-semibold">:</div>
+                    </div>
+                  )}
+
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={isRunning}
+                    onClick={() => setShowClockEditor((v) => !v)}
+                  >
+                    {showClockEditor ? "Cerrar edición" : "Editar"}
+                  </Button>
+                </div>
                 <div className="rounded-md border p-3">
-                  <div className="text-sm font-semibold">Reloj</div>
-                  <div className="text-xs text-muted-foreground">Editar cuando está detenido</div>
-                  <div className="mt-2 flex items-center gap-2">
-                    <Input
-                      value={formatTime(gameTime)}
-                      onChange={(e) => {
-                        const v = e.target.value
-                        const m = v.match(/^(\d{1,2}):(\d{2})$/)
-                        if (!m) return
-                        const mins = Number(m[1])
-                        const secs = Number(m[2])
-                        setGameTime(Math.max(0, mins * 60 + secs))
-                      }}
-                      className="h-10 w-[120px] text-center font-mono text-xl font-bold"
-                      disabled={isRunning}
-                    />
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setGameTime(getPeriodDurationSeconds(period))
-                        setIsRunning(false)
-                      }}
-                    >
-                      Reiniciar
-                    </Button>
+                  <div className="text-sm font-semibold">Colores de equipo (solo este partido)</div>
+                  <div className="mt-2 space-y-3 text-xs text-muted-foreground">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex flex-col">
+                        <span className="text-xs font-medium text-foreground">Local</span>
+                        <span className="text-[11px] truncate max-w-[140px]">{homeTeam.name}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={homeColor}
+                          onChange={(e) => setHomeColorOverride(e.target.value)}
+                          className="h-8 w-8 cursor-pointer rounded-full border bg-transparent p-0"
+                        />
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-[11px] px-2"
+                          onClick={() => setHomeColorOverride(null)}
+                          disabled={!homeColorOverride}
+                        >
+                          Reset
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex flex-col">
+                        <span className="text-xs font-medium text-foreground">Visitante</span>
+                        <span className="text-[11px] truncate max-w-[140px] text-right">{awayTeam.name}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={awayColor}
+                          onChange={(e) => setAwayColorOverride(e.target.value)}
+                          className="h-8 w-8 cursor-pointer rounded-full border bg-transparent p-0"
+                        />
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-[11px] px-2"
+                          onClick={() => setAwayColorOverride(null)}
+                          disabled={!awayColorOverride}
+                        >
+                          Reset
+                        </Button>
+                      </div>
+                    </div>
                   </div>
                 </div>
                 <div className="rounded-md border p-3">
@@ -1362,13 +2994,149 @@ export default function PlanillaPage() {
           </TabsContent>
 
           <TabsContent value="estadisticas" className="m-0 h-full overflow-auto p-3">
-            <div className="rounded-lg border bg-card">
-              <div className="border-b px-3 py-2 text-sm font-semibold">Estadísticas</div>
-              <div className="p-3 text-sm text-muted-foreground">Sección en preparación.</div>
+            <div className="grid gap-3 lg:grid-cols-2">
+              <div className="rounded-lg border bg-card overflow-auto">
+                <div className="border-b px-3 py-2 text-sm font-semibold">{homeTeam.name} – Estadísticas</div>
+                <div className="p-3">
+                  <div className="min-w-[520px] overflow-x-auto">
+                    <table className="w-full text-xs border-collapse">
+                      <thead>
+                        <tr className="border-b text-[11px] text-muted-foreground">
+                          <th className="px-2 py-1 text-left w-10">#</th>
+                          <th className="px-2 py-1 text-left w-40">Jugador</th>
+                          <th className="px-2 py-1 text-right w-12">Pts</th>
+                          <th className="px-2 py-1 text-right w-16">Faltas</th>
+                          <th className="px-2 py-1 text-right w-16">Reb</th>
+                          <th className="px-2 py-1 text-right w-16">Tap</th>
+                          <th className="px-2 py-1 text-right w-16">Per</th>
+                          <th className="px-2 py-1 text-right w-16">Asis</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {homePlayers.map((player, index) => {
+                          const { points, fouls, rebounds, blocks, turnovers, assists } = getPlayerStats(player.id)
+                          return (
+                            <tr
+                              key={player.id}
+                              className={`border-b last:border-0 ${index % 2 === 0 ? "bg-background" : "bg-muted/40"}`}
+                            >
+                              <td className="px-2 py-1 text-left font-semibold">{player.jerseyNumber}</td>
+                              <td className="px-2 py-1 text-left whitespace-nowrap">{player.lastName.toUpperCase()}, {player.firstName}</td>
+                              <td className="px-2 py-1 text-right font-semibold">{points}</td>
+                              <td className="px-2 py-1 text-right">{fouls}</td>
+                              <td className="px-2 py-1 text-right">{rebounds}</td>
+                              <td className="px-2 py-1 text-right">{blocks}</td>
+                              <td className="px-2 py-1 text-right">{turnovers}</td>
+                              <td className="px-2 py-1 text-right">{assists}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border bg-card overflow-auto">
+                <div className="border-b px-3 py-2 text-sm font-semibold">{awayTeam.name} – Estadísticas</div>
+                <div className="p-3">
+                  <div className="min-w-[520px] overflow-x-auto">
+                    <table className="w-full text-xs border-collapse">
+                      <thead>
+                        <tr className="border-b text-[11px] text-muted-foreground">
+                          <th className="px-2 py-1 text-left w-10">#</th>
+                          <th className="px-2 py-1 text-left w-40">Jugador</th>
+                          <th className="px-2 py-1 text-right w-12">Pts</th>
+                          <th className="px-2 py-1 text-right w-16">Faltas</th>
+                          <th className="px-2 py-1 text-right w-16">Reb</th>
+                          <th className="px-2 py-1 text-right w-16">Tap</th>
+                          <th className="px-2 py-1 text-right w-16">Per</th>
+                          <th className="px-2 py-1 text-right w-16">Asis</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {awayPlayers.map((player, index) => {
+                          const { points, fouls, rebounds, blocks, turnovers, assists } = getPlayerStats(player.id)
+                          return (
+                            <tr
+                              key={player.id}
+                              className={`border-b last:border-0 ${index % 2 === 0 ? "bg-background" : "bg-muted/40"}`}
+                            >
+                              <td className="px-2 py-1 text-left font-semibold">{player.jerseyNumber}</td>
+                              <td className="px-2 py-1 text-left whitespace-nowrap">{player.lastName.toUpperCase()}, {player.firstName}</td>
+                              <td className="px-2 py-1 text-right font-semibold">{points}</td>
+                              <td className="px-2 py-1 text-right">{fouls}</td>
+                              <td className="px-2 py-1 text-right">{rebounds}</td>
+                              <td className="px-2 py-1 text-right">{blocks}</td>
+                              <td className="px-2 py-1 text-right">{turnovers}</td>
+                              <td className="px-2 py-1 text-right">{assists}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
             </div>
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* Diálogo de Tiempo Muerto */}
+      <AlertDialog open={timeoutDialogTeamSide !== null} onOpenChange={(open) => {
+        if (!open) setTimeoutDialogTeamSide(null)
+      }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Solicitar tiempo muerto</AlertDialogTitle>
+            <AlertDialogDescription>
+              {timeoutDialogTeamSide === "home"
+                ? `¿Querés pedir un tiempo muerto para ${homeTeam.name}?`
+                : timeoutDialogTeamSide === "away"
+                  ? `¿Querés pedir un tiempo muerto para ${awayTeam.name}?`
+                  : "¿Querés pedir un tiempo muerto para este equipo?"}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => {
+                setTimeoutDialogTeamSide(null)
+              }}
+            >
+              Cancelar
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (!timeoutDialogTeamSide) return
+                const ok = requestTimeout(timeoutDialogTeamSide)
+                if (ok) {
+                  setTimeoutTeamSide(timeoutDialogTeamSide)
+                  setTimeoutCountdown(60)
+                }
+                setTimeoutDialogTeamSide(null)
+              }}
+            >
+              Confirmar tiempo muerto
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Advertencia: no se puede iniciar reloj mientras se edita en Configuración */}
+      <AlertDialog open={showClockEditorWarning} onOpenChange={setShowClockEditorWarning}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>No se puede iniciar el reloj</AlertDialogTitle>
+            <AlertDialogDescription>
+              Para poner en marcha el reloj primero cerrá la edición del reloj en la pestaña "Configuración".
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={() => setShowClockEditorWarning(false)}>Entendido</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* End Match Dialog */}
       <AlertDialog open={showEndDialog} onOpenChange={setShowEndDialog}>
@@ -1376,24 +3144,22 @@ export default function PlanillaPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Finalizar Partido</AlertDialogTitle>
             <AlertDialogDescription>
-              <div className="my-4">
-                <div className="flex items-center justify-center gap-8 text-foreground">
-                  <div className="text-center">
-                    <div className="font-semibold">{homeTeam.name}</div>
-                    <div className="text-4xl font-bold">{homeScore}</div>
-                  </div>
-                  <span className="text-2xl text-muted-foreground">-</span>
-                  <div className="text-center">
-                    <div className="font-semibold">{awayTeam.name}</div>
-                    <div className="text-4xl font-bold">{awayScore}</div>
-                  </div>
-                </div>
-                <div className="text-center mt-4 text-sm">
-                  ¿Confirmas que deseas finalizar el partido con este resultado?
-                </div>
-              </div>
+              ¿Confirmas que deseas finalizar el partido con el marcador actual?
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <div className="my-4">
+            <div className="flex items-center justify-center gap-8 text-foreground">
+              <div className="text-center">
+                <div className="font-semibold">{homeTeam.name}</div>
+                <div className="text-4xl font-bold">{homeScore}</div>
+              </div>
+              <span className="text-2xl text-muted-foreground">-</span>
+              <div className="text-center">
+                <div className="font-semibold">{awayTeam.name}</div>
+                <div className="text-4xl font-bold">{awayScore}</div>
+              </div>
+            </div>
+          </div>
           <AlertDialogFooter>
             <AlertDialogCancel>Continuar Partido</AlertDialogCancel>
             <AlertDialogAction onClick={endMatch}>Confirmar y Finalizar</AlertDialogAction>
@@ -1441,7 +3207,7 @@ export default function PlanillaPage() {
               setPendingFreeThrow(null)
             }
             setShowFreeThrowDialog(false)
-            setFreeThrowAttempts({})
+            setFreeThrowAttempts({ 1: null, 2: null, 3: null })
           }
         }}
       >
@@ -1550,7 +3316,7 @@ export default function PlanillaPage() {
               onClick={() => {
                 // Cierra sin aplicar nada al marcador
                 setShowFreeThrowDialog(false)
-                setFreeThrowAttempts({})
+                setFreeThrowAttempts({ 1: null, 2: null, 3: null })
               }}
             >
               Cancelar
@@ -1564,7 +3330,7 @@ export default function PlanillaPage() {
                 })
                 if (sequence.length === 0 || !freeThrowDialogPlayer) {
                   setShowFreeThrowDialog(false)
-                  setFreeThrowAttempts({})
+                  setFreeThrowAttempts({ 1: null, 2: null, 3: null })
                   return
                 }
 
@@ -1572,34 +3338,246 @@ export default function PlanillaPage() {
                 const playerTeam = getPlayerTeam(freeThrowDialogPlayer.id)
                 if (!playerTeam) {
                   setShowFreeThrowDialog(false)
-                  setFreeThrowAttempts({})
+                  setFreeThrowAttempts({ 1: null, 2: null, 3: null })
                   return
                 }
 
-                // Limpiamos cualquier rebote pendiente anterior antes de esta serie
+                if (match.status !== "en_juego") {
+                  setShowFreeThrowDialog(false)
+                  setFreeThrowAttempts({ 1: null, 2: null, 3: null })
+                  return
+                }
+
+                // Limpiar rebote pendiente previo a esta serie
                 setPendingReboundTeamId(null)
 
-                // Inicializamos directamente la serie de tiros libres
-                setPendingFreeThrow({
-                  playerId: freeThrowDialogPlayer.id,
-                  teamId: playerTeam.teamId,
-                  teamSide: playerTeam.teamSide,
-                  total: sequence.length as 1 | 2 | 3,
-                  current: 1,
+                const newEvents: MatchEvent[] = []
+                sequence.forEach((s, idx) => {
+                  const made = s === "made"
+                  const ev: MatchEvent = {
+                    id: `ev-${Date.now()}-${idx}`,
+                    matchId,
+                    playerId: freeThrowDialogPlayer.id,
+                    teamId: playerTeam.teamId,
+                    type: "free_throw",
+                    made,
+                    period,
+                    timestamp: new Date(),
+                    gameTime: formatTime(gameTime),
+                  }
+                  newEvents.push(ev)
+
+                  if (made) {
+                    if (playerTeam.teamSide === "home") setHomeScore((prev) => prev + 1)
+                    else setAwayScore((prev) => prev + 1)
+                  } else if (idx === sequence.length - 1) {
+                    // último tiro fallado: rebote pendiente para el equipo del tirador
+                    setPendingReboundTeamId(playerTeam.teamId)
+                  }
                 })
 
-                // Aplicar intents secuencialmente con un pequeño delay para respetar el flujo
-                sequence.forEach((s, idx) => {
-                  window.setTimeout(() => {
-                    registerFreeThrowAttempt(s === "made")
-                  }, idx * 40)
-                })
+                setLocalEvents((prev) => [...prev, ...newEvents])
+                newEvents.forEach((ev) => addMatchEvent(ev))
+                setSyncStatus("pending")
+
+                if (!isOnline) {
+                  console.log("[events] Free-throw series created offline, marking as pending", {
+                    ids: newEvents.map((e) => e.id),
+                  })
+                  setPendingEventIds((prev) => {
+                    const next = [...prev]
+                    newEvents.forEach((ev) => {
+                      if (!next.includes(ev.id)) next.push(ev.id)
+                    })
+                    return next
+                  })
+                } else {
+                  void (async () => {
+                    const failed: string[] = []
+                    for (const ev of newEvents) {
+                      const ok = await sendEventToServer(ev)
+                      if (!ok) failed.push(ev.id)
+                    }
+                    if (failed.length) {
+                      console.log("[events] Some free-throw events failed to send, marking as pending", { failed })
+                      setPendingEventIds((prev) => {
+                        const next = [...prev]
+                        failed.forEach((id) => {
+                          if (!next.includes(id)) next.push(id)
+                        })
+                        return next
+                      })
+                    }
+                  })()
+                }
 
                 setShowFreeThrowDialog(false)
-                setFreeThrowAttempts({})
+                setFreeThrowAttempts({ 1: null, 2: null, 3: null })
               }}
             >
               Aceptar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Diálogo de Sustituciones */}
+      <Dialog open={showSubsDialog} onOpenChange={setShowSubsDialog}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>
+              Sustituciones – {subsDialogTeamSide === "home" ? homeTeam.name : awayTeam.name}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Tocá los jugadores para ponerlos o sacarlos de la cancha. Máximo 5 en cancha.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {(subsDialogTeamSide === "home" ? homePlayers : awayPlayers).map((player) => {
+                const isDisqualified = isEntityDisqualified(player.id)
+                const selected = subsSelection.includes(player.id) && !isDisqualified
+
+                return (
+                  <button
+                    key={player.id}
+                    type="button"
+                    className={`flex flex-col items-center justify-center rounded-md border px-2 py-1 text-xs min-w-[48px] ${
+                      isDisqualified
+                        ? "border-red-500 bg-red-50 text-red-700"
+                        : selected
+                          ? "border-emerald-500 bg-emerald-50"
+                          : "border-muted bg-background"
+                    }`}
+                    disabled={isDisqualified}
+                    onClick={() => {
+                      if (isDisqualified) return
+                      setSubsSelection((prev) => {
+                        // Asegurarnos de que ningún expulsado quede en la selección
+                        const cleaned = prev.filter((id) => !isEntityDisqualified(id))
+                        const isOn = cleaned.includes(player.id)
+                        const count = cleaned.length
+
+                        if (isOn) {
+                          // No permitir menos de 2 jugadores en cancha
+                          if (count <= 2) return cleaned
+                          return cleaned.filter((id) => id !== player.id)
+                        }
+
+                        // Máximo 5 jugadores en cancha (solo contando habilitados)
+                        if (count >= 5) return cleaned
+
+                        return [...cleaned, player.id]
+                      })
+                    }}
+                  >
+                    <span className="font-bold">{player.jerseyNumber}</span>
+                    <span className="truncate max-w-[72px]">
+                      {player.lastName.toUpperCase()}, {player.firstName}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowSubsDialog(false)
+                setSubsSelection([])
+              }}
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={() => {
+                const teamSide = subsDialogTeamSide
+                // Jugadores que consideramos actualmente en cancha: excluir descalificados por seguridad
+                const before = onCourtPlayers[teamSide].filter((id) => !isEntityDisqualified(id))
+                // Selección final: también ignorar cualquier id descalificado que pudiera haberse colado
+                const after = subsSelection.filter((id) => !isEntityDisqualified(id))
+                const teamId = teamSide === "home" ? homeTeam.id : awayTeam.id
+
+                const events: MatchEvent[] = []
+
+                // jugadores que salen
+                before
+                  .filter((id) => !after.includes(id))
+                  .forEach((playerId) => {
+                    events.push({
+                      id: `ev-${Date.now()}-out-${playerId}`,
+                      matchId,
+                      playerId,
+                      teamId,
+                      type: "substitution_out",
+                      period,
+                      timestamp: new Date(),
+                      gameTime: formatTime(gameTime),
+                    })
+                  })
+
+                // jugadores que entran
+                after
+                  .filter((id) => !before.includes(id))
+                  .forEach((playerId) => {
+                    events.push({
+                      id: `ev-${Date.now()}-in-${playerId}`,
+                      matchId,
+                      playerId,
+                      teamId,
+                      type: "substitution_in",
+                      period,
+                      timestamp: new Date(),
+                      gameTime: formatTime(gameTime),
+                    })
+                  })
+
+                if (events.length) {
+                  setLocalEvents((prev) => [...prev, ...events])
+                  events.forEach((ev) => addMatchEvent(ev))
+                  setSyncStatus("pending")
+
+                  if (!isOnline) {
+                    console.log("[events] Substitutions created offline, marking as pending", {
+                      ids: events.map((e) => e.id),
+                    })
+                    setPendingEventIds((prev) => {
+                      const next = [...prev]
+                      events.forEach((ev) => {
+                        if (!next.includes(ev.id)) next.push(ev.id)
+                      })
+                      return next
+                    })
+                  } else {
+                    void (async () => {
+                      const failed: string[] = []
+                      for (const ev of events) {
+                        const ok = await sendEventToServer(ev)
+                        if (!ok) failed.push(ev.id)
+                      }
+                      if (failed.length) {
+                        console.log("[events] Some substitution events failed to send, marking as pending", {
+                          failed,
+                        })
+                        setPendingEventIds((prev) => {
+                          const next = [...prev]
+                          failed.forEach((id) => {
+                            if (!next.includes(id)) next.push(id)
+                          })
+                          return next
+                        })
+                      }
+                    })()
+                  }
+                }
+
+                setOnCourtPlayers((prev) => ({ ...prev, [teamSide]: after }))
+                setShowSubsDialog(false)
+                setSubsSelection([])
+              }}
+            >
+              Aplicar cambios
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1766,7 +3744,7 @@ export default function PlanillaPage() {
                         addFoul(player.id, selectedFoulTeam, selectedFoulType)
                         setShowOtherFoulDialog(false)
                       }}
-                      disabled={isPlayerDisqualified(player.id)}
+                      disabled={isEntityDisqualified(player.id)}
                     >
                       <div className="flex items-center gap-2">
                         <span className="w-6 text-center font-medium">{player.jerseyNumber}</span>
@@ -1792,7 +3770,7 @@ export default function PlanillaPage() {
                             addFoul(player.id, selectedFoulTeam, selectedFoulType)
                             setShowOtherFoulDialog(false)
                           }}
-                          disabled={isPlayerDisqualified(player.id)}
+                          disabled={isEntityDisqualified(player.id)}
                         >
                           <div className="flex items-center gap-2">
                             <span className="w-6 text-center font-medium">{player.jerseyNumber}</span>
@@ -1838,7 +3816,7 @@ export default function PlanillaPage() {
                                   setShowOtherFoulDialog(false)
                                 }
                               }}
-                              disabled={!homeTeam || !awayTeam}
+                              disabled={!homeTeam || !awayTeam || isEntityDisqualified(staffIdFull)}
                             >
                               <div className="flex items-center gap-2">
                                 <span className="text-xs font-medium text-primary">
@@ -1851,6 +3829,34 @@ export default function PlanillaPage() {
                             </Button>
                           )
                         })
+                      })()}
+                    </div>
+                  )}
+
+                  {/* Sección de falta técnica a la banca */}
+                  {selectedFoulType === "technical" && (
+                    <div>
+                      <div className="text-xs font-medium text-muted-foreground mb-1">Banca</div>
+                      {(() => {
+                        const teamId = selectedFoulTeam === "home" ? homeTeam?.id : awayTeam?.id
+                        if (!teamId) return null
+                        const benchId = `bench-${teamId}`
+                        return (
+                          <Button
+                            variant="outline"
+                            className="w-full justify-start text-xs"
+                            onClick={() => {
+                              addFoul(benchId, selectedFoulTeam, "technical")
+                              setShowOtherFoulDialog(false)
+                            }}
+                            disabled={isEntityDisqualified(benchId)}
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-medium text-primary">BANCA</span>
+                              <span>Falta técnica a la banca</span>
+                            </div>
+                          </Button>
+                        )
                       })()}
                     </div>
                   )}

@@ -111,7 +111,8 @@ function computeStandings(teamIds: string[], finalMatches: MatchLite[]): Standin
 
   const list = Array.from(rows.values())
   for (const r of list) {
-    r.points = r.won * 2
+    // 2 puntos por victoria, 1 punto por derrota
+    r.points = r.won * 2 + r.lost * 1
   }
 
   list.sort((a, b) => {
@@ -270,6 +271,7 @@ export async function POST(req: Request) {
     const matchups: Array<{ home: string; away: string }> = []
     const half = qualified.length / 2
 
+    // Playoffs: siempre emparejar 1º con último, 2º con anteúltimo, etc.
     for (let i = 0; i < half; i++) {
       matchups.push({ home: qualified[i]!.teamId, away: qualified[qualified.length - 1 - i]!.teamId })
     }

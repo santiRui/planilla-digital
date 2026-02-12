@@ -166,7 +166,8 @@ function computeStandings(teamIds: string[], finalMatches: MatchLite[]): Standin
 
   const list = Array.from(rows.values())
   for (const r of list) {
-    r.points = r.won * 2
+    // 2 puntos por victoria, 1 punto por derrota
+    r.points = r.won * 2 + r.lost * 1
   }
 
   list.sort((a, b) => {

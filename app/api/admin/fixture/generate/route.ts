@@ -173,7 +173,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: deleteError.message }, { status: 400 })
     }
 
-    const zones = splitIntoZones(teamIds, zonesCount)
+    // Mezclar aleatoriamente el orden de los equipos antes de asignarlos a zonas y generar el round-robin
+    const shuffledTeamIds = [...teamIds]
+    for (let i = shuffledTeamIds.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[shuffledTeamIds[i], shuffledTeamIds[j]] = [shuffledTeamIds[j]!, shuffledTeamIds[i]!]
+    }
+
+    const zones = splitIntoZones(shuffledTeamIds, zonesCount)
 
     const { error: deleteZonesError } = await auth.adminClient
       .from("tournament_team_zones")

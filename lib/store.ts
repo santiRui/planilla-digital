@@ -197,7 +197,8 @@ export const useAppStore = create<AppState>()(
             lost,
             pointsFor,
             pointsAgainst,
-            points: won * 2,
+            // 2 puntos por victoria, 1 punto por derrota
+            points: won * 2 + lost * 1,
           }
         })
 
