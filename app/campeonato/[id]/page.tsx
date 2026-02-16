@@ -1,18 +1,54 @@
 "use client"
 
-import { use } from "react"
+import { use, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Activity, Calendar, Trophy, BarChart3, Users, ArrowLeft, ChevronRight } from "lucide-react"
-import {
-  getChampionshipById,
-  getTeamsByChampionship,
-  getMatchesByChampionship,
-  getStandingsByChampionship,
-} from "@/lib/mock-data"
+import { Activity, Calendar, Trophy, Users, ArrowLeft } from "lucide-react"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { createSupabaseBrowserClient } from "@/lib/supabase/browser"
+
+type Branch = "masculino" | "femenino" | "mixto"
+
+type TournamentRow = {
+  id: string
+  name: string
+  shortName: string
+  description?: string | null
+  year?: number | null
+  branch: Branch
+}
+
+type UiTeam = {
+  id: string
+  name: string
+  club?: string | null
+  logoUrl?: string
+  primaryColor?: string | null
+}
+
+type UiMatch = {
+  id: string
+  round: number
+  status: "programado" | "en_juego" | "finalizado"
+  scheduledDate?: Date
+  scheduledTime?: string | null
+  homeTeamId: string
+  awayTeamId: string
+  homeTeamName: string
+  awayTeamName: string
+  homeScore?: number | null
+  awayScore?: number | null
+  liveHomeScore?: number | null
+  liveAwayScore?: number | null
+  livePeriod?: number | null
+  liveGameTime?: number | null
+  phase?: string | null
+  zoneCode?: string | null
+  createdAt?: Date
+}
 
 interface ChampionshipPageProps {
   params: Promise<{ id: string }>
@@ -21,30 +57,276 @@ interface ChampionshipPageProps {
 export default function ChampionshipPage({ params }: ChampionshipPageProps) {
   const { id } = use(params)
   const router = useRouter()
-  const championship = getChampionshipById(id)
+  const supabase = useMemo(() => createSupabaseBrowserClient(), [])
 
-  if (!championship) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Card className="p-8 text-center">
-          <Trophy className="h-12 w-12 mx-auto text-muted-foreground/50 mb-4" />
-          <h2 className="text-xl font-semibold">Campeonato no encontrado</h2>
-          <p className="text-muted-foreground mt-2">El campeonato que buscas no existe.</p>
-          <Button className="mt-4" onClick={() => router.push("/")}>
-            Volver al inicio
-          </Button>
-        </Card>
-      </div>
-    )
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [championship, setChampionship] = useState<TournamentRow | null>(null)
+  const [teams, setTeams] = useState<UiTeam[]>([])
+  const [matches, setMatches] = useState<UiMatch[]>([])
+  // Placeholder hasta que conectemos una tabla de posiciones real en Supabase
+  const [standings] = useState<any[]>([])
+
+  const getLiveStateForMatch = (match: UiMatch) => {
+    // 1) Preferir estado vivo centralizado en Supabase
+    if (
+      typeof match.liveHomeScore === "number" ||
+      typeof match.liveAwayScore === "number" ||
+      typeof match.livePeriod === "number" ||
+      typeof match.liveGameTime === "number"
+    ) {
+      return {
+        homeScore: match.liveHomeScore ?? match.homeScore ?? 0,
+        awayScore: match.liveAwayScore ?? match.awayScore ?? 0,
+        period: typeof match.livePeriod === "number" ? match.livePeriod : undefined,
+        gameTime: typeof match.liveGameTime === "number" ? match.liveGameTime : undefined,
+      }
+    }
+
+    // 2) Si no hay estado vivo en DB, intentar leer desde localStorage (mismo dispositivo que la mesa)
+    if (typeof window !== "undefined") {
+      try {
+        const key = `planilla-state:${match.id}`
+        const raw = window.localStorage.getItem(key)
+        if (raw) {
+          console.log("[ChampionshipPage] getLiveStateForMatch: local state found", { matchId: match.id, key })
+          const data = JSON.parse(raw) as {
+            homeScore?: number
+            awayScore?: number
+            period?: number
+            gameTime?: number
+          }
+
+          const liveHome = data.homeScore ?? match.homeScore ?? 0
+          const liveAway = data.awayScore ?? match.awayScore ?? 0
+          const livePeriod = typeof data.period === "number" ? data.period : undefined
+          const liveGameTime = typeof data.gameTime === "number" ? data.gameTime : undefined
+
+          return {
+            homeScore: liveHome,
+            awayScore: liveAway,
+            period: livePeriod,
+            gameTime: liveGameTime,
+          }
+        }
+      } catch {
+        // ignorar errores de parseo
+      }
+    }
+
+    // 3) Fallback: usar marcador básico de la tabla matches
+    return {
+      homeScore: match.homeScore ?? 0,
+      awayScore: match.awayScore ?? 0,
+      period: undefined,
+      gameTime: undefined,
+    }
   }
 
-  const teams = getTeamsByChampionship(id)
-  const matches = getMatchesByChampionship(id)
-  const standings = getStandingsByChampionship(id)
+  const formatGameClock = (seconds?: number) => {
+    if (typeof seconds !== "number") return "--:--"
+    const s = Math.max(0, Math.floor(seconds))
+    const m = Math.floor(s / 60)
+    const r = s % 60
+    return `${m.toString().padStart(2, "0")}:${r.toString().padStart(2, "0")}`
+  }
+
+  useEffect(() => {
+    const run = async () => {
+      setLoading(true)
+      setError(null)
+
+      // Cargar torneo
+      const { data: tRow, error: tError } = await supabase
+        .from("tournaments")
+        .select("id, name, short_name, description, year, branch")
+        .eq("id", id)
+        .maybeSingle()
+
+      if (tError || !tRow) {
+        setError(tError?.message ?? "Campeonato no encontrado")
+        setChampionship(null)
+        setTeams([])
+        setMatches([])
+        setLoading(false)
+        return
+      }
+
+      const baseChamp: TournamentRow = {
+        id: tRow.id,
+        name: tRow.name,
+        shortName: tRow.short_name ?? tRow.name?.slice(0, 3)?.toUpperCase() ?? "T",
+        description: tRow.description,
+        year: tRow.year ?? null,
+        branch: tRow.branch as Branch,
+      }
+
+      setChampionship(baseChamp)
+
+      // Cargar partidos del torneo
+      const { data: matchRows, error: mError } = await supabase
+        .from("matches")
+        .select(
+          "id, round, status, scheduled_at, home_score, away_score, live_home_score, live_away_score, live_period, live_game_time, home_team_id, away_team_id, phase, zone_code, created_at",
+        )
+        .eq("tournament_id", id)
+
+      if (mError) {
+        console.error("[ChampionshipPage] Error cargando matches", mError)
+        setError((prev) => prev ?? mError.message)
+        setMatches([])
+        setTeams([])
+        setLoading(false)
+        return
+      }
+
+      console.log("[ChampionshipPage] matchRows", matchRows)
+
+      const teamIds = Array.from(
+        new Set(
+          (matchRows ?? [])
+            .flatMap((m: any) => [m.home_team_id, m.away_team_id])
+            .filter((id: any) => typeof id === "string" && id.length > 0),
+        ),
+      ) as string[]
+
+      console.log("[ChampionshipPage] teamIds derivados de matches", teamIds)
+
+      let teamMap: Record<string, UiTeam> = {}
+      if (teamIds.length > 0) {
+        const { data: teamRows, error: teamError } = await supabase
+          .from("teams")
+          .select("id, name, logo_url, primary_color")
+          .in("id", teamIds)
+
+        if (teamError) {
+          console.error("[ChampionshipPage] Error cargando teams", teamError)
+          setError((prev) => prev ?? teamError.message)
+        } else {
+          console.log("[ChampionshipPage] teamRows", teamRows)
+          teamMap = Object.fromEntries(
+            (teamRows ?? []).map((t: any) => [
+              t.id,
+              {
+                id: t.id,
+                name: t.name,
+                club: null,
+                logoUrl: t.logo_url ?? undefined,
+                primaryColor: t.primary_color ?? null,
+              } as UiTeam,
+            ]),
+          )
+          setTeams(Object.values(teamMap))
+        }
+      }
+
+      const uiMatches: UiMatch[] = (matchRows ?? []).map((m: any) => {
+        const scheduledAt = m.scheduled_at ? new Date(m.scheduled_at) : undefined
+        const homeTeam = teamMap[m.home_team_id]
+        const awayTeam = teamMap[m.away_team_id]
+        if (!homeTeam || !awayTeam) {
+          console.warn("[ChampionshipPage] Faltan equipos en teamMap para el partido", {
+            matchId: m.id,
+            home_team_id: m.home_team_id,
+            away_team_id: m.away_team_id,
+            hasHome: !!homeTeam,
+            hasAway: !!awayTeam,
+          })
+        }
+        return {
+          id: m.id,
+          round: m.round ?? 0,
+          status: m.status,
+          scheduledDate: scheduledAt,
+          scheduledTime: scheduledAt
+            ? scheduledAt.toLocaleTimeString("es-AR", {
+                hour: "2-digit",
+                minute: "2-digit",
+              })
+            : null,
+          homeTeamId: m.home_team_id,
+          awayTeamId: m.away_team_id,
+          homeTeamName: teamMap[m.home_team_id]?.name ?? "Local",
+          awayTeamName: teamMap[m.away_team_id]?.name ?? "Visitante",
+          homeScore: m.home_score ?? null,
+          awayScore: m.away_score ?? null,
+          liveHomeScore: m.live_home_score ?? null,
+          liveAwayScore: m.live_away_score ?? null,
+          livePeriod: m.live_period ?? null,
+          liveGameTime: m.live_game_time ?? null,
+          phase: m.phase ?? null,
+          zoneCode: m.zone_code ?? null,
+          createdAt: m.created_at ? new Date(m.created_at) : undefined,
+        }
+      })
+
+      setMatches(uiMatches)
+      setLoading(false)
+    }
+
+    run()
+  }, [id, supabase])
 
   const finishedMatches = matches.filter((m) => m.status === "finalizado").length
   const liveMatches = matches.filter((m) => m.status === "en_juego").length
   const scheduledMatches = matches.filter((m) => m.status === "programado").length
+
+  // Agrupado de fixture similar al admin: por fase, ronda y zona
+  const groupedFixture = useMemo(() => {
+    if (!matches.length) return [] as Array<{
+      phase: string | null
+      round: number
+      zoneCode: string | null
+      matches: UiMatch[]
+    }>
+
+    const acc = new Map<string, { phase: string | null; round: number; zoneCode: string | null; matches: UiMatch[] }>()
+
+    for (const m of matches) {
+      const phase = m.phase ?? "fase_regular"
+      const round = m.round
+      const zoneCode = phase === "fase_regular" ? m.zoneCode ?? null : null
+      const key = `${phase}:${zoneCode ?? ""}:${round}`
+      const existing = acc.get(key)
+      if (existing) existing.matches.push(m)
+      else acc.set(key, { phase, round, zoneCode, matches: [m] })
+    }
+
+    const list = Array.from(acc.values())
+
+    const phaseOrder: Record<string, number> = {
+      fase_regular: 0,
+      playoff: 1,
+      cuartos: 2,
+      semifinal: 3,
+      final: 4,
+    }
+
+    list.sort((a, b) => {
+      const pa = phaseOrder[a.phase ?? "fase_regular"] ?? 99
+      const pb = phaseOrder[b.phase ?? "fase_regular"] ?? 99
+      if (pa !== pb) return pa - pb
+      if ((a.phase ?? "fase_regular") === "fase_regular" && (b.phase ?? "fase_regular") === "fase_regular") {
+        if (a.round !== b.round) return a.round - b.round
+        if ((a.zoneCode ?? "") !== (b.zoneCode ?? "")) return (a.zoneCode ?? "").localeCompare(b.zoneCode ?? "")
+        return 0
+      }
+      return a.round - b.round
+    })
+
+    for (const g of list) {
+      g.matches.sort((a, b) => {
+        const aa = a.scheduledDate?.getTime() ?? 0
+        const bb = b.scheduledDate?.getTime() ?? 0
+        if (aa !== bb) return aa - bb
+        const ac = a.createdAt?.getTime() ?? 0
+        const bc = b.createdAt?.getTime() ?? 0
+        return ac - bc
+      })
+    }
+
+    return list
+  }, [matches])
 
   const branchColors = {
     masculino: "bg-blue-500/10 text-blue-600 border-blue-500/20",
@@ -57,39 +339,6 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
     femenino: "Femenino",
     mixto: "Mixto",
   }
-
-  const menuItems = [
-    {
-      href: `/campeonato/${id}/fixture`,
-      icon: Calendar,
-      title: "Fixture",
-      description: "Calendario de partidos y resultados",
-      stats: `${finishedMatches} jugados, ${scheduledMatches} programados`,
-      highlight: liveMatches > 0,
-      highlightText: `${liveMatches} en vivo`,
-    },
-    {
-      href: `/campeonato/${id}/posiciones`,
-      icon: Trophy,
-      title: "Tabla de Posiciones",
-      description: "Clasificación general del campeonato",
-      stats: `${teams.length} equipos`,
-    },
-    {
-      href: `/campeonato/${id}/estadisticas`,
-      icon: BarChart3,
-      title: "Estadísticas",
-      description: "Estadísticas de jugadores y equipos",
-      stats: "Goleadores, promedios y más",
-    },
-    {
-      href: `/campeonato/${id}/equipos`,
-      icon: Users,
-      title: "Equipos",
-      description: "Lista de equipos y jugadores (Lista de Buena Fe)",
-      stats: `${teams.length} equipos participantes`,
-    },
-  ]
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -124,19 +373,25 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
           </Button>
 
           <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-            <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-primary-foreground/10 text-primary-foreground font-bold text-2xl">
-              {championship.shortName}
-            </div>
+            {championship && (
+              <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-primary-foreground/10 text-primary-foreground font-bold text-2xl">
+                {championship.shortName}
+              </div>
+            )}
             <div>
               <div className="flex items-center gap-3 mb-1">
-                <h1 className="text-3xl font-bold">{championship.name}</h1>
-                <Badge variant="outline" className={`${branchColors[championship.branch]} border`}>
-                  {branchLabels[championship.branch]}
-                </Badge>
+                <h1 className="text-3xl font-bold">{championship?.name ?? "Cargando torneo..."}</h1>
+                {championship && (
+                  <Badge variant="outline" className={`${branchColors[championship.branch]} border`}>
+                    {branchLabels[championship.branch]}
+                  </Badge>
+                )}
               </div>
-              <p className="text-primary-foreground/70">
-                {championship.description} - Temporada {championship.year}
-              </p>
+              {championship && (
+                <p className="text-primary-foreground/70">
+                  {championship.description} {championship.year && `- Temporada ${championship.year}`}
+                </p>
+              )}
             </div>
           </div>
 
@@ -177,57 +432,290 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
         </div>
       </section>
 
-      {/* Menu Options */}
+      {/* Tabs: Fechas, En vivo, Tabla, Equipos */}
       <main className="flex-1 mx-auto max-w-7xl w-full px-4 py-10 sm:px-6 lg:px-8">
-        <div className="grid gap-4 sm:grid-cols-2">
-          {menuItems.map((item) => (
-            <Link key={item.href} href={item.href} className="group">
-              <Card className="h-full transition-all hover:shadow-lg hover:border-primary group-hover:scale-[1.01]">
-                <CardHeader>
-                  <div className="flex items-start justify-between">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                      <item.icon className="h-6 w-6" />
-                    </div>
-                    {item.highlight && (
-                      <Badge className="bg-green-500 text-white animate-pulse">{item.highlightText}</Badge>
-                    )}
-                  </div>
-                  <CardTitle className="mt-4 flex items-center justify-between">
-                    {item.title}
-                    <ChevronRight className="h-5 w-5 opacity-0 transition-opacity group-hover:opacity-100 text-primary" />
-                  </CardTitle>
-                  <CardDescription>{item.description}</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-muted-foreground">{item.stats}</p>
+        <Tabs defaultValue="fechas" className="flex flex-col gap-6">
+          <TabsList>
+            <TabsTrigger value="fechas">Fechas</TabsTrigger>
+            <TabsTrigger value="en_vivo">En vivo</TabsTrigger>
+            <TabsTrigger value="tabla">Tabla</TabsTrigger>
+            <TabsTrigger value="equipos">Equipos</TabsTrigger>
+          </TabsList>
+
+          {/* Fechas: lista de partidos agrupados por ronda */}
+          <TabsContent value="fechas" className="mt-4">
+            <div className="space-y-6">
+              {groupedFixture.length === 0 ? (
+                <Card>
+                  <CardContent className="py-8 text-center text-muted-foreground">
+                    No hay partidos cargados todavía para este torneo.
+                  </CardContent>
+                </Card>
+              ) : (
+                groupedFixture.map((group) => {
+                  const title =
+                    (group.phase ?? "fase_regular") === "fase_regular"
+                      ? group.zoneCode
+                        ? `Fecha ${group.round} - Zona ${group.zoneCode}`
+                        : `Fecha ${group.round}`
+                      : `Playoffs - Fecha ${group.round}`
+
+                  return (
+                    <section key={`${group.phase}:${group.zoneCode ?? ""}:${group.round}`} className="space-y-3">
+                      <h2 className="text-lg font-semibold">{title}</h2>
+                      <div className="space-y-2">
+                        {group.matches.map((m) => (
+                          <Link key={m.id} href={`/campeonato/${championship?.id ?? ""}/partido/${m.id}`}>
+                            <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors">
+                              <CardContent className="py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                                <div className="flex items-center gap-4">
+                                  {/* Local */}
+                                  <div className="flex items-center gap-3">
+                                    {(() => {
+                                      const team = teams.find((t) => t.id === m.homeTeamId)
+                                      if (team?.logoUrl) {
+                                        return (
+                                          <div className="h-10 w-10 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0">
+                                            <img
+                                              src={team.logoUrl}
+                                              alt={team.name}
+                                              className="h-full w-full object-cover"
+                                            />
+                                          </div>
+                                        )
+                                      }
+                                      const bg = team?.primaryColor ?? "#666"
+                                      return (
+                                        <div
+                                          className="h-10 w-10 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0"
+                                          style={{ backgroundColor: bg }}
+                                        >
+                                          {m.homeTeamName.substring(0, 2).toUpperCase()}
+                                        </div>
+                                      )
+                                    })()}
+                                    <span className="font-medium truncate max-w-[120px] sm:max-w-[180px]">
+                                      {m.homeTeamName}
+                                    </span>
+                                  </div>
+
+                                  {/* Centro: VS cuando está programado, marcador cuando está en juego/finalizado */}
+                                  {m.status === "programado" ? (
+                                    <div className="flex flex-col items-center gap-0.5 min-w-[70px] text-center">
+                                      <p className="text-sm font-semibold">VS</p>
+                                      <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                                        No comenzado
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    (() => {
+                                      const live = getLiveStateForMatch(m)
+                                      return (
+                                        <div className="flex flex-col items-center gap-0.5 min-w-[70px]">
+                                          <p
+                                            className={
+                                              m.status === "en_juego"
+                                                ? "text-lg font-bold text-[var(--color-live)]"
+                                                : "text-lg font-bold"
+                                            }
+                                          >
+                                            {live.homeScore} - {live.awayScore}
+                                          </p>
+                                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                                            {m.status === "finalizado" ? "Finalizado" : "En juego"}
+                                          </span>
+                                        </div>
+                                      )
+                                    })()
+                                  )}
+
+                                  {/* Visitante */}
+                                  <div className="flex items-center gap-3 ml-auto">
+                                    <span className="font-medium truncate text-right max-w-[120px] sm:max-w-[180px]">
+                                      {m.awayTeamName}
+                                    </span>
+                                    {(() => {
+                                      const team = teams.find((t) => t.id === m.awayTeamId)
+                                      if (team?.logoUrl) {
+                                        return (
+                                          <div className="h-10 w-10 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0">
+                                            <img
+                                              src={team.logoUrl}
+                                              alt={team.name}
+                                              className="h-full w-full object-cover"
+                                            />
+                                          </div>
+                                        )
+                                      }
+                                      const bg = team?.primaryColor ?? "#666"
+                                      return (
+                                        <div
+                                          className="h-10 w-10 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0"
+                                          style={{ backgroundColor: bg }}
+                                        >
+                                          {m.awayTeamName.substring(0, 2).toUpperCase()}
+                                        </div>
+                                      )
+                                    })()}
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-4">
+                                  <div className="text-right text-xs text-muted-foreground">
+                                    {m.scheduledDate ? (
+                                      <>
+                                        <p>{m.scheduledDate.toLocaleDateString("es-AR")}</p>
+                                        {m.scheduledTime && <p>{m.scheduledTime}</p>}
+                                      </>
+                                    ) : (
+                                      <p>Sin programar</p>
+                                    )}
+                                  </div>
+                                </div>
+                              </CardContent>
+                            </Card>
+                          </Link>
+                        ))}
+                      </div>
+                    </section>
+                  )
+                })
+              )}
+            </div>
+          </TabsContent>
+
+          {/* En vivo: partidos en juego */}
+          <TabsContent value="en_vivo" className="mt-4">
+            {liveMatches === 0 ? (
+              <Card>
+                <CardContent className="py-8 text-center text-muted-foreground">
+                  No hay partidos en vivo en este momento.
                 </CardContent>
               </Card>
-            </Link>
-          ))}
-        </div>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2">
+                {matches
+                  .filter((m) => m.status === "en_juego")
+                  .map((m) => (
+                    <Link key={m.id} href={`/campeonato/${championship?.id ?? ""}/partido/${m.id}`}>
+                      <Card className="border-[var(--color-live)]/30 cursor-pointer hover:bg-muted/40 transition-colors">
+                        <CardHeader className="pb-2 flex flex-row items-center justify-between gap-2">
+                          <div>
+                            <CardTitle className="text-sm font-semibold">
+                              {m.homeTeamName} vs {m.awayTeamName}
+                            </CardTitle>
+                            <CardDescription>
+                              {m.scheduledDate
+                                ? `${m.scheduledDate.toLocaleDateString("es-AR")}${m.scheduledTime ? ` · ${m.scheduledTime}` : ""}`
+                                : "Sin programar"}
+                            </CardDescription>
+                          </div>
+                          <Badge className="bg-[var(--color-live)] text-white">En juego</Badge>
+                        </CardHeader>
+                        <CardContent className="pt-0 flex items-center justify-between gap-4">
+                          {/* Local */}
+                          <div className="flex items-center gap-3">
+                            {(() => {
+                              const team = teams.find((t) => t.id === m.homeTeamId)
+                              if (team?.logoUrl) {
+                                return (
+                                  <div className="h-9 w-9 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0">
+                                    <img src={team.logoUrl} alt={team.name} className="h-full w-full object-cover" />
+                                  </div>
+                                )
+                              }
+                              const bg = team?.primaryColor ?? "#666"
+                              return (
+                                <div
+                                  className="h-9 w-9 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0"
+                                  style={{ backgroundColor: bg }}
+                                >
+                                  {m.homeTeamName.substring(0, 2).toUpperCase()}
+                                </div>
+                              )
+                            })()}
+                            <span className="font-medium truncate max-w-[120px] sm:max-w-[160px]">
+                              {m.homeTeamName}
+                            </span>
+                          </div>
 
-        {/* Leader Preview */}
-        {standings.length > 0 && (
-          <div className="mt-10">
-            <h2 className="text-lg font-semibold mb-4">Líder actual</h2>
-            <Card className="bg-gradient-to-r from-yellow-500/10 to-orange-500/10 border-yellow-500/20">
-              <CardContent className="flex items-center gap-4 py-4">
-                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-yellow-500/20">
-                  <Trophy className="h-6 w-6 text-yellow-600" />
-                </div>
-                <div className="flex-1">
-                  <p className="font-semibold">{teams.find((t) => t.id === standings[0].teamId)?.name || "Equipo"}</p>
-                  <p className="text-sm text-muted-foreground">
-                    {standings[0].won}G - {standings[0].lost}P | {standings[0].points} pts
-                  </p>
-                </div>
-                <Badge variant="secondary" className="text-lg px-3">
-                  1°
-                </Badge>
-              </CardContent>
-            </Card>
-          </div>
-        )}
+                          {/* Centro: marcador + info de período/tiempo */}
+                          {(() => {
+                            const live = getLiveStateForMatch(m)
+                            return (
+                              <div className="flex flex-col items-center gap-0.5 min-w-[90px]">
+                                <div className="text-2xl font-bold">
+                                  {live.homeScore} - {live.awayScore}
+                                </div>
+                                <span className="text-[10px] uppercase tracking-wide text-muted-foreground text-center">
+                                  {typeof live.period === "number" ? `Cuarto ${live.period}` : "Tiempo de juego"}
+                                  {" · "}
+                                  {formatGameClock(live.gameTime)}
+                                </span>
+                              </div>
+                            )
+                          })()}
+
+                          {/* Visitante */}
+                          <div className="flex items-center gap-3 ml-auto">
+                            <span className="font-medium truncate text-right max-w-[120px] sm:max-w-[160px]">
+                              {m.awayTeamName}
+                            </span>
+                            {(() => {
+                              const team = teams.find((t) => t.id === m.awayTeamId)
+                              if (team?.logoUrl) {
+                                return (
+                                  <div className="h-8 w-8 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0">
+                                    <img src={team.logoUrl} alt={team.name} className="h-full w-full object-cover" />
+                                  </div>
+                                )
+                              }
+                              const bg = team?.primaryColor ?? "#666"
+                              return (
+                                <div
+                                  className="h-8 w-8 rounded-full flex items-center justify-center text-white text-[11px] font-bold shrink-0"
+                                  style={{ backgroundColor: bg }}
+                                >
+                                  {m.awayTeamName.substring(0, 2).toUpperCase()}
+                                </div>
+                              )
+                            })()}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </Link>
+                  ))}
+              </div>
+            )}
+          </TabsContent>
+
+          {/* Equipos: listado simple por ahora */}
+          <TabsContent value="equipos" className="mt-4">
+            {teams.length === 0 ? (
+              <Card>
+                <CardContent className="py-8 text-center text-muted-foreground">
+                  No hay equipos cargados para este torneo.
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {teams.map((team) => (
+                  <Card key={team.id} className="h-full">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base">{team.name}</CardTitle>
+                      <CardDescription>{team.club}</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <p className="text-xs text-muted-foreground">
+                        Estadísticas detalladas por jugador se implementarán a continuación.
+                      </p>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </TabsContent>
+        </Tabs>
       </main>
 
       {/* Footer */}

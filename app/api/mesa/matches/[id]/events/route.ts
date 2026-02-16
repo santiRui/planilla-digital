@@ -7,7 +7,8 @@ const eventSchema = z.object({
   id: z.string(),
   matchId: z.string(),
   teamId: z.string(),
-  playerId: z.string(),
+  // Algunos eventos (como timeout) no necesitan jugador asociado
+  playerId: z.string().optional().nullable(),
   type: z.enum([
     "points",
     "shot",

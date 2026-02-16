@@ -595,6 +595,30 @@ export default function PlanillaPage() {
     }
   }, [matchId])
 
+  // Ajustar el reloj visible al tiempo del último evento registrado en el historial
+  // Solo lo hacemos en la inicialización: cuando el reloj sigue en su valor base (10 minutos) y no está corriendo.
+  useEffect(() => {
+    if (!localEvents.length) return
+    if (isRunning) return
+
+    setGameTime((current) => {
+      // Solo tocar el reloj si sigue en el valor inicial por defecto (10:00)
+      if (current !== 10 * 60) return current
+
+      const lastEvent = localEvents[localEvents.length - 1]
+      if (!lastEvent.gameTime) return current
+
+      const parts = lastEvent.gameTime.split(":")
+      if (parts.length !== 2) return current
+      const minutes = Number(parts[0])
+      const seconds = Number(parts[1])
+      if (!Number.isFinite(minutes) || !Number.isFinite(seconds)) return current
+
+      const totalSeconds = minutes * 60 + seconds
+      return totalSeconds
+    })
+  }, [localEvents, isRunning])
+
   // Guardar estado del partido en localStorage en cada cambio relevante
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -825,6 +849,30 @@ export default function PlanillaPage() {
     setHomeScore(match.homeScore ?? 0)
     setAwayScore(match.awayScore ?? 0)
   }, [match?.homeScore, match?.awayScore, match?.id, restoredFromStorage])
+
+  // Sincronizar estado vivo (score, período, tiempo) en Supabase
+  useEffect(() => {
+    if (!matchId) return
+
+    const timeout = setTimeout(async () => {
+      try {
+        await supabase
+          .from("matches")
+          .update({
+            live_home_score: homeScore,
+            live_away_score: awayScore,
+            live_period: period,
+            live_game_time: Math.floor(gameTime),
+            live_updated_at: new Date().toISOString(),
+          })
+          .eq("id", matchId)
+      } catch {
+        // Si falla, mantenemos el estado local y se puede reintentar más tarde
+      }
+    }, 500)
+
+    return () => clearTimeout(timeout)
+  }, [supabase, matchId, homeScore, awayScore, period, gameTime])
 
   // Online status
   useEffect(() => {
@@ -1181,7 +1229,7 @@ export default function PlanillaPage() {
       const event: MatchEvent = {
         id: `ev-${Date.now()}`,
         matchId,
-        playerId: teamId,
+        playerId: null,
         teamId,
         type: "timeout",
         period,
@@ -2733,25 +2781,55 @@ export default function PlanillaPage() {
                             personName = `${player.lastName.toUpperCase()}, ${player.firstName}`
                           }
 
-                          title =
-                            e.type === "points"
-                              ? `+${e.points}`
-                              : e.type === "shot"
-                                ? `${e.made ? "Anotó" : "Falló"} ${e.shotType}P`
-                                : e.type === "free_throw"
-                                  ? `${e.made ? "Anotó" : "Falló"} TL`
-                                  : e.type === "rebound"
-                                    ? `Rebote ${e.reboundType === "offensive" ? "O" : "D"}`
-                                    : e.type === "foul"
-                                      ? (() => {
-                                          const type = e.foulType
-                                          if (type === "technical") return "Falta Técnica"
-                                          if (type === "unsportsmanlike") return "Falta Antideportiva"
-                                          if (type === "disqualifying") return "Falta Descalificante"
-                                          if (type === "fight") return "Reyerta"
-                                          return "Falta Personal"
-                                        })()
-                                      : e.type
+                          switch (e.type) {
+                            case "points":
+                              title = `+${e.points}`
+                              break
+                            case "shot":
+                              title = `${e.made ? "Anotó" : "Falló"} ${e.shotType}P`
+                              break
+                            case "free_throw":
+                              title = `${e.made ? "Anotó" : "Falló"} TL`
+                              break
+                            case "rebound":
+                              title = `Rebote ${e.reboundType === "offensive" ? "O" : "D"}`
+                              break
+                            case "foul":
+                              switch (e.foulType) {
+                                case "technical":
+                                  title = "Falta Técnica"
+                                  break
+                                case "unsportsmanlike":
+                                  title = "Falta Antideportiva"
+                                  break
+                                case "disqualifying":
+                                  title = "Falta Descalificante"
+                                  break
+                                case "fight":
+                                  title = "Reyerta"
+                                  break
+                                default:
+                                  title = "Falta Personal"
+                              }
+                              break
+                            case "assist":
+                              title = "Asistencia"
+                              break
+                            case "turnover":
+                              title = "Pérdida"
+                              break
+                            case "steal":
+                              title = "Robo"
+                              break
+                            case "block":
+                              title = "Tapa"
+                              break
+                            case "timeout":
+                              title = "Tiempo muerto"
+                              break
+                            default:
+                              title = "Acción"
+                          }
                         }
 
                         return (

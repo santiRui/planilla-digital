@@ -1,15 +1,71 @@
 "use client"
 
 import Link from "next/link"
+import { useEffect, useMemo, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Trophy, Calendar, Users, ChevronRight, Shield, Activity } from "lucide-react"
+import { Trophy, Calendar, ChevronRight, Shield, Activity } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { championships, getTeamsByChampionship } from "@/lib/mock-data"
+import { createSupabaseBrowserClient } from "@/lib/supabase/browser"
+
+type Branch = "masculino" | "femenino" | "mixto"
+type TournamentStatus = "activo" | "pendiente" | "finalizado"
+
+type TournamentRow = {
+  id: string
+  name: string
+  shortName: string
+  description?: string | null
+  year?: number | null
+  branch: Branch
+  ageGroup?: string | null
+  status: TournamentStatus
+}
 
 export default function HomePage() {
-  const activeChampionships = championships.filter((c) => c.status === "activo")
-  const upcomingChampionships = championships.filter((c) => c.status === "pendiente")
+  const supabase = useMemo(() => createSupabaseBrowserClient(), [])
+
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [tournaments, setTournaments] = useState<TournamentRow[]>([])
+
+  useEffect(() => {
+    const run = async () => {
+      setLoading(true)
+      setError(null)
+
+      const { data, error } = await supabase
+        .from("tournaments")
+        .select("id, name, short_name, description, year, branch, age_group, status")
+        .order("created_at", { ascending: true })
+
+      if (error) {
+        setError(error.message)
+        setTournaments([])
+        setLoading(false)
+        return
+      }
+
+      const mapped: TournamentRow[] = (data ?? []).map((t: any) => ({
+        id: t.id,
+        name: t.name,
+        shortName: t.short_name ?? t.name?.slice(0, 3)?.toUpperCase() ?? "T",
+        description: t.description,
+        year: t.year ?? null,
+        branch: t.branch as Branch,
+        ageGroup: t.age_group ?? null,
+        status: t.status as TournamentStatus,
+      }))
+
+      setTournaments(mapped)
+      setLoading(false)
+    }
+
+    run()
+  }, [supabase])
+
+  const activeChampionships = tournaments.filter((c) => c.status === "activo")
+  const upcomingChampionships = tournaments.filter((c) => c.status === "pendiente")
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -60,6 +116,11 @@ export default function HomePage() {
 
       {/* Championships List */}
       <main className="flex-1 mx-auto max-w-7xl w-full px-4 py-10 sm:px-6 lg:px-8">
+        {error && (
+          <Card className="mb-6 border-destructive/30 bg-destructive/5">
+            <CardContent className="py-4 text-sm text-destructive">{error}</CardContent>
+          </Card>
+        )}
         {/* Active Championships */}
         <div className="mb-12">
           <div className="flex items-center gap-3 mb-6">
@@ -72,7 +133,11 @@ export default function HomePage() {
             </div>
           </div>
 
-          {activeChampionships.length === 0 ? (
+          {loading ? (
+            <Card className="p-12 text-center">
+              <CardContent className="py-4 text-muted-foreground">Cargando campeonatos...</CardContent>
+            </Card>
+          ) : activeChampionships.length === 0 ? (
             <Card className="p-12 text-center">
               <Trophy className="h-12 w-12 mx-auto text-muted-foreground/50 mb-4" />
               <h3 className="text-lg font-semibold">No hay campeonatos activos</h3>
@@ -81,8 +146,6 @@ export default function HomePage() {
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {activeChampionships.map((championship) => {
-                const teams = getTeamsByChampionship(championship.id)
-
                 const branchColors = {
                   masculino: "bg-blue-500/10 text-blue-600 border-blue-500/20",
                   femenino: "bg-pink-500/10 text-pink-600 border-pink-500/20",
@@ -100,7 +163,7 @@ export default function HomePage() {
                     <Card className="h-full transition-all hover:shadow-lg hover:border-primary group-hover:scale-[1.02]">
                       <CardHeader className="pb-3">
                         <div className="flex items-start justify-between">
-                          <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10 text-primary font-bold text-lg">
+                          <div className="inline-flex h-12 px-4 items-center justify-center rounded-lg bg-primary/10 text-primary font-bold text-lg whitespace-nowrap">
                             {championship.shortName}
                           </div>
                           <Badge variant="outline" className={branchColors[championship.branch]}>
@@ -117,14 +180,12 @@ export default function HomePage() {
                       </CardHeader>
                       <CardContent>
                         <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
-                          <div className="flex items-center gap-1.5">
-                            <Calendar className="h-4 w-4" />
-                            <span>{championship.year}</span>
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <Users className="h-4 w-4" />
-                            <span>{teams.length} equipos</span>
-                          </div>
+                          {championship.year && (
+                            <div className="flex items-center gap-1.5">
+                              <Calendar className="h-4 w-4" />
+                              <span>{championship.year}</span>
+                            </div>
+                          )}
                           {championship.ageGroup && (
                             <Badge variant="secondary" className="text-xs">
                               {championship.ageGroup}
@@ -141,7 +202,7 @@ export default function HomePage() {
         </div>
 
         {/* Upcoming Championships */}
-        {upcomingChampionships.length > 0 && (
+        {!loading && upcomingChampionships.length > 0 && (
           <div>
             <div className="flex items-center gap-3 mb-6">
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-yellow-500/10">

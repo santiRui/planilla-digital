@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { BadgeStatus } from "@/components/ui/badge-status"
@@ -8,9 +9,18 @@ import { ClipboardList, Play, Calendar, MapPin, Clock, Wifi, WifiOff } from "luc
 import { EmptyState } from "@/components/ui/empty-state"
 import { useState, useEffect, useMemo } from "react"
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 
 export default function MesaPage() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), [])
+  const router = useRouter()
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -20,6 +30,8 @@ export default function MesaPage() {
   const [tournaments, setTournaments] = useState<TournamentRow[]>([])
   const [venues, setVenues] = useState<VenueRow[]>([])
   const [courts, setCourts] = useState<CourtRow[]>([])
+
+  const [resumeMatch, setResumeMatch] = useState<MatchRow | null>(null)
 
   const [isOnline, setIsOnline] = useState(true)
 
@@ -119,6 +131,70 @@ export default function MesaPage() {
   const getVenueName = (id?: string | null) => venues.find((v) => v.id === id)?.name || "-"
   const getCourtName = (id?: string | null) => courts.find((c) => c.id === id)?.name || "-"
 
+  const getLiveStateForMatch = (match: MatchRow) => {
+    // 1) Preferir estado vivo centralizado en Supabase si está presente
+    if (
+      typeof match.liveHomeScore === "number" ||
+      typeof match.liveAwayScore === "number" ||
+      typeof match.livePeriod === "number" ||
+      typeof match.liveGameTime === "number"
+    ) {
+      return {
+        homeScore: match.liveHomeScore ?? match.homeScore ?? 0,
+        awayScore: match.liveAwayScore ?? match.awayScore ?? 0,
+        period: typeof match.livePeriod === "number" ? match.livePeriod : undefined,
+        gameTime: typeof match.liveGameTime === "number" ? match.liveGameTime : undefined,
+      }
+    }
+
+    // 2) Si no hay estado vivo en DB, intentar leer desde localStorage (mismo dispositivo)
+    if (typeof window !== "undefined") {
+      try {
+        const key = `planilla-state:${match.id}`
+        const raw = window.localStorage.getItem(key)
+        if (raw) {
+          console.log("[mesa] getLiveStateForMatch: found local state", { matchId: match.id, key })
+          const data = JSON.parse(raw) as {
+            homeScore?: number
+            awayScore?: number
+            period?: number
+            gameTime?: number
+          }
+
+          const liveHome = data.homeScore ?? match.homeScore ?? 0
+          const liveAway = data.awayScore ?? match.awayScore ?? 0
+          const livePeriod = typeof data.period === "number" ? data.period : undefined
+          const liveGameTime = typeof data.gameTime === "number" ? data.gameTime : undefined
+
+          return {
+            homeScore: liveHome,
+            awayScore: liveAway,
+            period: livePeriod,
+            gameTime: liveGameTime,
+          }
+        }
+      } catch {
+        // ignorar errores de parseo
+      }
+    }
+
+    // 3) Fallback: usar marcador básico de la tabla matches
+    return {
+      homeScore: match.homeScore ?? 0,
+      awayScore: match.awayScore ?? 0,
+      period: undefined,
+      gameTime: undefined,
+    }
+  }
+
+  const formatGameClock = (seconds?: number) => {
+    if (typeof seconds !== "number") return "--:--"
+    const s = Math.max(0, Math.floor(seconds))
+    const m = Math.floor(s / 60)
+    const r = s % 60
+    return `${m.toString().padStart(2, "0")}:${r.toString().padStart(2, "0")}`
+  }
+
   const formatDate = (date?: Date) => {
     if (!date) return "Sin fecha"
     return new Date(date).toLocaleDateString("es-AR", {
@@ -138,6 +214,18 @@ export default function MesaPage() {
     })
     return list
   }, [matches])
+
+  const handleStartSheet = (match: MatchRow) => {
+    // Si el partido ya está en juego, siempre ofrecemos continuar el acta
+    console.log("[mesa] handleStartSheet", { matchId: match.id, status: match.status })
+    if (match.status === "en_juego") {
+      setResumeMatch(match)
+      return
+    }
+
+    // Si todavía no empezó, vamos al flujo normal de pre-planilla
+    router.push(`/mesa/planilla/${match.id}/pre`)
+  }
 
   const finishedMatches = useMemo(() => {
     const list = matches.filter((m) => m.status === "finalizado")
@@ -227,11 +315,30 @@ export default function MesaPage() {
                     </div>
                     <div className="px-4">
                       {match.status !== "programado" ? (
-                        <div className="flex items-center gap-3 text-3xl font-bold">
-                          <span>{match.homeScore ?? 0}</span>
-                          <span className="text-muted-foreground">-</span>
-                          <span>{match.awayScore ?? 0}</span>
-                        </div>
+                        (() => {
+                          const live = getLiveStateForMatch(match)
+                          return (
+                            <div className="flex flex-col items-center gap-1">
+                              <div className="flex items-center gap-3 text-3xl font-bold">
+                                <span>{live.homeScore}</span>
+                                <span className="text-muted-foreground">-</span>
+                                <span>{live.awayScore}</span>
+                              </div>
+                              {match.status === "en_juego" && (
+                                <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                                  <span>
+                                    Tiempo: <strong>{formatGameClock(live.gameTime)}</strong>
+                                  </span>
+                                  {typeof live.period === "number" && (
+                                    <span>
+                                      Cuarto: <strong>{live.period}</strong>
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })()
                       ) : (
                         <span className="text-2xl font-bold text-muted-foreground">VS</span>
                       )}
@@ -266,11 +373,9 @@ export default function MesaPage() {
 
                   {/* Action Button */}
                   {match.status === "en_juego" ? (
-                    <Button className="w-full" size="lg" asChild>
-                      <Link href={`/mesa/planilla/${match.id}/pre`}>
-                        <Play className="mr-2 h-5 w-5" />
-                        Iniciar Acta
-                      </Link>
+                    <Button className="w-full" size="lg" onClick={() => handleStartSheet(match)}>
+                      <Play className="mr-2 h-5 w-5" />
+                      Iniciar Acta
                     </Button>
                   ) : (
                     <Button className="w-full" size="lg" disabled>
@@ -343,6 +448,50 @@ export default function MesaPage() {
           </Button>
         </div>
       </nav>
+
+      {/* Dialogo para continuar acta iniciada */}
+      <Dialog
+        open={!!resumeMatch}
+        onOpenChange={(open) => {
+          if (!open) setResumeMatch(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Acta ya iniciada</DialogTitle>
+            <DialogDescription>
+              Ya existe una planilla digital iniciada para este partido. Podés continuar donde la dejaste o empezar una
+              nueva acta desde cero.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex flex-col sm:flex-row sm:justify-end gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (!resumeMatch) return
+                if (typeof window !== "undefined") {
+                  window.localStorage.removeItem(`planilla-state:${resumeMatch.id}`)
+                }
+                const id = resumeMatch.id
+                setResumeMatch(null)
+                router.push(`/mesa/planilla/${id}/pre`)
+              }}
+            >
+              Empezar acta nueva
+            </Button>
+            <Button
+              onClick={() => {
+                if (!resumeMatch) return
+                const id = resumeMatch.id
+                setResumeMatch(null)
+                router.push(`/mesa/planilla/${id}`)
+              }}
+            >
+              Cargar acta iniciada
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -362,6 +511,10 @@ type MatchRow = {
   courtId?: string | null
   homeScore?: number | null
   awayScore?: number | null
+  liveHomeScore?: number | null
+  liveAwayScore?: number | null
+  livePeriod?: number | null
+  liveGameTime?: number | null
   createdAt: Date
 }
 
@@ -392,6 +545,10 @@ function mapMatchFromDb(row: any): MatchRow {
     courtId: row.court_id ?? null,
     homeScore: row.home_score ?? null,
     awayScore: row.away_score ?? null,
+    liveHomeScore: row.live_home_score ?? null,
+    liveAwayScore: row.live_away_score ?? null,
+    livePeriod: row.live_period ?? null,
+    liveGameTime: row.live_game_time ?? null,
     createdAt: row.created_at ? new Date(row.created_at) : new Date(0),
   }
 }
