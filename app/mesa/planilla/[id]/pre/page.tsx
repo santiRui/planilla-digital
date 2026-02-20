@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -42,7 +42,6 @@ type PrePlanillaTeamState = {
   jerseyByPlayerId: Record<string, number>
   starters: string[]
   captainId: string | null
-  signatureDataUrl: string | null
   confirmed: boolean
 }
 
@@ -55,7 +54,7 @@ type DbMatchRow = {
   id: string
   home_team_id: string
   away_team_id: string
-  status: "programado" | "en_juego" | "finalizado"
+  status: "programado" | "en_juego" | "finalizado" | "suspendido" | "demorado"
 }
 
 type DbTeamRow = {
@@ -70,7 +69,6 @@ const emptyTeamState = (): PrePlanillaTeamState => ({
   jerseyByPlayerId: {},
   starters: [],
   captainId: null,
-  signatureDataUrl: null,
   confirmed: false,
 })
 
@@ -96,7 +94,7 @@ export default function PrePlanillaPage() {
   const [awayPlayers, setAwayPlayers] = useState<Player[]>([])
   const [staffByTeamId, setStaffByTeamId] = useState<Record<string, StaffRow[]>>({})
 
-  const [step, setStep] = useState<"teams" | "roster" | "starters" | "signature">("teams")
+  const [step, setStep] = useState<"teams" | "roster" | "starters">("teams")
   const [activeSide, setActiveSide] = useState<Side>("home")
 
   const [state, setState] = useState<PrePlanillaState>(() => {
@@ -432,19 +430,6 @@ export default function PrePlanillaPage() {
     return true
   }
 
-  const confirmSignature = (dataUrl: string | null) => {
-    setState((prev) => ({
-      ...prev,
-      [activeSide]: {
-        ...prev[activeSide],
-        signatureDataUrl: dataUrl,
-        confirmed: Boolean(dataUrl),
-      },
-    }))
-
-    setStep("teams")
-  }
-
   const otherSide: Side = activeSide === "home" ? "away" : "home"
 
   const nextActionLabel = (() => {
@@ -723,35 +708,33 @@ export default function PrePlanillaPage() {
             <div>Capitán: {activeState.captainId ? "OK" : "Falta"}</div>
           </div>
 
-          <Button className="w-full" size="lg" disabled={!canContinueStarters()} onClick={() => setStep("signature")}>
-            Iniciar firma
+          <Button
+            className="w-full"
+            size="lg"
+            disabled={!canContinueStarters()}
+            onClick={() => {
+              // Marcar equipo como confirmado sin requerir firma digital
+              setState((prev) => ({
+                ...prev,
+                [activeSide]: {
+                  ...prev[activeSide],
+                  confirmed: true,
+                },
+              }))
+
+              // Si el otro equipo aún no está confirmado, pasar a su roster
+              if (!state[otherSide].confirmed) {
+                setActiveSide(otherSide)
+                setStep("roster")
+              } else {
+                // Ambos confirmados: volver a la pantalla principal de equipos
+                setStep("teams")
+              }
+            }}
+          >
+            Confirmar equipo
           </Button>
         </div>
-      )}
-
-      {step === "signature" && activeTeam && (
-        <SignatureStep
-          teamName={activeTeam.name}
-          staffName={(() => {
-            const primaryId = activeState.staffIds[0]
-            const staff = primaryId ? staffOptions.find((s) => s.id === primaryId) : null
-            if (!staff) return ""
-            return `${staff.lastName.toUpperCase()}, ${staff.firstName}`
-          })()}
-          initialDataUrl={activeState.signatureDataUrl}
-          onBack={() => setStep("starters")}
-          onConfirm={(dataUrl) => {
-            confirmSignature(dataUrl)
-            if (activeSide === "home" && !state.away.confirmed) {
-              setActiveSide("away")
-            }
-            if (activeSide === "away" && !state.home.confirmed) {
-              setActiveSide("home")
-            }
-          }}
-          nextActionLabel={nextActionLabel}
-          canProceedNext={!state[otherSide].confirmed}
-        />
       )}
     </div>
   )
@@ -807,196 +790,6 @@ function StarterTile({
         {captain && <span className="text-xs font-semibold text-primary">CAP</span>}
       </div>
       <div className="mt-1 text-xs text-muted-foreground line-clamp-2">{name}</div>
-      <div className="mt-2 text-xs">{selected ? "Titular" : "No"}</div>
     </button>
-  )
-}
-
-function SignatureStep({
-  teamName,
-  staffName,
-  initialDataUrl,
-  onBack,
-  onConfirm,
-  nextActionLabel,
-  canProceedNext,
-}: {
-  teamName: string
-  staffName: string
-  initialDataUrl: string | null
-  onBack: () => void
-  onConfirm: (dataUrl: string | null) => void
-  nextActionLabel: string
-  canProceedNext: boolean
-}) {
-  const [mode, setMode] = useState<"idle" | "signing" | "signed">(initialDataUrl ? "signed" : "idle")
-  const [dataUrl, setDataUrl] = useState<string | null>(initialDataUrl)
-
-  return (
-    <div className="p-3 space-y-3">
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <div className="text-sm font-semibold">Firma y jugadores iniciales</div>
-          <div className="text-xs text-muted-foreground">{teamName}</div>
-        </div>
-        <Button variant="outline" onClick={onBack}>
-          Volver
-        </Button>
-      </div>
-
-      <Card>
-        <CardContent className="p-3 space-y-2">
-          <div className="text-sm font-medium">Técnico / Asistente</div>
-          <div className="text-sm text-muted-foreground">{staffName || ""}</div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent className="p-3 space-y-3">
-          <SignaturePad
-            enabled={mode === "signing"}
-            initialDataUrl={dataUrl}
-            onChange={(next) => setDataUrl(next)}
-          />
-          <div className="flex items-center justify-between gap-2">
-            <Button
-              variant="outline"
-              onClick={() => {
-                setDataUrl(null)
-                setMode("signing")
-              }}
-            >
-              Limpiar
-            </Button>
-            <Button
-              onClick={() => {
-                if (mode === "idle") {
-                  setMode("signing")
-                  return
-                }
-
-                if (mode === "signing") {
-                  onConfirm(dataUrl)
-                  setMode("signed")
-                  return
-                }
-              }}
-              disabled={mode === "signed" || (!dataUrl && mode !== "idle")}
-            >
-              {mode === "idle" ? "Iniciar firma" : mode === "signing" ? "Terminar" : "Firmado"}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  )
-}
-
-function SignaturePad({
-  enabled,
-  initialDataUrl,
-  onChange,
-}: {
-  enabled: boolean
-  initialDataUrl: string | null
-  onChange: (dataUrl: string | null) => void
-}) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const drawingRef = useRef(false)
-  const lastRef = useRef<{ x: number; y: number } | null>(null)
-
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-
-    const ctx = canvas.getContext("2d")
-    if (!ctx) return
-
-    const resize = () => {
-      const dpr = window.devicePixelRatio || 1
-      const rect = canvas.getBoundingClientRect()
-      canvas.width = Math.round(rect.width * dpr)
-      canvas.height = Math.round(rect.height * dpr)
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      ctx.lineCap = "round"
-      ctx.lineJoin = "round"
-      ctx.lineWidth = 3
-      ctx.strokeStyle = "#1e40af"
-
-      ctx.clearRect(0, 0, rect.width, rect.height)
-
-      if (initialDataUrl) {
-        const img = new Image()
-        img.onload = () => {
-          ctx.drawImage(img, 0, 0, rect.width, rect.height)
-        }
-        img.src = initialDataUrl
-      }
-    }
-
-    resize()
-    window.addEventListener("resize", resize)
-    return () => window.removeEventListener("resize", resize)
-  }, [initialDataUrl])
-
-  const getPos = (e: PointerEvent, canvas: HTMLCanvasElement) => {
-    const rect = canvas.getBoundingClientRect()
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top }
-  }
-
-  useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-
-    const ctx = canvas.getContext("2d")
-    if (!ctx) return
-
-    const onDown = (e: PointerEvent) => {
-      if (!enabled) return
-      drawingRef.current = true
-      lastRef.current = getPos(e, canvas)
-    }
-
-    const onMove = (e: PointerEvent) => {
-      if (!enabled) return
-      if (!drawingRef.current) return
-      const last = lastRef.current
-      if (!last) return
-      const next = getPos(e, canvas)
-      ctx.beginPath()
-      ctx.moveTo(last.x, last.y)
-      ctx.lineTo(next.x, next.y)
-      ctx.stroke()
-      lastRef.current = next
-    }
-
-    const onUp = () => {
-      if (!enabled) return
-      if (!drawingRef.current) return
-      drawingRef.current = false
-      lastRef.current = null
-      onChange(canvas.toDataURL("image/png"))
-    }
-
-    canvas.addEventListener("pointerdown", onDown)
-    canvas.addEventListener("pointermove", onMove)
-    canvas.addEventListener("pointerup", onUp)
-    canvas.addEventListener("pointercancel", onUp)
-
-    return () => {
-      canvas.removeEventListener("pointerdown", onDown)
-      canvas.removeEventListener("pointermove", onMove)
-      canvas.removeEventListener("pointerup", onUp)
-      canvas.removeEventListener("pointercancel", onUp)
-    }
-  }, [enabled, onChange])
-
-  return (
-    <div className="rounded-lg border bg-muted/30">
-      <div className="px-3 pt-3 text-xs text-muted-foreground">{enabled ? "Firmá aquí" : "Presioná Iniciar firma"}</div>
-      <div className="p-3">
-        <canvas ref={canvasRef} className="h-40 w-full rounded-md bg-white" />
-      </div>
-    </div>
   )
 }

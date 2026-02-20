@@ -46,9 +46,8 @@ export async function GET(req: Request) {
 
     const { data: assignmentRows, error: assignmentError } = await auth.adminClient
       .from("match_official_assignments")
-      .select("match_id")
+      .select("match_id, role")
       .eq("user_id", auth.callerId)
-      .eq("role", "arbitro")
 
     if (assignmentError) {
       return NextResponse.json({ error: assignmentError.message }, { status: 400 })
@@ -71,7 +70,20 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: matchesError.message }, { status: 400 })
     }
 
-    return NextResponse.json({ matches: matches ?? [], profile: { fullName: auth.fullName } })
+    const rolesByMatch = new Map<string, string>()
+    ;(assignmentRows ?? []).forEach((r: any) => {
+      const id = r.match_id as string | null
+      const role = r.role as string | null
+      if (!id || !role) return
+      if (!rolesByMatch.has(id)) rolesByMatch.set(id, role)
+    })
+
+    const enriched = (matches ?? []).map((m: any) => ({
+      ...m,
+      assignment_role: rolesByMatch.get(m.id as string) ?? null,
+    }))
+
+    return NextResponse.json({ matches: enriched, profile: { fullName: auth.fullName } })
   } catch (e) {
     const message = e instanceof Error ? e.message : "Error interno"
     console.error("GET /api/arbitros/matches failed:", e)

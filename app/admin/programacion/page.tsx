@@ -19,6 +19,7 @@ import { Calendar, MapPin, Clock, Edit2 } from "lucide-react"
 import { EmptyState } from "@/components/ui/empty-state"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser"
+import { BadgeStatus } from "@/components/ui/badge-status"
 
 export default function ProgramacionPage() {
   const [tournaments, setTournaments] = useState<Tournament[]>([])
@@ -33,6 +34,10 @@ export default function ProgramacionPage() {
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [suspendMatch, setSuspendMatch] = useState<MatchRow | null>(null)
+  const [suspendReason, setSuspendReason] = useState("")
+  const [suspendSubmitting, setSuspendSubmitting] = useState(false)
+  const [suspendError, setSuspendError] = useState<string | null>(null)
 
   const supabase = useMemo(() => createSupabaseBrowserClient(), [])
 
@@ -183,7 +188,9 @@ export default function ProgramacionPage() {
     run()
   }, [selectedTournament, supabase, tournaments])
 
-  const categoryMatches = matches.filter((m) => m.status === "programado").sort((a, b) => a.round - b.round)
+  const categoryMatches = matches
+    .filter((m) => m.status !== "finalizado")
+    .sort((a, b) => a.round - b.round)
 
   const getTeamName = (id: string) => teams.find((t) => t.id === id)?.name || "TBD"
   const getVenueName = (id?: string) => venues.find((v) => v.id === id)?.name || "-"
@@ -244,6 +251,16 @@ export default function ProgramacionPage() {
     setSubmitting(true)
     setError(null)
     try {
+      if (formData.scheduledDate && formData.scheduledTime) {
+        const candidate = new Date(`${formData.scheduledDate}T${formData.scheduledTime}:00`)
+        const now = new Date()
+        if (!Number.isNaN(candidate.getTime()) && candidate.getTime() < now.getTime()) {
+          setError("No podés programar un partido en una fecha u horario pasado.")
+          setSubmitting(false)
+          return
+        }
+      }
+
       const { data: sessionData } = await supabase.auth.getSession()
       const token = sessionData.session?.access_token
       if (!token) {
@@ -283,6 +300,55 @@ export default function ProgramacionPage() {
     }
   }
 
+  const handleSuspend = async () => {
+    if (!suspendMatch) return
+    setSuspendSubmitting(true)
+    setSuspendError(null)
+    try {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData.session?.access_token
+      if (!token) {
+        setSuspendError("Tenés que iniciar sesión para suspender el partido.")
+        return
+      }
+
+      const body = {
+        scheduledDate: suspendMatch.scheduledDate
+          ? new Date(suspendMatch.scheduledDate).toISOString().split("T")[0]
+          : null,
+        scheduledTime: suspendMatch.scheduledTime ?? null,
+        venueId: suspendMatch.venueId ?? null,
+        courtId: suspendMatch.courtId ?? null,
+        refereeIds: suspendMatch.refereeIds,
+        tableOfficialIds: suspendMatch.tableOfficialIds,
+        status: "suspendido" as const,
+        statusReason: suspendReason || null,
+      }
+
+      const res = await fetch(`/api/admin/matches/${suspendMatch.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+      })
+
+      const json = (await res.json().catch(() => null)) as any
+      if (!res.ok) {
+        setSuspendError(json?.error ?? "No se pudo suspender el partido")
+        return
+      }
+
+      const updated = mapMatchFromDb(json.match)
+      setMatches((prev) => prev.map((m) => (m.id === updated.id ? updated : m)))
+      setSuspendMatch(null)
+      setSuspendReason("")
+    } finally {
+      setSuspendSubmitting(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       <Breadcrumbs items={[{ label: "Administración", href: "/admin" }, { label: "Programación" }]} />
@@ -308,8 +374,6 @@ export default function ProgramacionPage() {
           </Select>
         </div>
       </div>
-
-      {error && <p className="text-sm text-destructive">{error}</p>}
 
       {loading ? (
         <Card>
@@ -359,18 +423,24 @@ export default function ProgramacionPage() {
                     </TableCell>
                     <TableCell>
                       {match.scheduledDate ? (
-                        <div className="flex items-center gap-1">
-                          <Calendar className="h-4 w-4 text-muted-foreground" />
-                          <span>{new Date(match.scheduledDate).toLocaleDateString("es-AR")}</span>
-                          {match.scheduledTime && (
-                            <>
-                              <Clock className="h-4 w-4 text-muted-foreground ml-2" />
-                              <span>{match.scheduledTime}</span>
-                            </>
-                          )}
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1">
+                            <Calendar className="h-4 w-4 text-muted-foreground" />
+                            <span>{new Date(match.scheduledDate).toLocaleDateString("es-AR")}</span>
+                            {match.scheduledTime && (
+                              <>
+                                <Clock className="h-4 w-4 text-muted-foreground ml-2" />
+                                <span>{match.scheduledTime}</span>
+                              </>
+                            )}
+                          </div>
+                          <BadgeStatus status={match.status as any} />
                         </div>
                       ) : (
-                        <span className="text-muted-foreground">Sin programar</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-muted-foreground">Sin programar</span>
+                          <BadgeStatus status={match.status as any} />
+                        </div>
                       )}
                     </TableCell>
                     <TableCell>
@@ -406,6 +476,19 @@ export default function ProgramacionPage() {
                         <Edit2 className="h-4 w-4" />
                         <span className="sr-only">Editar programación</span>
                       </Button>
+                      {match.status === "en_juego" && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setSuspendMatch(match)
+                            setSuspendReason("")
+                            setSuspendError(null)
+                          }}
+                        >
+                          Suspender
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -588,6 +671,11 @@ export default function ProgramacionPage() {
                 </SelectContent>
               </Select>
             </div>
+            {error && (
+              <p className="text-sm text-destructive">
+                {error}
+              </p>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsOpen(false)}>
@@ -595,6 +683,43 @@ export default function ProgramacionPage() {
             </Button>
             <Button onClick={handleSubmit} disabled={submitting}>
               {submitting ? "Guardando..." : "Guardar Programación"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Suspend Dialog */}
+      <Dialog open={!!suspendMatch} onOpenChange={(open) => (!open ? setSuspendMatch(null) : null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Suspender partido</DialogTitle>
+            <DialogDescription>
+              {suspendMatch && (
+                <>
+                  {getTeamName(suspendMatch.homeTeamId)} vs {getTeamName(suspendMatch.awayTeamId)} - Fecha{" "}
+                  {suspendMatch.round}
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="suspend-reason">Motivo (opcional)</Label>
+              <Input
+                id="suspend-reason"
+                value={suspendReason}
+                onChange={(e) => setSuspendReason(e.target.value)}
+                placeholder="Ej: Corte de luz, humedad en la cancha, etc."
+              />
+            </div>
+            {suspendError && <p className="text-sm text-destructive">{suspendError}</p>}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSuspendMatch(null)}>
+              Cancelar
+            </Button>
+            <Button onClick={handleSuspend} disabled={suspendSubmitting}>
+              {suspendSubmitting ? "Suspendiendo..." : "Confirmar suspensión"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -663,6 +788,12 @@ function mapOfficialFromDb(row: any): Official {
 
 function mapMatchFromDb(row: any): MatchRow {
   const scheduledAt = row.scheduled_at ? new Date(row.scheduled_at) : undefined
+  const rawScheduled: string | null = row.scheduled_at ?? null
+  let scheduledTime: string | undefined
+  if (typeof rawScheduled === "string") {
+    const match = rawScheduled.match(/T(\d{2}:\d{2})/)
+    if (match) scheduledTime = match[1]
+  }
   const assignments = (row.match_official_assignments ?? []) as Array<{ user_id: string; role: string }>
 
   const refereeIds = assignments.filter((a) => a.role === "arbitro").map((a) => a.user_id)
@@ -677,12 +808,7 @@ function mapMatchFromDb(row: any): MatchRow {
     phase: row.phase,
     status: row.status,
     scheduledDate: scheduledAt,
-    scheduledTime: scheduledAt
-      ? scheduledAt.toLocaleTimeString("es-AR", {
-          hour: "2-digit",
-          minute: "2-digit",
-        })
-      : undefined,
+    scheduledTime,
     venueId: row.venue_id ?? undefined,
     courtId: row.court_id ?? undefined,
     refereeIds,

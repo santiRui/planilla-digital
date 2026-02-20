@@ -44,9 +44,14 @@ export function RequireRole({ role, children }: Props) {
         return
       }
 
+      // Permitir que cuentas con rol 'arbitro' accedan también a vistas que requieren 'oficial_mesa'
+      // (caso de usuarios que cumplen ambos roles con la misma cuenta).
       if (profile.role !== role) {
-        router.replace(roleHome(profile.role))
-        return
+        const isArbitroUsingMesa = role === "oficial_mesa" && profile.role === "arbitro"
+        if (!isArbitroUsingMesa) {
+          router.replace(roleHome(profile.role))
+          return
+        }
       }
 
       setAllowed(true)

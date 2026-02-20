@@ -675,6 +675,12 @@ type MatchRow = {
 
 function mapMatchFromDb(row: any): MatchRow {
   const scheduledAt = row.scheduled_at ? new Date(row.scheduled_at) : undefined
+  const rawScheduled: string | null = row.scheduled_at ?? null
+  let scheduledTime: string | undefined
+  if (typeof rawScheduled === "string") {
+    const match = rawScheduled.match(/T(\d{2}:\d{2})/)
+    if (match) scheduledTime = match[1]
+  }
   return {
     id: row.id,
     tournamentId: row.tournament_id,
@@ -684,12 +690,7 @@ function mapMatchFromDb(row: any): MatchRow {
     phase: row.phase,
     status: row.status,
     scheduledDate: scheduledAt,
-    scheduledTime: scheduledAt
-      ? scheduledAt.toLocaleTimeString("es-AR", {
-          hour: "2-digit",
-          minute: "2-digit",
-        })
-      : undefined,
+    scheduledTime,
     venueId: row.venue_id ?? null,
     homeScore: row.home_score ?? undefined,
     awayScore: row.away_score ?? undefined,

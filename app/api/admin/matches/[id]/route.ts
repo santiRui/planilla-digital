@@ -10,6 +10,8 @@ const updateMatchSchedulingSchema = z.object({
   courtId: z.string().optional().nullable(),
   refereeIds: z.array(z.string()).optional().nullable(),
   tableOfficialIds: z.array(z.string()).optional().nullable(),
+  status: z.enum(["programado", "en_juego", "finalizado", "suspendido", "demorado"]).optional(),
+  statusReason: z.string().max(500).optional().nullable(),
 })
 
 async function assertAdmin(accessToken: string) {
@@ -43,10 +45,9 @@ function toScheduledAt(scheduledDate?: string | null, scheduledTime?: string | n
   const d = scheduledDate?.trim()
   if (!d) return null
   const t = (scheduledTime?.trim() || "00:00").slice(0, 5)
-  const iso = `${d}T${t}:00`
-  const dt = new Date(iso)
-  if (Number.isNaN(dt.getTime())) return null
-  return dt.toISOString()
+  // Guardamos la fecha y hora tal cual se ingresan (hora local del torneo),
+  // sin convertir a UTC, para evitar desfasajes al mostrarla luego.
+  return `${d}T${t}:00`
 }
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -73,18 +74,85 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       return NextResponse.json({ error: "Datos inválidos", details: parsed.error.flatten() }, { status: 400 })
     }
 
-    const scheduledAt = toScheduledAt(parsed.data.scheduledDate, parsed.data.scheduledTime)
+    // Leemos el estado actual del partido para poder aplicar reglas de transición (por ej. suspendido -> programado al reprogramar)
+    const { data: currentMatch, error: currentError } = await auth.adminClient
+      .from("matches")
+      .select("id, status, scheduled_at")
+      .eq("id", id)
+      .maybeSingle()
 
-    const venueId = parsed.data.venueId ? parsed.data.venueId : null
-    const courtId = parsed.data.courtId ? parsed.data.courtId : null
+    if (currentError) {
+      return NextResponse.json({ error: currentError.message }, { status: 400 })
+    }
+
+    if (!currentMatch) {
+      return NextResponse.json({ error: "Partido no encontrado" }, { status: 404 })
+    }
+
+    if (parsed.data.scheduledDate && parsed.data.scheduledTime) {
+      const candidate = new Date(`${parsed.data.scheduledDate}T${parsed.data.scheduledTime}:00`)
+      const now = new Date()
+      if (!Number.isNaN(candidate.getTime()) && candidate.getTime() < now.getTime()) {
+        return NextResponse.json(
+          { error: "No podés programar un partido en una fecha u horario pasado." },
+          { status: 400 },
+        )
+      }
+    }
+
+    // Sólo actualizamos fecha/hora/sede/cancha si vinieron explícitamente en el payload.
+    // Esto evita que flujos como Jornada (que sólo cambian estado/motivo) borren la programación existente.
+    const hasSchedulingFields =
+      Object.prototype.hasOwnProperty.call(parsed.data, "scheduledDate") ||
+      Object.prototype.hasOwnProperty.call(parsed.data, "scheduledTime")
+
+    const hasVenueField = Object.prototype.hasOwnProperty.call(parsed.data, "venueId")
+    const hasCourtField = Object.prototype.hasOwnProperty.call(parsed.data, "courtId")
+
+    const scheduledAt = hasSchedulingFields ? toScheduledAt(parsed.data.scheduledDate ?? null, parsed.data.scheduledTime ?? null) : undefined
+
+    const update: any = {}
+
+    if (scheduledAt !== undefined) {
+      update.scheduled_at = scheduledAt
+    }
+    if (hasVenueField) {
+      update.venue_id = parsed.data.venueId ? parsed.data.venueId : null
+    }
+    if (hasCourtField) {
+      update.court_id = parsed.data.courtId ? parsed.data.courtId : null
+    }
+
+    // Regla de negocio: si el partido estaba suspendido y se lo reprograma a una fecha/hora futura,
+    // vuelve a quedar como programado y se limpia el motivo de suspensión, salvo que se indique
+    // explícitamente otro estado distinto en la request.
+    let nextStatus = parsed.data.status
+    let nextStatusReason = parsed.data.statusReason
+
+    if (
+      currentMatch.status === "suspendido" &&
+      parsed.data.scheduledDate &&
+      parsed.data.scheduledTime &&
+      (!parsed.data.status || parsed.data.status === "suspendido")
+    ) {
+      const candidate = new Date(`${parsed.data.scheduledDate}T${parsed.data.scheduledTime}:00`)
+      const now = new Date()
+      if (!Number.isNaN(candidate.getTime()) && candidate.getTime() >= now.getTime()) {
+        nextStatus = "programado"
+        nextStatusReason = null
+      }
+    }
+
+    if (nextStatus) {
+      update.status = nextStatus
+    }
+    if (nextStatusReason !== undefined) {
+      update.status_reason = nextStatusReason
+    }
 
     const { data: updated, error: updateError } = await auth.adminClient
       .from("matches")
-      .update({
-        scheduled_at: scheduledAt,
-        venue_id: venueId,
-        court_id: courtId,
-      })
+      .update(update)
       .eq("id", id)
       .select(
         "id, tournament_id, home_team_id, away_team_id, round, phase, status, scheduled_at, venue_id, court_id, home_score, away_score, created_at, match_official_assignments(user_id, role)",
@@ -95,39 +163,47 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       return NextResponse.json({ error: updateError?.message ?? "No se pudo actualizar" }, { status: 400 })
     }
 
-    const refereeIds = Array.from(new Set((parsed.data.refereeIds ?? []).filter(Boolean)))
-    const tableOfficialIds = Array.from(new Set((parsed.data.tableOfficialIds ?? []).filter(Boolean)))
+    // Sólo reemplazamos designaciones si se envían explícitamente (Programación).
+    // Jornada u otros flujos que no toquen refereeIds / tableOfficialIds
+    // dejan intactas las asignaciones actuales.
+    const hasRefereesField = Object.prototype.hasOwnProperty.call(parsed.data, "refereeIds")
+    const hasTableOfficialsField = Object.prototype.hasOwnProperty.call(parsed.data, "tableOfficialIds")
 
-    const overlap = refereeIds.filter((id) => tableOfficialIds.includes(id))
-    if (overlap.length > 0) {
-      return NextResponse.json(
-        { error: "Un usuario no puede ser árbitro y oficial de mesa en el mismo partido." },
-        { status: 400 },
-      )
-    }
+    if (hasRefereesField || hasTableOfficialsField) {
+      const refereeIds = Array.from(new Set((parsed.data.refereeIds ?? []).filter(Boolean)))
+      const tableOfficialIds = Array.from(new Set((parsed.data.tableOfficialIds ?? []).filter(Boolean)))
 
-    // Replace assignments for this match (simple + consistent)
-    const { error: deleteAssignmentsError } = await auth.adminClient
-      .from("match_official_assignments")
-      .delete()
-      .eq("match_id", id)
+      const overlap = refereeIds.filter((id) => tableOfficialIds.includes(id))
+      if (overlap.length > 0) {
+        return NextResponse.json(
+          { error: "Un usuario no puede ser árbitro y oficial de mesa en el mismo partido." },
+          { status: 400 },
+        )
+      }
 
-    if (deleteAssignmentsError) {
-      return NextResponse.json({ error: deleteAssignmentsError.message }, { status: 400 })
-    }
-
-    const insertRows = [
-      ...refereeIds.map((userId) => ({ match_id: id, user_id: userId, role: "arbitro" })),
-      ...tableOfficialIds.map((userId) => ({ match_id: id, user_id: userId, role: "oficial_mesa" })),
-    ]
-
-    if (insertRows.length > 0) {
-      const { error: insertAssignmentsError } = await auth.adminClient
+      // Replace assignments for this match (simple + consistent)
+      const { error: deleteAssignmentsError } = await auth.adminClient
         .from("match_official_assignments")
-        .insert(insertRows)
+        .delete()
+        .eq("match_id", id)
 
-      if (insertAssignmentsError) {
-        return NextResponse.json({ error: insertAssignmentsError.message }, { status: 400 })
+      if (deleteAssignmentsError) {
+        return NextResponse.json({ error: deleteAssignmentsError.message }, { status: 400 })
+      }
+
+      const insertRows = [
+        ...refereeIds.map((userId) => ({ match_id: id, user_id: userId, role: "arbitro" })),
+        ...tableOfficialIds.map((userId) => ({ match_id: id, user_id: userId, role: "oficial_mesa" })),
+      ]
+
+      if (insertRows.length > 0) {
+        const { error: insertAssignmentsError } = await auth.adminClient
+          .from("match_official_assignments")
+          .insert(insertRows)
+
+        if (insertAssignmentsError) {
+          return NextResponse.json({ error: insertAssignmentsError.message }, { status: 400 })
+        }
       }
     }
 

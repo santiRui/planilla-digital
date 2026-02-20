@@ -22,7 +22,8 @@ async function assertMesa(accessToken: string) {
     return { ok: false as const, status: 400, error: callerProfileError.message }
   }
 
-  if (callerProfile?.role !== "oficial_mesa") {
+  const role = (callerProfile?.role as string | undefined) ?? ""
+  if (role !== "oficial_mesa" && role !== "arbitro" && role !== "admin") {
     return { ok: false as const, status: 403, error: "Prohibido" }
   }
 
@@ -46,9 +47,8 @@ export async function GET(req: Request) {
 
     const { data: assignmentRows, error: assignmentError } = await auth.adminClient
       .from("match_official_assignments")
-      .select("match_id")
+      .select("match_id, role")
       .eq("user_id", auth.callerId)
-      .eq("role", "oficial_mesa")
 
     if (assignmentError) {
       return NextResponse.json({ error: assignmentError.message }, { status: 400 })
@@ -71,7 +71,20 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: matchesError.message }, { status: 400 })
     }
 
-    return NextResponse.json({ matches: matches ?? [], profile: { fullName: auth.fullName } })
+    const rolesByMatch = new Map<string, string>()
+    ;(assignmentRows ?? []).forEach((r: any) => {
+      const id = r.match_id as string | null
+      const role = r.role as string | null
+      if (!id || !role) return
+      if (!rolesByMatch.has(id)) rolesByMatch.set(id, role)
+    })
+
+    const enriched = (matches ?? []).map((m: any) => ({
+      ...m,
+      assignment_role: rolesByMatch.get(m.id as string) ?? null,
+    }))
+
+    return NextResponse.json({ matches: enriched, profile: { fullName: auth.fullName } })
   } catch (e) {
     const message = e instanceof Error ? e.message : "Error interno"
     console.error("GET /api/mesa/matches failed:", e)

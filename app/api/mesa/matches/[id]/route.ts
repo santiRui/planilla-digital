@@ -5,9 +5,10 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 
 const updateResultSchema = z.object({
-  status: z.enum(["programado", "en_juego", "finalizado"]).optional(),
+  status: z.enum(["programado", "en_juego", "finalizado", "suspendido", "demorado"]).optional(),
   homeScore: z.number().int().min(0).optional(),
   awayScore: z.number().int().min(0).optional(),
+  statusReason: z.string().max(500).optional(),
 })
 
 type Phase = "cuartos" | "semifinal" | "final"
@@ -494,6 +495,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     if (parsed.data.status) update.status = parsed.data.status
     if (parsed.data.homeScore !== undefined) update.home_score = parsed.data.homeScore
     if (parsed.data.awayScore !== undefined) update.away_score = parsed.data.awayScore
+    if (parsed.data.statusReason !== undefined) update.status_reason = parsed.data.statusReason
 
     if (Object.keys(update).length === 0) {
       return NextResponse.json({ match: existing })
@@ -513,7 +515,13 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
         if (!ok.ok) {
           return NextResponse.json({ error: ok.error }, { status: ok.status })
         }
-      } else if (requestedStatus === "finalizado" || nextHomeScore != null || nextAwayScore != null) {
+      } else if (
+        requestedStatus === "finalizado" ||
+        requestedStatus === "suspendido" ||
+        requestedStatus === "demorado" ||
+        nextHomeScore != null ||
+        nextAwayScore != null
+      ) {
         const okMesa = await assertAssignedToMatch(auth.adminClient, id, auth.callerId, "oficial_mesa")
         if (!okMesa.ok) {
           return NextResponse.json({ error: okMesa.error }, { status: okMesa.status })

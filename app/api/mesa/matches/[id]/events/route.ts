@@ -57,7 +57,7 @@ async function assertMesaEventsRole(accessToken: string, matchId: string) {
   }
 
   const role = (callerProfile?.role as string | undefined) ?? ""
-  if (role !== "admin" && role !== "oficial_mesa") {
+  if (role !== "admin" && role !== "oficial_mesa" && role !== "arbitro") {
     return { ok: false as const, status: 403, error: "Prohibido" }
   }
 

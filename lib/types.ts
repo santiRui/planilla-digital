@@ -1,7 +1,7 @@
 // Core data types for the basketball tournament management system
 
 export type Branch = "masculino" | "femenino" | "mixto"
-export type MatchStatus = "programado" | "en_juego" | "finalizado"
+export type MatchStatus = "programado" | "en_juego" | "finalizado" | "suspendido" | "demorado"
 export type TournamentPhase = "fase_regular" | "playoff" | "cuartos" | "semifinal" | "final"
 export type UserRole = "admin" | "arbitro" | "oficial_mesa"
 

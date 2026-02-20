@@ -289,19 +289,22 @@ export default function TournamentFixturePage({ params }: { params: Promise<{ id
                             </div>
 
                             {/* Match Details */}
-                            {(match.dateTime || venue) && (
+                            {(match.scheduledDate || match.scheduledTime || venue) && (
                               <div className="flex flex-wrap items-center justify-center gap-4 mt-3 text-xs text-muted-foreground">
-                                {match.dateTime && (
+                                {(match.scheduledDate || match.scheduledTime) && (
                                   <div className="flex items-center gap-1">
                                     <Clock className="h-3 w-3" />
                                     <span>
-                                      {new Date(match.dateTime).toLocaleDateString("es-AR", {
-                                        weekday: "short",
-                                        day: "numeric",
-                                        month: "short",
-                                        hour: "2-digit",
-                                        minute: "2-digit",
-                                      })}
+                                      {match.scheduledDate
+                                        ? match.scheduledDate.toLocaleDateString("es-AR", {
+                                            weekday: "short",
+                                            day: "numeric",
+                                            month: "short",
+                                          })
+                                        : ""}
+                                      {match.scheduledTime
+                                        ? `${match.scheduledDate ? " · " : ""}${match.scheduledTime}`
+                                        : ""}
                                     </span>
                                   </div>
                                 )}

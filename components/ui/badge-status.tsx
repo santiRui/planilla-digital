@@ -19,6 +19,14 @@ const statusConfig: Record<MatchStatus, { label: string; className: string }> = 
     label: "Finalizado",
     className: "bg-[var(--color-success)] text-[var(--color-success-foreground)]",
   },
+  suspendido: {
+    label: "Suspendido",
+    className: "bg-red-500/10 text-red-600",
+  },
+  demorado: {
+    label: "Demorado",
+    className: "bg-amber-500/10 text-amber-600",
+  },
 }
 
 export function BadgeStatus({ status, className }: BadgeStatusProps) {

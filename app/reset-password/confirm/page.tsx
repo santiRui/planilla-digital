@@ -15,6 +15,7 @@ export default function ResetPasswordConfirmPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [ready, setReady] = useState(false)
+  const [success, setSuccess] = useState(false)
 
   useEffect(() => {
     const supabase = createSupabaseBrowserClient()
@@ -49,8 +50,7 @@ export default function ResetPasswordConfirmPage() {
         setError(error.message)
         return
       }
-
-      router.replace("/login")
+      setSuccess(true)
     } finally {
       setLoading(false)
     }
@@ -68,6 +68,15 @@ export default function ResetPasswordConfirmPage() {
         <CardContent>
           {!ready ? (
             <p className="text-sm text-muted-foreground">Preparando el formulario...</p>
+          ) : success ? (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Tu contraseña se actualizó correctamente. Ahora podés iniciar sesión con tu nueva contraseña.
+              </p>
+              <Button className="w-full" onClick={() => router.replace("/login")}>
+                Ir al inicio de sesión
+              </Button>
+            </div>
           ) : (
             <form className="space-y-4" onSubmit={onSubmit}>
               <div className="space-y-2">

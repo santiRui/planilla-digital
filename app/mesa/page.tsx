@@ -33,6 +33,7 @@ export default function MesaPage() {
   const [courts, setCourts] = useState<CourtRow[]>([])
 
   const [resumeMatch, setResumeMatch] = useState<MatchRow | null>(null)
+  const [detailMatch, setDetailMatch] = useState<MatchRow | null>(null)
 
   const [isOnline, setIsOnline] = useState(true)
 
@@ -313,7 +314,20 @@ export default function MesaPage() {
                   <CardContent className="space-y-4">
                   {/* Teams */}
                   <div className="flex items-center justify-between py-2">
-                    <div className="text-center flex-1">
+                    <div className="text-center flex-1 flex flex-col items-center gap-2">
+                      {getTeamLogo(match.homeTeamId) ? (
+                        <div className="h-10 w-10 rounded-full overflow-hidden border bg-muted flex items-center justify-center">
+                          <img
+                            src={getTeamLogo(match.homeTeamId)}
+                            alt={getTeamName(match.homeTeamId)}
+                            className="h-full w-full object-cover"
+                          />
+                        </div>
+                      ) : (
+                        <div className="h-10 w-10 rounded-full flex items-center justify-center text-white font-bold text-sm bg-muted">
+                          {getTeamName(match.homeTeamId).substring(0, 2).toUpperCase()}
+                        </div>
+                      )}
                       <p className="font-semibold text-lg">{getTeamName(match.homeTeamId)}</p>
                       <p className="text-sm text-muted-foreground">Local</p>
                     </div>
@@ -347,7 +361,20 @@ export default function MesaPage() {
                         <span className="text-2xl font-bold text-muted-foreground">VS</span>
                       )}
                     </div>
-                    <div className="text-center flex-1">
+                    <div className="text-center flex-1 flex flex-col items-center gap-2">
+                      {getTeamLogo(match.awayTeamId) ? (
+                        <div className="h-10 w-10 rounded-full overflow-hidden border bg-muted flex items-center justify-center">
+                          <img
+                            src={getTeamLogo(match.awayTeamId)}
+                            alt={getTeamName(match.awayTeamId)}
+                            className="h-full w-full object-cover"
+                          />
+                        </div>
+                      ) : (
+                        <div className="h-10 w-10 rounded-full flex items-center justify-center text-white font-bold text-sm bg-muted">
+                          {getTeamName(match.awayTeamId).substring(0, 2).toUpperCase()}
+                        </div>
+                      )}
                       <p className="font-semibold text-lg">{getTeamName(match.awayTeamId)}</p>
                       <p className="text-sm text-muted-foreground">Visitante</p>
                     </div>
@@ -369,23 +396,46 @@ export default function MesaPage() {
                       <div className="flex items-center gap-1.5 text-muted-foreground">
                         <MapPin className="h-4 w-4" />
                         <span>
-                          {getVenueName(match.venueId)} - {getCourtName(match.courtId)}
+                          {getVenueName(match.venueId)}
+                          {match.courtId ? ` - ${getCourtName(match.courtId)}` : ""}
                         </span>
                       </div>
                     )}
                   </div>
 
-                  {/* Action Button */}
-                  {match.status === "en_juego" ? (
-                    <Button className="w-full" size="lg" onClick={() => handleStartSheet(match)}>
-                      <Play className="mr-2 h-5 w-5" />
-                      Iniciar Acta
-                    </Button>
-                  ) : (
-                    <Button className="w-full" size="lg" disabled>
-                      Esperando que el árbitro inicie el partido
-                    </Button>
+                  {match.assignmentRole && (
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Tu función en este partido: {match.assignmentRole === "arbitro" ? "Árbitro" : "Oficial de Mesa"}
+                    </p>
                   )}
+
+                  {/* Action Button */}
+                  <div className="flex flex-col sm:flex-row gap-2 mt-2">
+                    <Button
+                      variant="outline"
+                      className="w-full sm:w-auto flex-1"
+                      size="lg"
+                      onClick={() => setDetailMatch(match)}
+                    >
+                      Ver detalle
+                    </Button>
+                    {match.assignmentRole === "oficial_mesa" ? (
+                      match.status === "en_juego" ? (
+                        <Button className="w-full sm:w-auto flex-1" size="lg" onClick={() => handleStartSheet(match)}>
+                          <Play className="mr-2 h-5 w-5" />
+                          Iniciar Acta
+                        </Button>
+                      ) : (
+                        <Button className="w-full sm:w-auto flex-1" size="lg" disabled>
+                          Esperando que el árbitro inicie el partido
+                        </Button>
+                      )
+                    ) : (
+                      <Button className="w-full sm:w-auto flex-1" size="lg" disabled>
+                        Tu rol en este partido es de Árbitro
+                      </Button>
+                    )}
+                  </div>
                   </CardContent>
                 </Card>
               ))}
@@ -496,6 +546,65 @@ export default function MesaPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Dialogo de detalle de partido */}
+      <Dialog
+        open={!!detailMatch}
+        onOpenChange={(open) => {
+          if (!open) setDetailMatch(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Detalle del partido</DialogTitle>
+            <DialogDescription>
+              Información del partido y tu función asignada.
+            </DialogDescription>
+          </DialogHeader>
+          {detailMatch && (
+            <div className="space-y-3 text-sm">
+              <div>
+                <p className="font-medium">Torneo</p>
+                <p className="text-muted-foreground">{getTournamentName(detailMatch.tournamentId)}</p>
+              </div>
+              <div>
+                <p className="font-medium">Equipos</p>
+                <p className="text-muted-foreground">
+                  {getTeamName(detailMatch.homeTeamId)} vs {getTeamName(detailMatch.awayTeamId)}
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <p className="font-medium">Fecha</p>
+                  <p className="text-muted-foreground">
+                    {detailMatch.scheduledDate ? formatDate(detailMatch.scheduledDate) : "Sin fecha"}
+                  </p>
+                </div>
+                <div>
+                  <p className="font-medium">Hora</p>
+                  <p className="text-muted-foreground">{detailMatch.scheduledTime ?? "-"}</p>
+                </div>
+              </div>
+              <div>
+                <p className="font-medium">Sede y cancha</p>
+                <p className="text-muted-foreground">
+                  {detailMatch.venueId
+                    ? `${getVenueName(detailMatch.venueId)} - ${getCourtName(detailMatch.courtId)}`
+                    : "Sin sede"}
+                </p>
+              </div>
+              {detailMatch.assignmentRole && (
+                <div>
+                  <p className="font-medium">Tu función en este partido</p>
+                  <p className="text-muted-foreground">
+                    {detailMatch.assignmentRole === "arbitro" ? "Árbitro" : "Oficial de Mesa"}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -508,6 +617,7 @@ type MatchRow = {
   round: number
   phase: string
   status: "programado" | "en_juego" | "finalizado"
+  assignmentRole?: "arbitro" | "oficial_mesa" | null
   scheduledAt?: Date
   scheduledDate?: Date
   scheduledTime?: string
@@ -529,6 +639,12 @@ type CourtRow = { id: string; name: string }
 
 function mapMatchFromDb(row: any): MatchRow {
   const scheduledAt = row.scheduled_at ? new Date(row.scheduled_at) : undefined
+  const rawScheduled: string | null = row.scheduled_at ?? null
+  let scheduledTime: string | undefined
+  if (typeof rawScheduled === "string") {
+    const match = rawScheduled.match(/T(\d{2}:\d{2})/)
+    if (match) scheduledTime = match[1]
+  }
   return {
     id: row.id,
     tournamentId: row.tournament_id,
@@ -537,14 +653,10 @@ function mapMatchFromDb(row: any): MatchRow {
     round: row.round,
     phase: row.phase,
     status: row.status,
+    assignmentRole: (row.assignment_role as "arbitro" | "oficial_mesa" | null) ?? null,
     scheduledAt,
     scheduledDate: scheduledAt,
-    scheduledTime: scheduledAt
-      ? scheduledAt.toLocaleTimeString("es-AR", {
-          hour: "2-digit",
-          minute: "2-digit",
-        })
-      : undefined,
+    scheduledTime,
     venueId: row.venue_id ?? null,
     courtId: row.court_id ?? null,
     homeScore: row.home_score ?? null,

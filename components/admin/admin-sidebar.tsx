@@ -28,6 +28,7 @@ const navigation = [
   { name: "Cuerpo Técnico", href: "/admin/tecnicos", icon: ClipboardList },
   { name: "Fixture", href: "/admin/fixture", icon: Calendar },
   { name: "Programación", href: "/admin/programacion", icon: MapPin },
+  { name: "Jornada", href: "/admin/jornada", icon: Calendar },
   { name: "Canchas", href: "/admin/canchas", icon: MapPin },
   { name: "Fases", href: "/admin/fases", icon: Layers },
   { name: "Personal", href: "/admin/personal", icon: UserCircle },

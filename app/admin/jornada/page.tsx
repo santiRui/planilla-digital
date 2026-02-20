@@ -1,0 +1,500 @@
+"use client"
+
+import { useEffect, useMemo, useState } from "react"
+import { Breadcrumbs } from "@/components/breadcrumbs"
+import { Card, CardContent } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Input } from "@/components/ui/input"
+import { BadgeStatus } from "@/components/ui/badge-status"
+import { Calendar, Clock, MapPin } from "lucide-react"
+import { createSupabaseBrowserClient } from "@/lib/supabase/browser"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+
+export default function JornadaPage() {
+  const [tournaments, setTournaments] = useState<Tournament[]>([])
+  const [venues, setVenues] = useState<Venue[]>([])
+  const [courts, setCourts] = useState<Court[]>([])
+  const [matches, setMatches] = useState<MatchRow[]>([])
+
+  const [selectedTournament, setSelectedTournament] = useState<string>("")
+  const [selectedVenue, setSelectedVenue] = useState<string>("")
+  const [selectedDate, setSelectedDate] = useState<string>("") // YYYY-MM-DD
+
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const [statusDialogMatch, setStatusDialogMatch] = useState<MatchRow | null>(null)
+  const [statusDialogStatus, setStatusDialogStatus] = useState<"suspendido" | "demorado">("suspendido")
+  const [statusDialogReason, setStatusDialogReason] = useState("")
+  const [statusDialogDelayMinutes, setStatusDialogDelayMinutes] = useState("")
+  const [statusDialogSubmitting, setStatusDialogSubmitting] = useState(false)
+  const [statusDialogError, setStatusDialogError] = useState<string | null>(null)
+
+  const supabase = useMemo(() => createSupabaseBrowserClient(), [])
+
+  // Load tournaments, venues, courts
+  useEffect(() => {
+    const run = async () => {
+      setLoading(true)
+      setError(null)
+
+      const [tournamentsRes, venuesRes, courtsRes] = await Promise.all([
+        supabase.from("tournaments").select("id, name, year, branch, status, created_at, category_id").order("created_at", { ascending: false }),
+        supabase.from("venues").select("id, name").order("name", { ascending: true }),
+        supabase.from("courts").select("id, venue_id, name").order("name", { ascending: true }),
+      ])
+
+      if (tournamentsRes.error) setError(tournamentsRes.error.message)
+      if (venuesRes.error) setError((prev) => prev ?? venuesRes.error.message)
+      if (courtsRes.error) setError((prev) => prev ?? courtsRes.error.message)
+
+      const nextTournaments = (tournamentsRes.data ?? []).map((t: any) => ({
+        id: t.id,
+        name: t.name,
+        year: t.year,
+        branch: t.branch,
+        status: t.status,
+        createdAt: t.created_at,
+        categoryId: t.category_id,
+      })) as Tournament[]
+      setTournaments(nextTournaments)
+
+      setVenues((venuesRes.data ?? []).map((v: any) => ({ id: v.id, name: v.name })) as Venue[])
+      setCourts((courtsRes.data ?? []).map((c: any) => ({ id: c.id, venueId: c.venue_id, name: c.name })) as Court[])
+
+      const initialTournamentId = nextTournaments[0]?.id
+      setSelectedTournament((prev) => prev || initialTournamentId || "")
+
+      setLoading(false)
+    }
+
+    run()
+  }, [supabase])
+
+  // Load matches for selected tournament
+  useEffect(() => {
+    const run = async () => {
+      if (!selectedTournament) return
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData.session?.access_token
+      if (!token) return
+
+      setLoading(true)
+      setError(null)
+
+      const res = await fetch(`/api/admin/matches?tournamentId=${encodeURIComponent(selectedTournament)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+
+      const json = (await res.json().catch(() => null)) as any
+      if (!res.ok) {
+        setMatches([])
+        setError(json?.error ?? "No se pudieron cargar los partidos")
+      } else {
+        setMatches((json.matches ?? []).map(mapMatchFromDb) as MatchRow[])
+      }
+
+      setLoading(false)
+    }
+
+    run()
+  }, [selectedTournament, supabase])
+
+  const jornadaMatches = matches
+    .filter((m) => {
+      if (selectedVenue && m.venueId !== selectedVenue) return false
+      if (!selectedDate) return false
+      if (!m.scheduledDate) return false
+      const dateStr = new Date(m.scheduledDate).toISOString().split("T")[0]
+      return dateStr === selectedDate
+    })
+    .sort((a, b) => {
+      const ta = a.scheduledTime ?? "23:59"
+      const tb = b.scheduledTime ?? "23:59"
+      if (ta < tb) return -1
+      if (ta > tb) return 1
+      return a.createdAt.getTime() - b.createdAt.getTime()
+    })
+
+  const getTournamentName = (id: string) => tournaments.find((t) => t.id === id)?.name || "Torneo"
+  const getVenueName = (id?: string | null) => venues.find((v) => v.id === id)?.name || "-"
+  const getCourtName = (id?: string | null) => courts.find((c) => c.id === id)?.name || "-"
+
+  const openStatusDialog = (match: MatchRow, status: "suspendido" | "demorado") => {
+    setStatusDialogMatch(match)
+    setStatusDialogStatus(status)
+    setStatusDialogReason("")
+    setStatusDialogDelayMinutes("")
+    setStatusDialogError(null)
+  }
+
+  const handleConfirmStatusChange = async () => {
+    if (!statusDialogMatch) return
+    setStatusDialogSubmitting(true)
+    setStatusDialogError(null)
+    try {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData.session?.access_token
+      if (!token) {
+        setStatusDialogError("Tenés que iniciar sesión para cambiar el estado del partido.")
+        return
+      }
+
+      let body: any
+
+      if (statusDialogStatus === "suspendido") {
+        // Partido suspendido: sólo cambiamos estado y motivo de suspensión
+        body = {
+          status: "suspendido",
+          statusReason: statusDialogReason || null,
+        }
+      } else {
+        // Partido demorado: opcionalmente se corre el horario X minutos hacia adelante
+        const minutes = parseInt(statusDialogDelayMinutes || "0", 10)
+
+        if (minutes > 0 && statusDialogMatch.scheduledDate) {
+          const base = new Date(statusDialogMatch.scheduledDate)
+          const newDate = new Date(base.getTime() + minutes * 60 * 1000)
+          const iso = newDate.toISOString()
+          const scheduledDate = iso.split("T")[0]
+          const scheduledTime = iso.substring(11, 16)
+
+          body = {
+            scheduledDate,
+            scheduledTime,
+            venueId: statusDialogMatch.venueId ?? null,
+            courtId: statusDialogMatch.courtId ?? null,
+            refereeIds: statusDialogMatch.refereeIds,
+            tableOfficialIds: statusDialogMatch.tableOfficialIds,
+            status: "demorado",
+            statusReason: null,
+          }
+        } else {
+          // Sin minutos de demora: sólo marcamos el estado como demorado
+          body = {
+            status: "demorado",
+            statusReason: null,
+          }
+        }
+      }
+
+      const res = await fetch(`/api/admin/matches/${statusDialogMatch.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+      })
+
+      const json = (await res.json().catch(() => null)) as any
+      if (!res.ok) {
+        setStatusDialogError(json?.error ?? "No se pudo actualizar el partido")
+        return
+      }
+
+      const updated = mapMatchFromDb(json.match)
+      setMatches((prev) => prev.map((m) => (m.id === updated.id ? updated : m)))
+      setStatusDialogMatch(null)
+      setStatusDialogReason("")
+      setStatusDialogDelayMinutes("")
+    } finally {
+      setStatusDialogSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <Breadcrumbs items={[{ label: "Administración", href: "/admin" }, { label: "Jornada" }]} />
+
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold">Jornada</h1>
+          <p className="text-muted-foreground mt-1">
+            Visualiza los partidos de una cancha en una fecha, con estados en vivo y resultados.
+          </p>
+        </div>
+      </div>
+
+      <Card>
+        <CardContent className="pt-4 space-y-4">
+          <div className="grid gap-4 md:grid-cols-3">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="venue">Sede</Label>
+              <Select
+                value={selectedVenue}
+                onValueChange={(v) => {
+                  setSelectedVenue(v)
+                }}
+              >
+                <SelectTrigger id="venue">
+                  <SelectValue placeholder="Seleccionar sede" />
+                </SelectTrigger>
+                <SelectContent>
+                  {venues.map((v) => (
+                    <SelectItem key={v.id} value={v.id}>
+                      {v.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="date">Fecha</Label>
+              <Input
+                id="date"
+                type="date"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {error && <p className="text-sm text-destructive">{error}</p>}
+        </CardContent>
+      </Card>
+
+      {loading ? (
+        <Card>
+          <CardContent className="py-12 text-center text-muted-foreground">Cargando partidos...</CardContent>
+        </Card>
+      ) : !selectedVenue || !selectedDate ? (
+        <Card>
+          <CardContent className="py-12 text-center text-muted-foreground">
+            Seleccioná sede y fecha para ver la jornada.
+          </CardContent>
+        </Card>
+      ) : jornadaMatches.length === 0 ? (
+        <Card>
+          <CardContent className="py-12 text-center text-muted-foreground">
+            No hay partidos programados para esta sede en esa fecha.
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Horario</TableHead>
+                  <TableHead>Partido</TableHead>
+                  <TableHead>Torneo / Fecha</TableHead>
+                  <TableHead>Sede / Cancha</TableHead>
+                  <TableHead>Estado</TableHead>
+                  <TableHead className="w-[160px]">Acciones</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {jornadaMatches.map((match) => (
+                  <TableRow key={match.id}>
+                    <TableCell className="whitespace-nowrap">
+                      {match.scheduledTime ? (
+                        <div className="flex items-center gap-1">
+                          <Clock className="h-4 w-4 text-muted-foreground" />
+                          <span>{match.scheduledTime}</span>
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">Sin hora</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <div className="font-medium">
+                        {match.homeTeamName} vs {match.awayTeamName}
+                      </div>
+                      {match.status === "finalizado" && (
+                        <div className="text-sm text-muted-foreground">
+                          Resultado: {match.homeScore ?? 0} - {match.awayScore ?? 0}
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <div className="text-sm">
+                        <div className="font-medium">{getTournamentName(match.tournamentId)}</div>
+                        <div className="text-muted-foreground text-xs">Fecha {match.round}</div>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="text-sm text-muted-foreground">
+                        <div className="flex items-center gap-1">
+                          <MapPin className="h-4 w-4" />
+                          <span>{getVenueName(match.venueId)}</span>
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-col gap-1">
+                        <BadgeStatus status={match.status} />
+                        {match.status === "suspendido" && match.statusReason && (
+                          <span className="text-xs text-muted-foreground">Suspendido: {match.statusReason}</span>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="space-x-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => openStatusDialog(match, "demorado")}
+                        disabled={match.status === "finalizado" || match.status === "suspendido" || match.status === "demorado"}
+                      >
+                        Marcar demorado
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => openStatusDialog(match, "suspendido")}
+                        disabled={match.status === "finalizado" || match.status === "suspendido"}
+                      >
+                        Suspender
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      <Dialog open={!!statusDialogMatch} onOpenChange={(open) => (!open ? setStatusDialogMatch(null) : null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              {statusDialogStatus === "suspendido" ? "Suspender partido" : "Marcar partido como demorado"}
+            </DialogTitle>
+            <DialogDescription>
+              {statusDialogMatch && (
+                <>
+                  {statusDialogMatch.homeTeamName} vs {statusDialogMatch.awayTeamName} - Fecha {statusDialogMatch.round}
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            {statusDialogStatus === "suspendido" ? (
+              <div className="grid gap-2">
+                <Label htmlFor="status-reason">Motivo (opcional)</Label>
+                <Input
+                  id="status-reason"
+                  value={statusDialogReason}
+                  onChange={(e) => setStatusDialogReason(e.target.value)}
+                  placeholder="Ej: Corte de luz, humedad en la cancha, etc."
+                />
+              </div>
+            ) : (
+              <div className="grid gap-2">
+                <Label htmlFor="delay-minutes">Demora en minutos (opcional)</Label>
+                <Input
+                  id="delay-minutes"
+                  type="number"
+                  min={0}
+                  value={statusDialogDelayMinutes}
+                  onChange={(e) => setStatusDialogDelayMinutes(e.target.value)}
+                  placeholder="Ej: 15"
+                />
+              </div>
+            )}
+            {statusDialogError && <p className="text-sm text-destructive">{statusDialogError}</p>}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setStatusDialogMatch(null)}>
+              Cancelar
+            </Button>
+            <Button onClick={handleConfirmStatusChange} disabled={statusDialogSubmitting}>
+              {statusDialogSubmitting
+                ? statusDialogStatus === "suspendido"
+                  ? "Suspendiendo..."
+                  : "Marcando como demorado..."
+                : statusDialogStatus === "suspendido"
+                  ? "Confirmar suspensión"
+                  : "Confirmar demorado"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
+type Tournament = {
+  id: string
+  name: string
+  year: number
+  branch: string
+  status: string
+  createdAt: string
+  categoryId?: string | null
+}
+
+type Venue = {
+  id: string
+  name: string
+}
+
+type Court = {
+  id: string
+  venueId: string
+  name: string
+}
+
+type MatchRow = {
+  id: string
+  tournamentId: string
+  homeTeamId: string
+  homeTeamName: string
+  awayTeamId: string
+  awayTeamName: string
+  round: number
+  phase: string
+  status: "programado" | "en_juego" | "finalizado" | "suspendido" | "demorado"
+  statusReason?: string | null
+  scheduledDate?: Date
+  scheduledTime?: string
+  venueId?: string | null
+  courtId?: string | null
+  homeScore?: number | null
+  awayScore?: number | null
+  refereeIds: string[]
+  tableOfficialIds: string[]
+  createdAt: Date
+}
+
+function mapMatchFromDb(row: any): MatchRow {
+  const scheduledAt = row.scheduled_at ? new Date(row.scheduled_at) : undefined
+  const rawScheduled: string | null = row.scheduled_at ?? null
+  let scheduledTime: string | undefined
+  if (typeof rawScheduled === "string") {
+    const match = rawScheduled.match(/T(\d{2}:\d{2})/)
+    if (match) scheduledTime = match[1]
+  }
+
+  const assignments = (row.match_official_assignments ?? []) as Array<{ user_id: string; role: string }>
+
+  const refereeIds = assignments.filter((a) => a.role === "arbitro").map((a) => a.user_id)
+  const tableOfficialIds = assignments.filter((a) => a.role === "oficial_mesa").map((a) => a.user_id)
+
+  return {
+    id: row.id,
+    tournamentId: row.tournament_id,
+    homeTeamId: row.home_team_id,
+    homeTeamName: row.home_team_name ?? "Local",
+    awayTeamId: row.away_team_id,
+    awayTeamName: row.away_team_name ?? "Visitante",
+    round: row.round,
+    phase: row.phase,
+    status: row.status,
+    statusReason: row.status_reason ?? null,
+    scheduledDate: scheduledAt,
+    scheduledTime,
+    venueId: row.venue_id ?? null,
+    courtId: row.court_id ?? null,
+    homeScore: row.home_score ?? null,
+    awayScore: row.away_score ?? null,
+    refereeIds,
+    tableOfficialIds,
+    createdAt: row.created_at ? new Date(row.created_at) : new Date(0),
+  }
+}

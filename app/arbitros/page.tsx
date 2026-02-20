@@ -10,6 +10,7 @@ import { ClipboardList, Calendar, MapPin, Clock, User } from "lucide-react"
 import { EmptyState } from "@/components/ui/empty-state"
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser"
 import { LogoutButton } from "@/components/auth/logout-button"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
 export default function ArbitrosPage() {
   const router = useRouter()
@@ -23,6 +24,7 @@ export default function ArbitrosPage() {
   const [tournaments, setTournaments] = useState<TournamentRow[]>([])
   const [venues, setVenues] = useState<VenueRow[]>([])
   const [courts, setCourts] = useState<CourtRow[]>([])
+  const [detailMatch, setDetailMatch] = useState<MatchRow | null>(null)
 
   useEffect(() => {
     const run = async () => {
@@ -213,24 +215,36 @@ export default function ArbitrosPage() {
               ) : (
                 <div className="space-y-3">
                   {upcomingMatches.map((match) => (
-                    <Card key={match.id}>
+                    <Card key={match.id} className="overflow-hidden">
                       <CardContent className="p-4">
                         <div className="flex items-center justify-between mb-3">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium text-muted-foreground">
-                              {getTournamentName(match.tournamentId)}
-                            </span>
-                            <span className="text-muted-foreground">•</span>
-                            <span className="text-sm text-muted-foreground">Fecha {match.round}</span>
+                          <div className="flex flex-col gap-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-muted-foreground">
+                                {getTournamentName(match.tournamentId)}
+                              </span>
+                              <span className="text-muted-foreground">•</span>
+                              <span className="text-sm text-muted-foreground">Fecha {match.round}</span>
+                            </div>
+                            {match.assignmentRole && (
+                              <span className="text-xs text-muted-foreground">
+                                Tu función en este partido: {match.assignmentRole === "arbitro" ? "Árbitro" : "Oficial de Mesa"}
+                              </span>
+                            )}
                           </div>
                           <BadgeStatus status={match.status} />
                         </div>
 
-                        <div className="flex items-center justify-between py-3">
-                          <div className="flex items-center gap-3">
+                        {/* Teams: layout similar a Mesa */}
+                        <div className="flex items-center justify-between py-2">
+                          <div className="text-center flex-1 flex flex-col items-center gap-2">
                             {getTeamLogo(match.homeTeamId) ? (
-                              <div className="h-10 w-10 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0">
-                                <img src={getTeamLogo(match.homeTeamId)} alt={getTeamName(match.homeTeamId)} className="h-full w-full object-cover" />
+                              <div className="h-10 w-10 rounded-full overflow-hidden border bg-muted flex items-center justify-center">
+                                <img
+                                  src={getTeamLogo(match.homeTeamId)}
+                                  alt={getTeamName(match.homeTeamId)}
+                                  className="h-full w-full object-cover"
+                                />
                               </div>
                             ) : (
                               <div
@@ -240,22 +254,26 @@ export default function ArbitrosPage() {
                                 {getTeamName(match.homeTeamId).substring(0, 2).toUpperCase()}
                               </div>
                             )}
-                            <span className="font-medium">{getTeamName(match.homeTeamId)}</span>
+                            <p className="font-semibold text-lg">{getTeamName(match.homeTeamId)}</p>
+                            <p className="text-sm text-muted-foreground">Local</p>
                           </div>
                           <div className="px-4">
                             {match.status === "en_juego" ? (
-                              <span className="text-xl font-bold text-[var(--color-live)]">
+                              <span className="text-2xl font-bold text-[var(--color-live)]">
                                 {match.homeScore ?? 0} - {match.awayScore ?? 0}
                               </span>
                             ) : (
-                              <span className="text-lg font-bold text-muted-foreground">VS</span>
+                              <span className="text-2xl font-bold text-muted-foreground">VS</span>
                             )}
                           </div>
-                          <div className="flex items-center gap-3">
-                            <span className="font-medium text-right">{getTeamName(match.awayTeamId)}</span>
+                          <div className="text-center flex-1 flex flex-col items-center gap-2">
                             {getTeamLogo(match.awayTeamId) ? (
-                              <div className="h-10 w-10 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0">
-                                <img src={getTeamLogo(match.awayTeamId)} alt={getTeamName(match.awayTeamId)} className="h-full w-full object-cover" />
+                              <div className="h-10 w-10 rounded-full overflow-hidden border bg-muted flex items-center justify-center">
+                                <img
+                                  src={getTeamLogo(match.awayTeamId)}
+                                  alt={getTeamName(match.awayTeamId)}
+                                  className="h-full w-full object-cover"
+                                />
                               </div>
                             ) : (
                               <div
@@ -265,10 +283,19 @@ export default function ArbitrosPage() {
                                 {getTeamName(match.awayTeamId).substring(0, 2).toUpperCase()}
                               </div>
                             )}
+                            <p className="font-semibold text-lg">{getTeamName(match.awayTeamId)}</p>
+                            <p className="text-sm text-muted-foreground">Visitante</p>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-4 text-sm text-muted-foreground mt-3 pt-3 border-t">
+                        {/* Match info + acciones, similar a Mesa */}
+                        <div className="grid grid-cols-3 gap-2 text-sm mt-2 text-muted-foreground">
+                          {match.scheduledDate && (
+                            <div className="flex items-center gap-1">
+                              <Calendar className="h-4 w-4" />
+                              <span>{formatDate(match.scheduledDate)}</span>
+                            </div>
+                          )}
                           {match.scheduledTime && (
                             <div className="flex items-center gap-1">
                               <Clock className="h-4 w-4" />
@@ -279,19 +306,30 @@ export default function ArbitrosPage() {
                             <div className="flex items-center gap-1">
                               <MapPin className="h-4 w-4" />
                               <span>
-                                {getVenueName(match.venueId)} - {getCourtName(match.courtId)}
+                                {getVenueName(match.venueId)}
+                                {match.courtId ? ` - ${getCourtName(match.courtId)}` : ""}
                               </span>
                             </div>
                           )}
-                          <div className="ml-auto">
-                            <Button
-                              size="sm"
-                              onClick={() => startMatch(match.id)}
-                              disabled={match.status !== "programado"}
-                            >
-                              Iniciar partido
-                            </Button>
-                          </div>
+                        </div>
+
+                        <div className="flex flex-col sm:flex-row gap-2 mt-3">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="w-full sm:w-auto flex-1"
+                            onClick={() => setDetailMatch(match)}
+                          >
+                            Ver detalle
+                          </Button>
+                          <Button
+                            size="sm"
+                            className="w-full sm:w-auto flex-1"
+                            onClick={() => startMatch(match.id)}
+                            disabled={!(match.status === "programado" || match.status === "demorado") || match.assignmentRole !== "arbitro"}
+                          >
+                            Iniciar partido
+                          </Button>
                         </div>
                       </CardContent>
                     </Card>
@@ -404,6 +442,64 @@ export default function ArbitrosPage() {
           </Link>
         </div>
       </nav>
+
+      <Dialog
+        open={!!detailMatch}
+        onOpenChange={(open) => {
+          if (!open) setDetailMatch(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Detalle del partido</DialogTitle>
+            <DialogDescription>
+              Información del partido y tu función asignada.
+            </DialogDescription>
+          </DialogHeader>
+          {detailMatch && (
+            <div className="space-y-3 text-sm">
+              <div>
+                <p className="font-medium">Torneo</p>
+                <p className="text-muted-foreground">{getTournamentName(detailMatch.tournamentId)}</p>
+              </div>
+              <div>
+                <p className="font-medium">Equipos</p>
+                <p className="text-muted-foreground">
+                  {getTeamName(detailMatch.homeTeamId)} vs {getTeamName(detailMatch.awayTeamId)}
+                </p>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <p className="font-medium">Fecha</p>
+                  <p className="text-muted-foreground">
+                    {detailMatch.scheduledDate ? formatDate(detailMatch.scheduledDate) : "Sin fecha"}
+                  </p>
+                </div>
+                <div>
+                  <p className="font-medium">Hora</p>
+                  <p className="text-muted-foreground">{detailMatch.scheduledTime ?? "-"}</p>
+                </div>
+              </div>
+              <div>
+                <p className="font-medium">Sede y cancha</p>
+                <p className="text-muted-foreground">
+                  {detailMatch.venueId
+                    ? `${getVenueName(detailMatch.venueId)} - ${getCourtName(detailMatch.courtId)}`
+                    : "Sin sede"}
+                </p>
+              </div>
+              {detailMatch.assignmentRole && (
+                <div>
+                  <p className="font-medium">Tu función en este partido</p>
+                  <p className="text-muted-foreground">
+                    {detailMatch.assignmentRole === "arbitro" ? "Árbitro" : "Oficial de Mesa"}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -415,7 +511,8 @@ type MatchRow = {
   awayTeamId: string
   round: number
   phase: string
-  status: "programado" | "en_juego" | "finalizado"
+  status: "programado" | "en_juego" | "finalizado" | "suspendido" | "demorado"
+  assignmentRole?: "arbitro" | "oficial_mesa" | null
   scheduledAt?: Date
   scheduledDate?: Date
   scheduledTime?: string
@@ -433,6 +530,12 @@ type CourtRow = { id: string; name: string }
 
 function mapMatchFromDb(row: any): MatchRow {
   const scheduledAt = row.scheduled_at ? new Date(row.scheduled_at) : undefined
+  const rawScheduled: string | null = row.scheduled_at ?? null
+  let scheduledTime: string | undefined
+  if (typeof rawScheduled === "string") {
+    const match = rawScheduled.match(/T(\d{2}:\d{2})/)
+    if (match) scheduledTime = match[1]
+  }
   return {
     id: row.id,
     tournamentId: row.tournament_id,
@@ -441,14 +544,10 @@ function mapMatchFromDb(row: any): MatchRow {
     round: row.round,
     phase: row.phase,
     status: row.status,
+    assignmentRole: (row.assignment_role as "arbitro" | "oficial_mesa" | null) ?? null,
     scheduledAt,
     scheduledDate: scheduledAt,
-    scheduledTime: scheduledAt
-      ? scheduledAt.toLocaleTimeString("es-AR", {
-          hour: "2-digit",
-          minute: "2-digit",
-        })
-      : undefined,
+    scheduledTime,
     venueId: row.venue_id ?? null,
     courtId: row.court_id ?? null,
     homeScore: row.home_score ?? null,
