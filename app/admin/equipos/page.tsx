@@ -409,6 +409,11 @@ export default function EquiposPage() {
                     </div>
                   </div>
                 </div>
+                {error && (
+                  <p className="text-sm text-destructive mt-2">
+                    {error}
+                  </p>
+                )}
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setIsOpen(false)}>
@@ -534,8 +539,6 @@ export default function EquiposPage() {
           ))}
         </div>
       )}
-
-      {error && <p className="text-sm text-destructive">{error}</p>}
 
       <AlertDialog open={Boolean(deleteTarget)} onOpenChange={(open) => (!open ? setDeleteTarget(null) : undefined)}>
         <AlertDialogContent>

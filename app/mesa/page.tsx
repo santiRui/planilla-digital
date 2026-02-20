@@ -17,6 +17,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { LogoutButton } from "@/components/auth/logout-button"
 
 export default function MesaPage() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), [])
@@ -241,7 +242,7 @@ export default function MesaPage() {
     <div className="min-h-screen bg-background">
       {/* Header */}
       <header className="sticky top-0 z-10 border-b bg-card">
-        <div className="container mx-auto flex items-center justify-between p-4">
+        <div className="container mx-auto flex items-center justify-between p-4 gap-4">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-lg bg-primary flex items-center justify-center">
               <ClipboardList className="h-6 w-6 text-primary-foreground" />
@@ -253,15 +254,18 @@ export default function MesaPage() {
               </p>
             </div>
           </div>
-          <div
-            className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium ${
-              isOnline
-                ? "bg-[var(--color-success)]/10 text-[var(--color-success)]"
-                : "bg-destructive/10 text-destructive"
-            }`}
-          >
-            {isOnline ? <Wifi className="h-4 w-4" /> : <WifiOff className="h-4 w-4" />}
-            {isOnline ? "Online" : "Offline"}
+          <div className="flex items-center gap-3">
+            <div
+              className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium ${
+                isOnline
+                  ? "bg-[var(--color-success)]/10 text-[var(--color-success)]"
+                  : "bg-destructive/10 text-destructive"
+              }`}
+            >
+              {isOnline ? <Wifi className="h-4 w-4" /> : <WifiOff className="h-4 w-4" />}
+              {isOnline ? "Online" : "Offline"}
+            </div>
+            <LogoutButton />
           </div>
         </div>
       </header>

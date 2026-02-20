@@ -122,9 +122,19 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
       return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
 
+    // Primero eliminar relaciones en tablas que dependan del equipo (por ahora team_categories)
+    const { error: linksError } = await auth.adminClient.from("team_categories").delete().eq("team_id", id)
+    if (linksError) {
+      return NextResponse.json({ error: linksError.message }, { status: 400 })
+    }
+
     const { error } = await auth.adminClient.from("teams").delete().eq("id", id)
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 400 })
+      // Es probable que queden otras referencias (jugadores, partidos, etc.)
+      return NextResponse.json(
+        { error: "No se pudo eliminar el equipo. Verificá que no tenga jugadores o partidos asociados." },
+        { status: 400 },
+      )
     }
 
     return NextResponse.json({ ok: true })

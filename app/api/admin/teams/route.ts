@@ -57,6 +57,41 @@ export async function POST(req: Request) {
     const categories = (categoryIds ?? []).filter(Boolean)
     if (categories.length === 0 && categoryId) categories.push(categoryId)
 
+    // Validar unicidad de nombre dentro de las categorías asociadas (evita duplicados en un mismo torneo)
+    if (categories.length > 0) {
+      const { data: existingLinks, error: existingLinksError } = await adminClient
+        .from("team_categories")
+        .select("team_id, category_id")
+        .in("category_id", categories)
+
+      if (existingLinksError) {
+        return NextResponse.json({ error: existingLinksError.message }, { status: 400 })
+      }
+
+      const teamIds = Array.from(
+        new Set((existingLinks ?? []).map((r: any) => r.team_id as string | null).filter(Boolean)),
+      ) as string[]
+
+      if (teamIds.length > 0) {
+        const { data: teamsWithSameName, error: existingTeamsError } = await adminClient
+          .from("teams")
+          .select("id, name")
+          .in("id", teamIds)
+          .ilike("name", name)
+
+        if (existingTeamsError) {
+          return NextResponse.json({ error: existingTeamsError.message }, { status: 400 })
+        }
+
+        if ((teamsWithSameName ?? []).length > 0) {
+          return NextResponse.json(
+            { error: "Ya existe un equipo con ese nombre en este torneo/categoría." },
+            { status: 400 },
+          )
+        }
+      }
+    }
+
     const { data: team, error } = await adminClient
       .from("teams")
       .insert({

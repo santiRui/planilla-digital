@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { usePathname } from "next/navigation"
+import { usePathname, useRouter } from "next/navigation"
 import { cn } from "@/lib/utils"
 import {
   Trophy,
@@ -36,6 +36,7 @@ const navigation = [
 
 export function AdminSidebar() {
   const pathname = usePathname()
+  const router = useRouter()
   const [collapsed, setCollapsed] = useState(false)
 
   return (
@@ -104,7 +105,7 @@ export function AdminSidebar() {
         </nav>
 
         {/* Footer */}
-        <div className="border-t p-4">
+        <div className="border-t p-4 space-y-3">
           {!collapsed && (
             <div className="flex items-center gap-3">
               <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center">
@@ -115,6 +116,21 @@ export function AdminSidebar() {
                 <p className="text-xs text-muted-foreground">admin@torneo.com</p>
               </div>
             </div>
+          )}
+          {!collapsed && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full justify-center"
+              onClick={async () => {
+                const { createSupabaseBrowserClient } = await import("@/lib/supabase/browser")
+                const supabase = createSupabaseBrowserClient()
+                await supabase.auth.signOut()
+                router.replace("/login")
+              }}
+            >
+              Cerrar sesión
+            </Button>
           )}
         </div>
       </aside>

@@ -96,7 +96,7 @@ export default function LoginPage() {
             </Button>
 
             <div className="text-center">
-              <Link className="text-sm text-muted-foreground underline underline-offset-4" href="#">
+              <Link className="text-sm text-muted-foreground underline underline-offset-4" href="/reset-password">
                 Olvidé mi contraseña
               </Link>
             </div>

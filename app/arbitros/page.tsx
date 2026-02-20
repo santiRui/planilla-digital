@@ -9,6 +9,7 @@ import { BadgeStatus } from "@/components/ui/badge-status"
 import { ClipboardList, Calendar, MapPin, Clock, User } from "lucide-react"
 import { EmptyState } from "@/components/ui/empty-state"
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser"
+import { LogoutButton } from "@/components/auth/logout-button"
 
 export default function ArbitrosPage() {
   const router = useRouter()
@@ -177,6 +178,7 @@ export default function ArbitrosPage() {
               </p>
             </div>
           </div>
+          <LogoutButton />
         </div>
       </header>
 
