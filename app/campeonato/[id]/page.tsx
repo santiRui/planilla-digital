@@ -68,7 +68,17 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
   const [standings] = useState<any[]>([])
 
   const getLiveStateForMatch = (match: UiMatch) => {
-    // 1) Preferir estado vivo centralizado en Supabase
+    // Si el partido ya está finalizado, usamos siempre el resultado oficial de matches
+    if (match.status === "finalizado") {
+      return {
+        homeScore: match.homeScore ?? 0,
+        awayScore: match.awayScore ?? 0,
+        period: undefined,
+        gameTime: undefined,
+      }
+    }
+
+    // 1) Para partidos no finalizados, preferir estado vivo centralizado en Supabase
     if (
       typeof match.liveHomeScore === "number" ||
       typeof match.liveAwayScore === "number" ||
@@ -262,9 +272,62 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
 
       setMatches(uiMatches)
       setLoading(false)
+
+      // Suscripción en tiempo real a cambios de partidos de este torneo
+      if ((matchRows ?? []).length > 0) {
+        const channel = supabase
+          .channel("championship-matches-live")
+          .on(
+            "postgres_changes",
+            {
+              event: "UPDATE",
+              schema: "public",
+              table: "matches",
+              filter: `tournament_id=eq.${id}`,
+            },
+            (payload) => {
+              const updated = payload.new as any
+              const matchId = updated.id as string | undefined
+              if (!matchId) return
+
+              setMatches((current) => {
+                const exists = current.some((m) => m.id === matchId)
+                if (!exists) return current
+
+                return current.map((m) => {
+                  if (m.id !== matchId) return m
+
+                  return {
+                    ...m,
+                    status: (updated.status as UiMatch["status"]) ?? m.status,
+                    homeScore: updated.home_score ?? m.homeScore ?? null,
+                    awayScore: updated.away_score ?? m.awayScore ?? null,
+                    liveHomeScore: updated.live_home_score ?? null,
+                    liveAwayScore: updated.live_away_score ?? null,
+                    livePeriod: updated.live_period ?? null,
+                    liveGameTime: updated.live_game_time ?? null,
+                  }
+                })
+              })
+            },
+          )
+          .subscribe()
+
+        return () => {
+          supabase.removeChannel(channel)
+        }
+      }
+
+      setLoading(false)
     }
 
-    run()
+    const cleanupPromise = run()
+
+    return () => {
+      cleanupPromise?.then((cleanup) => {
+        if (typeof cleanup === "function") cleanup()
+      })
+    }
   }, [id, supabase])
 
   const finishedMatches = matches.filter((m) => m.status === "finalizado").length
@@ -521,8 +584,14 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
                                           >
                                             {live.homeScore} - {live.awayScore}
                                           </p>
-                                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                                            {m.status === "finalizado" ? "Finalizado" : "En juego"}
+                                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground text-center">
+                                            {m.status === "finalizado"
+                                              ? "Finalizado"
+                                              : `${
+                                                  typeof live.period === "number"
+                                                    ? `Cuarto ${live.period}`
+                                                    : "En juego"
+                                                } · ${formatGameClock(live.gameTime)}`}
                                           </span>
                                         </div>
                                       )

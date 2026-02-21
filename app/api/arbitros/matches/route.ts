@@ -62,7 +62,7 @@ export async function GET(req: Request) {
     const { data: matches, error: matchesError } = await auth.adminClient
       .from("matches")
       .select(
-        "id, tournament_id, home_team_id, away_team_id, round, phase, status, scheduled_at, venue_id, court_id, home_score, away_score, created_at",
+        "id, tournament_id, home_team_id, away_team_id, round, phase, status, scheduled_at, venue_id, court_id, home_score, away_score, live_home_score, live_away_score, live_period, live_game_time, created_at",
       )
       .in("id", matchIds)
 

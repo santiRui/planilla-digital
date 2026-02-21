@@ -123,6 +123,8 @@ export interface MatchEvent {
   y?: number
   reboundType?: "offensive" | "defensive"
   foulType?: "personal" | "technical" | "unsportsmanlike" | "disqualifying" | "fight"
+  victimTeamId?: string | null
+  victimPlayerId?: string | null
   period: number
   timestamp: Date
   gameTime: string // MM:SS

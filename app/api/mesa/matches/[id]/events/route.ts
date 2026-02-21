@@ -30,6 +30,8 @@ const eventSchema = z.object({
   y: z.number().optional().nullable(),
   reboundType: z.enum(["offensive", "defensive"]).optional().nullable(),
   foulType: z.enum(["personal", "technical", "unsportsmanlike", "disqualifying", "fight"]).optional().nullable(),
+  victimTeamId: z.string().optional().nullable(),
+  victimPlayerId: z.string().optional().nullable(),
   period: z.number().int().min(1),
   gameTime: z.string(),
   timestamp: z.string().datetime().optional().nullable(),
@@ -130,12 +132,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       y: ev.y ?? null,
       rebound_type: ev.reboundType ?? null,
       foul_type: ev.foulType ?? null,
+      victim_team_id: ev.victimTeamId ?? null,
+      victim_player_id: ev.victimPlayerId ?? null,
     }
 
     const { data, error } = await auth.adminClient
       .from("match_events")
       .insert(insertRow)
-      .select("id, match_id, team_id, player_id, type, points, period, game_time, occurred_at, created_by, shot_type, made, x, y, rebound_type, foul_type")
+      .select("id, match_id, team_id, player_id, type, points, period, game_time, occurred_at, created_by, shot_type, made, x, y, rebound_type, foul_type, victim_team_id, victim_player_id")
       .single()
 
     if (error || !data) {

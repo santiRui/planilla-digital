@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useMemo } from "react"
+import { useState, useEffect, useCallback, useMemo, Fragment } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -323,9 +323,14 @@ export default function PlanillaPage() {
   const [selectedTeam, setSelectedTeam] = useState<"home" | "away">("home")
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null)
   const [pendingReboundTeamId, setPendingReboundTeamId] = useState<string | null>(null)
-  // Falta personal: selección pendiente del jugador que la recibe (ya sabemos quién la comete)
+  // Falta con víctima: selección pendiente del jugador que la recibe (ya sabemos quién la comete y el tipo)
   const [pendingPersonalFoul, setPendingPersonalFoul] = useState<
-    { committerId: string; committerTeamSide: "home" | "away"; targetTeamSide: "home" | "away" } | null
+    {
+      committerId: string
+      committerTeamSide: "home" | "away"
+      targetTeamSide: "home" | "away"
+      foulType: MatchEvent["foulType"]
+    } | null
   >(null)
   // Tapa: selección pendiente del jugador rival que recibe la tapa
   const [pendingBlock, setPendingBlock] = useState<
@@ -536,7 +541,15 @@ export default function PlanillaPage() {
       setSelectedTeam(data.selectedTeam)
       setSelectedPlayerId(data.selectedPlayerId)
       setPendingReboundTeamId(data.pendingReboundTeamId)
-      setPendingPersonalFoul(data.pendingPersonalFoul)
+      // pendingPersonalFoul en localStorage no tenía foulType antes; por compatibilidad, asumimos "personal".
+      setPendingPersonalFoul(
+        data.pendingPersonalFoul
+          ? {
+              ...data.pendingPersonalFoul,
+              foulType: (data.pendingPersonalFoul as any).foulType ?? "personal",
+            }
+          : null,
+      )
       setPendingBlock(data.pendingBlock)
       setPendingTurnover(data.pendingTurnover)
       setPendingAssistTeamId(data.pendingAssistTeamId)
@@ -782,7 +795,7 @@ export default function PlanillaPage() {
         const { data: rows, error } = await supabase
           .from("match_events")
           .select(
-            "id, match_id, team_id, player_id, type, points, period, game_time, occurred_at, shot_type, made, x, y, rebound_type, foul_type",
+            "id, match_id, team_id, player_id, type, points, period, game_time, occurred_at, shot_type, made, x, y, rebound_type, foul_type, victim_team_id, victim_player_id",
           )
           .eq("match_id", matchId)
           .order("occurred_at", { ascending: true })
@@ -805,6 +818,8 @@ export default function PlanillaPage() {
           y: r.y ?? undefined,
           reboundType: r.rebound_type ?? undefined,
           foulType: r.foul_type ?? undefined,
+          victimTeamId: r.victim_team_id ?? undefined,
+          victimPlayerId: r.victim_player_id ?? undefined,
         }))
 
         setLocalEvents(mapped)
@@ -850,22 +865,29 @@ export default function PlanillaPage() {
     setAwayScore(match.awayScore ?? 0)
   }, [match?.homeScore, match?.awayScore, match?.id, restoredFromStorage])
 
-  // Sincronizar estado vivo (score, período, tiempo) en Supabase
+  // Sincronizar estado vivo (score, período, tiempo) en Supabase vía API protegida
   useEffect(() => {
     if (!matchId) return
 
     const timeout = setTimeout(async () => {
       try {
-        await supabase
-          .from("matches")
-          .update({
-            live_home_score: homeScore,
-            live_away_score: awayScore,
-            live_period: period,
-            live_game_time: Math.floor(gameTime),
-            live_updated_at: new Date().toISOString(),
-          })
-          .eq("id", matchId)
+        const { data: sessionData } = await supabase.auth.getSession()
+        const token = sessionData.session?.access_token
+        if (!token) return
+
+        await fetch(`/api/mesa/matches/${matchId}/live`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            homeScore,
+            awayScore,
+            period,
+            gameTime: Math.floor(gameTime),
+          }),
+        })
       } catch {
         // Si falla, mantenemos el estado local y se puede reintentar más tarde
       }
@@ -1212,7 +1234,7 @@ export default function PlanillaPage() {
 
       const teamId = teamSide === "home" ? homeTeam.id : awayTeam.id
       const timeouts = teamTimeouts[teamSide]
-      const totalUsed = timeouts.firstHalf + timeouts.secondHalf
+      const totalUsed = timeouts.firstHalf + timeouts.secondHalf + timeouts.overtime
 
       // Reglas: 2 tiempos en la primera mitad (P1-2), 3 en la segunda mitad (P3-4), total 5.
       // En prórrogas: 1 tiempo por equipo y por prórroga, independiente de los anteriores.
@@ -1229,7 +1251,8 @@ export default function PlanillaPage() {
       const event: MatchEvent = {
         id: `ev-${Date.now()}`,
         matchId,
-        playerId: null,
+        // Para tiempos muertos no hay jugador asociado; usamos el teamId como identificador neutro.
+        playerId: teamId,
         teamId,
         type: "timeout",
         period,
@@ -1294,13 +1317,21 @@ export default function PlanillaPage() {
 
   // Add foul
   const addFoul = useCallback(
-    (playerId: string, teamSide: "home" | "away", foulType: MatchEvent["foulType"] = "personal") => {
+    (
+      playerId: string,
+      teamSide: "home" | "away",
+      foulType: MatchEvent["foulType"] = "personal",
+      victimPlayerId?: string | null,
+    ) => {
       if (match?.status !== "en_juego" || !homeTeam || !awayTeam) return
 
       // Verificar si la entidad (jugador / staff / banca) ya está descalificada
       if (isEntityDisqualified(playerId)) {
         return
       }
+
+      const victimTeamId =
+        typeof victimPlayerId === "string" ? (teamSide === "home" ? awayTeam.id : homeTeam.id) : undefined
 
       const event: MatchEvent = {
         id: `ev-${Date.now()}`,
@@ -1312,6 +1343,8 @@ export default function PlanillaPage() {
         period,
         timestamp: new Date(),
         gameTime: formatTime(gameTime),
+        victimTeamId,
+        victimPlayerId: victimPlayerId ?? null,
       }
 
       setLocalEvents((prev) => [...prev, event])
@@ -1953,10 +1986,16 @@ export default function PlanillaPage() {
               return
             }
             // Si hay una falta personal pendiente, este jugador es quien LA RECIBE.
-            // La falta se contabiliza sobre el jugador que la cometió (botón que inició la acción).
+            // La falta se contabiliza sobre el jugador que la cometió (botón que inició la acción),
+            // y este jugador de la cancha es quien la recibe.
             if (pendingPersonalFoul) {
               if (pendingPersonalFoul.targetTeamSide === teamSide) {
-                addFoul(pendingPersonalFoul.committerId, pendingPersonalFoul.committerTeamSide, "personal")
+                addFoul(
+                  pendingPersonalFoul.committerId,
+                  pendingPersonalFoul.committerTeamSide,
+                  pendingPersonalFoul.foulType ?? "personal",
+                  player.id,
+                )
                 setPendingPersonalFoul(null)
               }
               return
@@ -1983,6 +2022,8 @@ export default function PlanillaPage() {
                     period,
                     timestamp: new Date(),
                     gameTime: formatTime(gameTime),
+                    victimTeamId: targetTeam?.teamId,
+                    victimPlayerId: targetTeam ? player.id : null,
                   }
                   setLocalEvents((prev) => [...prev, event])
                   addMatchEvent(event)
@@ -2060,6 +2101,7 @@ export default function PlanillaPage() {
                 committerId: player.id,
                 committerTeamSide: teamSide,
                 targetTeamSide,
+                foulType: "personal",
               })
             }}
             disabled={
@@ -2747,6 +2789,7 @@ export default function PlanillaPage() {
                         }
 
                         let title: string
+                        let subtitleExtra: React.ReactNode = null
 
                         if (e.type === "substitution_in") {
                           // Buscar el evento de salida asociado (misma jugada)
@@ -2763,6 +2806,9 @@ export default function PlanillaPage() {
                             ? [...homePlayers, ...awayPlayers].find((p) => p.id === pairedOut.playerId)
                             : undefined
 
+                          const inJersey = inPlayer?.jerseyNumber ? `#${inPlayer.jerseyNumber} ` : ""
+                          const outJersey = outPlayer?.jerseyNumber ? `#${outPlayer.jerseyNumber} ` : ""
+
                           const inName = inPlayer
                             ? `${inPlayer.lastName.toUpperCase()}, ${inPlayer.firstName}`
                             : "Jugador entra"
@@ -2770,8 +2816,49 @@ export default function PlanillaPage() {
                             ? `${outPlayer.lastName.toUpperCase()}, ${outPlayer.firstName}`
                             : "Jugador sale"
 
-                          title = `Cambio: sale ${outName} / entra ${inName}`
-                          personName = "" // Ya incluimos nombres en el título
+                          const teamColor = isHome ? homeColor : awayColor
+
+                          return (
+                            <Fragment key={e.id}>
+                              {/* Sustitución entra (última acción) */}
+                              <div className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
+                                <div className="flex items-start gap-2 min-w-0">
+                                  <div
+                                    className="mt-0.5 h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-semibold text-white"
+                                    style={{ backgroundColor: teamColor }}
+                                  >
+                                    ⇄
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="text-sm font-semibold truncate">Sustitución entra</div>
+                                    <div className="text-xs text-muted-foreground truncate">
+                                      {e.gameTime} | {teamName} | {inJersey}
+                                      {inName}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Sustitución sale (acción inmediatamente anterior) */}
+                              <div className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
+                                <div className="flex items-start gap-2 min-w-0">
+                                  <div
+                                    className="mt-0.5 h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-semibold text-white"
+                                    style={{ backgroundColor: teamColor }}
+                                  >
+                                    ⇄
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="text-sm font-semibold truncate">Sustitución sale</div>
+                                    <div className="text-xs text-muted-foreground truncate">
+                                      {e.gameTime} | {teamName} | {outJersey}
+                                      {outName}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </Fragment>
+                          )
                         } else {
                           if (e.foulType === "technical" && e.playerId.startsWith("tech-")) {
                             personName = "Técnico"
@@ -2786,10 +2873,16 @@ export default function PlanillaPage() {
                               title = `+${e.points}`
                               break
                             case "shot":
-                              title = `${e.made ? "Anotó" : "Falló"} ${e.shotType}P`
+                              if (e.shotType === 2) {
+                                title = e.made ? "Doble anotado" : "Doble fallado"
+                              } else if (e.shotType === 3) {
+                                title = e.made ? "Triple anotado" : "Triple fallado"
+                              } else {
+                                title = e.made ? "Lanzamiento anotado" : "Lanzamiento fallado"
+                              }
                               break
                             case "free_throw":
-                              title = `${e.made ? "Anotó" : "Falló"} TL`
+                              title = e.made ? "Libre anotado" : "Libre fallado"
                               break
                             case "rebound":
                               title = `Rebote ${e.reboundType === "offensive" ? "O" : "D"}`
@@ -2797,19 +2890,19 @@ export default function PlanillaPage() {
                             case "foul":
                               switch (e.foulType) {
                                 case "technical":
-                                  title = "Falta Técnica"
+                                  title = "Falta técnica cometida"
                                   break
                                 case "unsportsmanlike":
-                                  title = "Falta Antideportiva"
+                                  title = "Antideportiva cometida"
                                   break
                                 case "disqualifying":
-                                  title = "Falta Descalificante"
+                                  title = "Falta descalificante cometida"
                                   break
                                 case "fight":
                                   title = "Reyerta"
                                   break
                                 default:
-                                  title = "Falta Personal"
+                                  title = "Falta personal cometida"
                               }
                               break
                             case "assist":
@@ -2819,7 +2912,7 @@ export default function PlanillaPage() {
                               title = "Pérdida"
                               break
                             case "steal":
-                              title = "Robo"
+                              title = "Recuperación"
                               break
                             case "block":
                               title = "Tapa"
@@ -2832,19 +2925,156 @@ export default function PlanillaPage() {
                           }
                         }
 
+                        const victimPlayer =
+                          (e.type === "foul" || e.type === "block") && e.victimPlayerId
+                            ? [...homePlayers, ...awayPlayers].find((p) => p.id === e.victimPlayerId)
+                            : undefined
+
+                        const victimLabel = victimPlayer
+                          ? `${victimPlayer.jerseyNumber ? `#${victimPlayer.jerseyNumber} ` : ""}${victimPlayer.lastName.toUpperCase()}, ${victimPlayer.firstName}`
+                          : null
+
+                        // Para faltas con víctima, renderizamos dos filas: recibida (última acción) y cometida.
+                        if (e.type === "foul" && victimLabel) {
+                          const victimTeamName = isHome ? awayTeam.name : homeTeam.name
+
+                          return (
+                            <Fragment key={e.id}>
+                              {/* Primero la falta recibida (última acción en el tiempo) */}
+                              <div
+                                className="flex items-center justify-between gap-3 rounded-md border px-3 py-2"
+                              >
+                                <div className="flex items-start gap-2 min-w-0">
+                                  <div
+                                    className="mt-0.5 h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-semibold text-white"
+                                    style={{ backgroundColor: isHome ? awayColor : homeColor }}
+                                  >
+                                    F
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="text-sm font-semibold truncate">Falta recibida</div>
+                                    <div className="text-xs text-muted-foreground truncate">
+                                      {e.gameTime} | {victimTeamName} | {victimLabel}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Luego la falta cometida (acción inmediatamente anterior) */}
+                              <div
+                                className="flex items-center justify-between gap-3 rounded-md border px-3 py-2"
+                              >
+                                <div className="flex items-start gap-2 min-w-0">
+                                  <div
+                                    className="mt-0.5 h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-semibold text-white"
+                                    style={{ backgroundColor: isHome ? homeColor : awayColor }}
+                                  >
+                                    F
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="text-sm font-semibold truncate">{title}</div>
+                                    <div className="text-xs text-muted-foreground truncate">
+                                      {e.gameTime} | {teamName}
+                                      {personName && ` | ${personName}`}
+                                    </div>
+                                    {subtitleExtra && (
+                                      <div className="text-xs text-muted-foreground truncate">{subtitleExtra}</div>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            </Fragment>
+                          )
+                        }
+
+                        // Para tapas con víctima, renderizamos dos filas: tapa recibida (última acción) y tapa.
+                        if (e.type === "block" && victimLabel) {
+                          const victimTeamName = isHome ? awayTeam.name : homeTeam.name
+
+                          return (
+                            <Fragment key={e.id}>
+                              {/* Primero la tapa recibida (última acción en el tiempo) */}
+                              <div
+                                className="flex items-center justify-between gap-3 rounded-md border px-3 py-2"
+                              >
+                                <div className="flex items-start gap-2 min-w-0">
+                                  <div
+                                    className="mt-0.5 h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-semibold text-white"
+                                    style={{ backgroundColor: isHome ? awayColor : homeColor }}
+                                  >
+                                    T
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="text-sm font-semibold truncate">Tapa recibida</div>
+                                    <div className="text-xs text-muted-foreground truncate">
+                                      {e.gameTime} | {victimTeamName} | {victimLabel}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Luego la tapa (acción del bloqueador) */}
+                              <div
+                                className="flex items-center justify-between gap-3 rounded-md border px-3 py-2"
+                              >
+                                <div className="flex items-start gap-2 min-w-0">
+                                  <div
+                                    className="mt-0.5 h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-semibold text-white"
+                                    style={{ backgroundColor: isHome ? homeColor : awayColor }}
+                                  >
+                                    T
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="text-sm font-semibold truncate">Tapa</div>
+                                    <div className="text-xs text-muted-foreground truncate">
+                                      {e.gameTime} | {teamName}
+                                      {personName && ` | ${personName}`}
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </Fragment>
+                          )
+                        }
+
+                        // Resto de eventos (y faltas sin víctima explícita) en una sola fila
                         return (
-                          <div key={e.id} className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
-                            <div className="min-w-0">
-                              <div className="text-sm font-semibold truncate">{title}</div>
-                              <div className="text-xs text-muted-foreground truncate">
-                                {e.gameTime} | {teamName}
-                                {personName && ` | ${personName}`}
+                          <div
+                            key={e.id}
+                            className="flex items-center justify-between gap-3 rounded-md border px-3 py-2"
+                          >
+                            <div className="flex items-start gap-2 min-w-0">
+                              <div
+                                className="mt-0.5 h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-semibold text-white"
+                                style={{ backgroundColor: isHome ? homeColor : awayColor }}
+                              >
+                                {e.type === "shot" || e.type === "points"
+                                  ? "+"
+                                  : e.type === "free_throw"
+                                    ? "TL"
+                                    : e.type === "foul"
+                                      ? "F"
+                                      : e.type === "rebound"
+                                        ? "R"
+                                        : e.type === "steal"
+                                          ? "R"
+                                          : e.type === "block"
+                                            ? "T"
+                                            : e.type === "turnover"
+                                              ? "P"
+                                              : ""}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="text-sm font-semibold truncate">{title}</div>
+                                <div className="text-xs text-muted-foreground truncate">
+                                  {e.gameTime} | {teamName}
+                                  {personName && ` | ${personName}`}
+                                </div>
+                                {subtitleExtra && (
+                                  <div className="text-xs text-muted-foreground truncate">{subtitleExtra}</div>
+                                )}
                               </div>
                             </div>
-                            <div
-                              className="h-2.5 w-2.5 rounded-full"
-                              style={{ backgroundColor: isHome ? homeColor : awayColor }}
-                            />
                           </div>
                         )
                       })}
@@ -3698,7 +3928,14 @@ export default function PlanillaPage() {
                     className="w-full justify-start"
                     onClick={() => {
                       if (personalFoulPlayerId && personalFoulTeamSide) {
-                        addFoul(personalFoulPlayerId, personalFoulTeamSide, "personal")
+                        const targetTeamSide: "home" | "away" =
+                          personalFoulTeamSide === "home" ? "away" : "home"
+                        setPendingPersonalFoul({
+                          committerId: personalFoulPlayerId,
+                          committerTeamSide: personalFoulTeamSide,
+                          targetTeamSide,
+                          foulType: "personal",
+                        })
                         setShowPersonalFoulDialog(false)
                         setPersonalFoulPlayerId(null)
                         setPersonalFoulTeamSide(null)
@@ -3808,8 +4045,8 @@ export default function PlanillaPage() {
                 }
               </div>
               
-              {/* Mostrar jugadores para todos los tipos de falta excepto personal */}
-              {selectedFoulType !== "technical" && selectedFoulType !== "unsportsmanlike" && selectedFoulType !== "disqualifying" && selectedFoulType !== "fight" ? (
+              {/* Mostrar jugadores para tipos de falta que se registran directamente (si los hubiera) */}
+              {selectedFoulType !== "unsportsmanlike" && selectedFoulType !== "disqualifying" ? (
                 // Faltas personales: solo jugadores
                 <div className="space-y-1 max-h-48 overflow-auto">
                   {(selectedFoulTeam === "home" ? homePlayers : awayPlayers).map((player) => (
@@ -3819,6 +4056,7 @@ export default function PlanillaPage() {
                       size="sm"
                       className="w-full justify-start text-xs"
                       onClick={() => {
+                        // Para estos tipos que no requieren víctima, registramos directo
                         addFoul(player.id, selectedFoulTeam, selectedFoulType)
                         setShowOtherFoulDialog(false)
                       }}
@@ -3845,8 +4083,22 @@ export default function PlanillaPage() {
                           size="sm"
                           className="w-full justify-start text-xs"
                           onClick={() => {
-                            addFoul(player.id, selectedFoulTeam, selectedFoulType)
-                            setShowOtherFoulDialog(false)
+                            // Para antideportiva y descalificante exigimos seleccionar víctima en cancha
+                            if (selectedFoulType === "unsportsmanlike" || selectedFoulType === "disqualifying") {
+                              const targetTeamSide: "home" | "away" =
+                                selectedFoulTeam === "home" ? "away" : "home"
+                              setPendingPersonalFoul({
+                                committerId: player.id,
+                                committerTeamSide: selectedFoulTeam,
+                                targetTeamSide,
+                                foulType: selectedFoulType,
+                              })
+                              setShowOtherFoulDialog(false)
+                            } else {
+                              // Técnica y reyerta se registran sin víctima específica
+                              addFoul(player.id, selectedFoulTeam, selectedFoulType)
+                              setShowOtherFoulDialog(false)
+                            }
                           }}
                           disabled={isEntityDisqualified(player.id)}
                         >
@@ -3912,7 +4164,7 @@ export default function PlanillaPage() {
                   )}
 
                   {/* Sección de falta técnica a la banca */}
-                  {selectedFoulType === "technical" && (
+                  {(selectedFoulType as any) === "technical" && (
                     <div>
                       <div className="text-xs font-medium text-muted-foreground mb-1">Banca</div>
                       {(() => {

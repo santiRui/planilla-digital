@@ -289,6 +289,43 @@ export default function FixturePage() {
   const getTeamLogo = (id: string) => teams.find((t) => t.id === id)?.logoUrl || ""
   const getVenueName = (id?: string | null) => venues.find((v) => v.id === id)?.name || "-"
 
+  const getLiveStateForMatch = (match: MatchRow) => {
+    // Si el partido ya está finalizado, usamos siempre el resultado oficial de matches
+    if (match.status === "finalizado") {
+      return {
+        homeScore: match.homeScore ?? 0,
+        awayScore: match.awayScore ?? 0,
+      }
+    }
+
+    // 1) Para partidos no finalizados, preferir estado vivo centralizado si existe
+    if (
+      typeof match.liveHomeScore === "number" ||
+      typeof match.liveAwayScore === "number" ||
+      typeof match.livePeriod === "number" ||
+      typeof match.liveGameTime === "number"
+    ) {
+      return {
+        homeScore: match.liveHomeScore ?? match.homeScore ?? 0,
+        awayScore: match.liveAwayScore ?? match.awayScore ?? 0,
+      }
+    }
+
+    // 2) Fallback al marcador básico
+    return {
+      homeScore: match.homeScore ?? 0,
+      awayScore: match.awayScore ?? 0,
+    }
+  }
+
+  const formatGameClock = (seconds?: number | null) => {
+    if (typeof seconds !== "number") return "--:--"
+    const s = Math.max(0, Math.floor(seconds))
+    const m = Math.floor(s / 60)
+    const r = s % 60
+    return `${m.toString().padStart(2, "0")}:${r.toString().padStart(2, "0")}`
+  }
+
   const toggleGroup = (key: string) => {
     setClosedGroups((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]))
   }
@@ -529,16 +566,21 @@ export default function FixturePage() {
                             <div className="flex items-center gap-2">
                               {match.status === "finalizado" ? (
                                 <div className="flex items-center gap-2 text-2xl font-bold">
-                                  <span>{match.homeScore}</span>
+                                  <span>{match.homeScore ?? 0}</span>
                                   <span className="text-muted-foreground">-</span>
-                                  <span>{match.awayScore}</span>
+                                  <span>{match.awayScore ?? 0}</span>
                                 </div>
                               ) : match.status === "en_juego" ? (
-                                <div className="flex items-center gap-2 text-2xl font-bold text-[var(--color-live)]">
-                                  <span>{match.homeScore || 0}</span>
-                                  <span className="text-muted-foreground">-</span>
-                                  <span>{match.awayScore || 0}</span>
-                                </div>
+                                (() => {
+                                  const live = getLiveStateForMatch(match)
+                                  return (
+                                    <div className="flex items-center gap-2 text-2xl font-bold text-[var(--color-live)]">
+                                      <span>{live.homeScore}</span>
+                                      <span className="text-muted-foreground">-</span>
+                                      <span>{live.awayScore}</span>
+                                    </div>
+                                  )
+                                })()
                               ) : (
                                 <span className="text-lg text-muted-foreground">vs</span>
                               )}
@@ -568,14 +610,23 @@ export default function FixturePage() {
                             </div>
                           </div>
 
-                          {/* Date and Status */}
+                          {/* Date, Status and Live Time */}
                           <div className="flex items-center gap-4 sm:border-l sm:pl-4">
                             <div className="text-sm text-right">
                               <p className="text-muted-foreground">{formatDate(match.scheduledDate)}</p>
                               <p className="text-muted-foreground">{getVenueName(match.venueId)}</p>
                               {match.scheduledTime && <p className="font-medium">{match.scheduledTime}</p>}
                             </div>
-                            <BadgeStatus status={match.status} />
+                            <div className="flex flex-col items-end gap-1 min-w-[80px]">
+                              <BadgeStatus status={match.status} />
+                              {match.status === "en_juego" && (
+                                <span className="text-[10px] uppercase tracking-wide text-[var(--color-live)]">
+                                  {typeof match.livePeriod === "number" ? `Cuarto ${match.livePeriod}` : "En juego"}
+                                  {" · "}
+                                  {formatGameClock(match.liveGameTime)}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -667,6 +718,10 @@ type MatchRow = {
   venueId?: string | null
   homeScore?: number
   awayScore?: number
+  liveHomeScore?: number | null
+  liveAwayScore?: number | null
+  livePeriod?: number | null
+  liveGameTime?: number | null
   zoneCode?: string | null
   playoffSeriesId?: string | null
   seriesGameNumber?: number | null
@@ -694,6 +749,10 @@ function mapMatchFromDb(row: any): MatchRow {
     venueId: row.venue_id ?? null,
     homeScore: row.home_score ?? undefined,
     awayScore: row.away_score ?? undefined,
+    liveHomeScore: row.live_home_score ?? null,
+    liveAwayScore: row.live_away_score ?? null,
+    livePeriod: row.live_period ?? null,
+    liveGameTime: row.live_game_time ?? null,
     zoneCode: row.zone_code ?? null,
     playoffSeriesId: row.playoff_series_id ?? null,
     seriesGameNumber: row.series_game_number ?? null,

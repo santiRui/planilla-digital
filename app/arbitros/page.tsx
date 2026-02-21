@@ -101,12 +101,99 @@ export default function ArbitrosPage() {
     run()
   }, [supabase])
 
+  // Suscripción en tiempo real a cambios en los partidos asignados
+  useEffect(() => {
+    const channel = supabase
+      .channel("referee-matches-live")
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "matches",
+        },
+        (payload) => {
+          const updated = payload.new as any
+          const matchId = updated.id as string | undefined
+          if (!matchId) return
+
+          setMatches((current) => {
+            const exists = current.some((m) => m.id === matchId)
+            if (!exists) return current
+
+            return current.map((m) => {
+              if (m.id !== matchId) return m
+
+              return {
+                ...m,
+                status: (updated.status as MatchRow["status"]) ?? m.status,
+                homeScore: updated.home_score ?? m.homeScore ?? null,
+                awayScore: updated.away_score ?? m.awayScore ?? null,
+                liveHomeScore: updated.live_home_score ?? null,
+                liveAwayScore: updated.live_away_score ?? null,
+                livePeriod: updated.live_period ?? null,
+                liveGameTime: updated.live_game_time ?? null,
+              }
+            })
+          })
+        },
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [supabase])
+
   const getTeamName = (id: string) => teams.find((t) => t.id === id)?.name || "TBD"
   const getTeamColor = (id: string) => teams.find((t) => t.id === id)?.primaryColor || "#666"
   const getTeamLogo = (id: string) => teams.find((t) => t.id === id)?.logoUrl || ""
   const getTournamentName = (id: string) => tournaments.find((t) => t.id === id)?.name || "Torneo"
   const getVenueName = (id?: string | null) => venues.find((v) => v.id === id)?.name || "-"
   const getCourtName = (id?: string | null) => courts.find((c) => c.id === id)?.name || "-"
+
+  const getLiveStateForMatch = (match: MatchRow) => {
+    // Si el partido ya está finalizado, usamos siempre el resultado oficial de matches
+    if (match.status === "finalizado") {
+      return {
+        homeScore: match.homeScore ?? 0,
+        awayScore: match.awayScore ?? 0,
+        period: undefined,
+        gameTime: undefined,
+      }
+    }
+
+    // 1) Para partidos no finalizados, preferir estado vivo centralizado en Supabase si está presente
+    if (
+      typeof match.liveHomeScore === "number" ||
+      typeof match.liveAwayScore === "number" ||
+      typeof match.livePeriod === "number" ||
+      typeof match.liveGameTime === "number"
+    ) {
+      return {
+        homeScore: match.liveHomeScore ?? match.homeScore ?? 0,
+        awayScore: match.liveAwayScore ?? match.awayScore ?? 0,
+        period: typeof match.livePeriod === "number" ? match.livePeriod : undefined,
+        gameTime: typeof match.liveGameTime === "number" ? match.liveGameTime : undefined,
+      }
+    }
+
+    // 2) Fallback al marcador básico de la tabla matches
+    return {
+      homeScore: match.homeScore ?? 0,
+      awayScore: match.awayScore ?? 0,
+      period: undefined,
+      gameTime: undefined,
+    }
+  }
+
+  const formatGameClock = (seconds?: number) => {
+    if (typeof seconds !== "number") return "--:--"
+    const s = Math.max(0, Math.floor(seconds))
+    const m = Math.floor(s / 60)
+    const r = s % 60
+    return `${m.toString().padStart(2, "0")}:${r.toString().padStart(2, "0")}`
+  }
 
   const formatDate = (date?: Date) => {
     if (!date) return "Sin fecha"
@@ -259,9 +346,21 @@ export default function ArbitrosPage() {
                           </div>
                           <div className="px-4">
                             {match.status === "en_juego" ? (
-                              <span className="text-2xl font-bold text-[var(--color-live)]">
-                                {match.homeScore ?? 0} - {match.awayScore ?? 0}
-                              </span>
+                              (() => {
+                                const live = getLiveStateForMatch(match)
+                                return (
+                                  <div className="flex flex-col items-center gap-1">
+                                    <span className="text-2xl font-bold text-[var(--color-live)]">
+                                      {live.homeScore} - {live.awayScore}
+                                    </span>
+                                    <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                                      {typeof live.period === "number" ? `Cuarto ${live.period}` : "Tiempo de juego"}
+                                      {" · "}
+                                      {formatGameClock(live.gameTime)}
+                                    </span>
+                                  </div>
+                                )
+                              })()
                             ) : (
                               <span className="text-2xl font-bold text-muted-foreground">VS</span>
                             )}
@@ -520,6 +619,10 @@ type MatchRow = {
   courtId?: string | null
   homeScore?: number | null
   awayScore?: number | null
+  liveHomeScore?: number | null
+  liveAwayScore?: number | null
+  livePeriod?: number | null
+  liveGameTime?: number | null
   createdAt: Date
 }
 
@@ -552,6 +655,10 @@ function mapMatchFromDb(row: any): MatchRow {
     courtId: row.court_id ?? null,
     homeScore: row.home_score ?? null,
     awayScore: row.away_score ?? null,
+    liveHomeScore: row.live_home_score ?? null,
+    liveAwayScore: row.live_away_score ?? null,
+    livePeriod: row.live_period ?? null,
+    liveGameTime: row.live_game_time ?? null,
     createdAt: row.created_at ? new Date(row.created_at) : new Date(0),
   }
 }

@@ -122,9 +122,61 @@ export default function MesaPage() {
       setCourts((courtsRes.data ?? []).map((c: any) => ({ id: c.id, name: c.name })) as CourtRow[])
 
       setLoading(false)
+
+      // Suscribirse a cambios en los partidos asignados para reflejar marcador en vivo
+      if ((nextMatches ?? []).length > 0) {
+        const channel = supabase
+          .channel("mesa-matches-live")
+          .on(
+            "postgres_changes",
+            {
+              event: "UPDATE",
+              schema: "public",
+              table: "matches",
+            },
+            (payload) => {
+              const updated = payload.new as any
+              const matchId = updated.id as string | undefined
+              if (!matchId) return
+
+              setMatches((current) => {
+                const exists = current.some((m) => m.id === matchId)
+                if (!exists) return current
+
+                return current.map((m) => {
+                  if (m.id !== matchId) return m
+
+                  // Preservar datos derivados (assignmentRole, fechas ya parseadas) donde sea posible
+                  return {
+                    ...m,
+                    status: (updated.status as MatchRow["status"]) ?? m.status,
+                    homeScore: updated.home_score ?? m.homeScore ?? null,
+                    awayScore: updated.away_score ?? m.awayScore ?? null,
+                    liveHomeScore: updated.live_home_score ?? null,
+                    liveAwayScore: updated.live_away_score ?? null,
+                    livePeriod: updated.live_period ?? null,
+                    liveGameTime: updated.live_game_time ?? null,
+                  }
+                })
+              })
+            },
+          )
+          .subscribe()
+
+        return () => {
+          supabase.removeChannel(channel)
+        }
+      }
     }
 
-    run()
+    const cleanupPromise = run()
+
+    return () => {
+      // En caso de que el efecto se limpie antes de que termine run
+      cleanupPromise?.then((cleanup) => {
+        if (typeof cleanup === "function") cleanup()
+      })
+    }
   }, [supabase])
 
   const getTeamName = (id: string) => teams.find((t) => t.id === id)?.name || "TBD"
@@ -134,7 +186,17 @@ export default function MesaPage() {
   const getCourtName = (id?: string | null) => courts.find((c) => c.id === id)?.name || "-"
 
   const getLiveStateForMatch = (match: MatchRow) => {
-    // 1) Preferir estado vivo centralizado en Supabase si está presente
+    // Si el partido ya está finalizado, usamos siempre el resultado oficial de matches
+    if (match.status === "finalizado") {
+      return {
+        homeScore: match.homeScore ?? 0,
+        awayScore: match.awayScore ?? 0,
+        period: undefined,
+        gameTime: undefined,
+      }
+    }
+
+    // 1) Para partidos no finalizados, preferir estado vivo centralizado en Supabase si está presente
     if (
       typeof match.liveHomeScore === "number" ||
       typeof match.liveAwayScore === "number" ||

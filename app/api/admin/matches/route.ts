@@ -66,7 +66,7 @@ export async function GET(req: Request) {
     let q = auth.adminClient
       .from("matches")
       .select(
-        "id, tournament_id, home_team_id, away_team_id, round, phase, status, scheduled_at, venue_id, court_id, home_score, away_score, zone_code, playoff_series_id, series_game_number, created_at, match_official_assignments(user_id, role)",
+        "id, tournament_id, home_team_id, away_team_id, round, phase, status, scheduled_at, venue_id, court_id, home_score, away_score, live_home_score, live_away_score, live_period, live_game_time, zone_code, playoff_series_id, series_game_number, created_at, match_official_assignments(user_id, role)",
       )
       .order("round", { ascending: true })
       .order("created_at", { ascending: true })

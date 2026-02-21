@@ -317,6 +317,8 @@ create table if not exists public.match_events (
   match_id uuid not null references public.matches(id) on delete cascade,
   team_id uuid not null references public.teams(id) on delete restrict,
   player_id uuid references public.players(id) on delete set null,
+  victim_team_id uuid references public.teams(id) on delete set null,
+  victim_player_id uuid references public.players(id) on delete set null,
   type public.match_event_type not null,
   points int,
   period int not null,
