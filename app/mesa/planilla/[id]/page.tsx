@@ -736,6 +736,12 @@ export default function PlanillaPage() {
     }
 
     void retryPending()
+
+    const interval = setInterval(() => {
+      void retryPending()
+    }, 10000)
+
+    return () => clearInterval(interval)
   }, [isOnline, pendingEventIds, localEvents, sendEventToServer])
 
   // Reintentar borrar eventos deshechos cuando volvemos a estar online
@@ -1159,28 +1165,162 @@ export default function PlanillaPage() {
   // Estadísticas por jugador derivadas de los eventos locales
   const getPlayerStats = useCallback(
     (playerId: string) => {
-      const events = localEvents.filter((e) => e.playerId === playerId)
+      const playerEvents = localEvents.filter(
+        (e) => e.playerId === playerId || e.victimPlayerId === playerId,
+      )
 
-      let points = 0
-      let fouls = 0
-      let rebounds = 0
-      let blocks = 0
-      let turnovers = 0
-      let assists = 0
+      let totalSeconds = 0
+      const periods = new Set(playerEvents.map((e) => e.period))
 
-      for (const e of events) {
-        if (e.type === "points" && e.points) points += e.points
-        else if (e.type === "shot" && e.made && e.shotType) points += e.shotType
-        else if (e.type === "free_throw" && e.made) points += 1
+      for (const periodValue of periods) {
+        const periodEvents = playerEvents.filter((e) => e.period === periodValue)
+        if (!periodEvents.length) continue
 
-        if (e.type === "foul") fouls += 1
-        if (e.type === "rebound") rebounds += 1
-        if (e.type === "block") blocks += 1
-        if (e.type === "turnover") turnovers += 1
-        if (e.type === "assist") assists += 1
+        const timesInSeconds = periodEvents
+          .map((e) => {
+            const [mm, ss] = e.gameTime.split(":").map((v) => Number(v))
+            if (!Number.isFinite(mm) || !Number.isFinite(ss)) return null
+            return mm * 60 + ss
+          })
+          .filter((v): v is number => v !== null)
+
+        if (!timesInSeconds.length) continue
+
+        const maxRemaining = Math.max(...timesInSeconds)
+        const minRemaining = Math.min(...timesInSeconds)
+
+        if (Number.isFinite(maxRemaining) && Number.isFinite(minRemaining) && maxRemaining >= minRemaining) {
+          totalSeconds += maxRemaining - minRemaining
+        }
       }
 
-      return { points, fouls, rebounds, blocks, turnovers, assists }
+      const minutesPlayed = totalSeconds / 60
+
+      let points = 0
+
+      let t1Made = 0
+      let t1Att = 0
+
+      let t2Made = 0
+      let t2Att = 0
+
+      let t3Made = 0
+      let t3Att = 0
+
+      let rebounds = 0
+      let assists = 0
+      let steals = 0
+      let turnovers = 0
+      let blocksCommitted = 0
+      let blocksReceived = 0
+      let foulsCommitted = 0
+      let foulsReceived = 0
+
+      let rating = 0
+
+      for (const e of localEvents) {
+        const isActor = e.playerId === playerId
+        const isVictim = e.victimPlayerId === playerId
+
+        if (!isActor && !isVictim) continue
+
+        if (isActor) {
+          // Anotaciones: la valoración suma 1 por cada punto anotado
+          // (por eso un jugador con 10 pts parte de Val = 10).
+          if (e.type === "points" && e.points) {
+            points += e.points
+            rating += e.points
+          } else if (e.type === "shot" && e.shotType) {
+            if (e.shotType === 2) {
+              t2Att += 1
+              if (e.made) {
+                t2Made += 1
+                points += 2
+                rating += 2
+              } else {
+                // tiro de dos fallado
+                rating -= 1
+              }
+            } else if (e.shotType === 3) {
+              t3Att += 1
+              if (e.made) {
+                t3Made += 1
+                points += 3
+                rating += 3
+              } else {
+                // tiro de tres fallado
+                rating -= 1
+              }
+            }
+          } else if (e.type === "free_throw") {
+            t1Att += 1
+            if (e.made) {
+              t1Made += 1
+              points += 1
+              rating += 1
+            } else {
+              // tiro libre fallado
+              rating -= 1
+            }
+          }
+
+          if (e.type === "rebound") {
+            rebounds += 1
+            rating += 1
+          }
+          if (e.type === "assist") {
+            assists += 1
+            rating += 1
+          }
+          if (e.type === "steal") {
+            steals += 1
+            rating += 1
+          }
+          if (e.type === "turnover") {
+            turnovers += 1
+            rating -= 1
+          }
+          if (e.type === "block") {
+            blocksCommitted += 1
+            rating += 1
+          }
+          if (e.type === "foul") {
+            foulsCommitted += 1
+            rating -= 1
+          }
+        }
+
+        if (isVictim) {
+          if (e.type === "block") {
+            blocksReceived += 1
+            rating -= 1
+          }
+          if (e.type === "foul") {
+            foulsReceived += 1
+            rating += 1
+          }
+        }
+      }
+
+      return {
+        minutes: minutesPlayed,
+        points,
+        t1Made,
+        t1Att,
+        t2Made,
+        t2Att,
+        t3Made,
+        t3Att,
+        rebounds,
+        assists,
+        steals,
+        turnovers,
+        blocksCommitted,
+        blocksReceived,
+        foulsCommitted,
+        foulsReceived,
+        rating,
+      }
     },
     [localEvents],
   )
@@ -1580,7 +1720,74 @@ export default function PlanillaPage() {
       awayScore,
     })
     setSyncStatus("syncing")
+
+    // 1) Persistir resultado del partido en la API existente
     await persistMatch({ status: "finalizado", homeScore, awayScore })
+
+    // 2) Calcular estadísticas por jugador y enviarlas al backend
+    try {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData.session?.access_token
+      if (token) {
+        const allPlayers = [...homePlayers, ...awayPlayers]
+        const statsPayload = allPlayers.map((player) => {
+          const {
+            minutes,
+            points,
+            t1Made,
+            t1Att,
+            t2Made,
+            t2Att,
+            t3Made,
+            t3Att,
+            rebounds,
+            assists,
+            steals,
+            turnovers,
+            blocksCommitted,
+            blocksReceived,
+            foulsCommitted,
+            foulsReceived,
+            rating,
+          } = getPlayerStats(player.id)
+
+          return {
+            playerId: player.id,
+            teamId: player.teamId,
+            minutes,
+            points,
+            t1Made,
+            t1Att,
+            t2Made,
+            t2Att,
+            t3Made,
+            t3Att,
+            rebounds,
+            assists,
+            steals,
+            turnovers,
+            blocksCommitted,
+            blocksReceived,
+            foulsCommitted,
+            foulsReceived,
+            rating,
+          }
+        })
+
+        await fetch(`/api/mesa/matches/${matchId}/stats`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ stats: statsPayload }),
+        })
+      }
+    } catch (error) {
+      console.error("[stats] Failed to persist match_player_stats", error)
+      // No bloqueamos el flujo de cierre del partido
+    }
+
     setSyncStatus("synced")
     router.push("/mesa")
   }
@@ -1965,7 +2172,7 @@ export default function PlanillaPage() {
   }
 
   const PlayerButton = ({ player, teamSide }: { player: Player; teamSide: "home" | "away" }) => {
-    const { points: playerPoints, fouls: playerFouls } = getPlayerStats(player.id)
+    const { points: playerPoints, foulsCommitted: playerFouls } = getPlayerStats(player.id)
 
     const isSelected = selectedPlayerId === player.id
     const isDisqualified = disqualifiedPlayers.has(player.id)
@@ -3303,26 +3510,60 @@ export default function PlanillaPage() {
 
           <TabsContent value="estadisticas" className="m-0 h-full overflow-auto p-3">
             <div className="grid gap-3 lg:grid-cols-2">
+              {/* Local */}
               <div className="rounded-lg border bg-card overflow-auto">
                 <div className="border-b px-3 py-2 text-sm font-semibold">{homeTeam.name} – Estadísticas</div>
                 <div className="p-3">
-                  <div className="min-w-[520px] overflow-x-auto">
+                  <div className="min-w-[900px] overflow-x-auto">
                     <table className="w-full text-xs border-collapse">
                       <thead>
                         <tr className="border-b text-[11px] text-muted-foreground">
                           <th className="px-2 py-1 text-left w-10">#</th>
                           <th className="px-2 py-1 text-left w-40">Jugador</th>
+                          <th className="px-2 py-1 text-right w-12">Min</th>
                           <th className="px-2 py-1 text-right w-12">Pts</th>
-                          <th className="px-2 py-1 text-right w-16">Faltas</th>
+                          <th className="px-2 py-1 text-right w-16">T1</th>
+                          <th className="px-2 py-1 text-right w-16">T2</th>
+                          <th className="px-2 py-1 text-right w-16">T3</th>
                           <th className="px-2 py-1 text-right w-16">Reb</th>
-                          <th className="px-2 py-1 text-right w-16">Tap</th>
-                          <th className="px-2 py-1 text-right w-16">Per</th>
                           <th className="px-2 py-1 text-right w-16">Asis</th>
+                          <th className="px-2 py-1 text-right w-16">Rec</th>
+                          <th className="px-2 py-1 text-right w-16">Per</th>
+                          <th className="px-2 py-1 text-right w-16">Tap C</th>
+                          <th className="px-2 py-1 text-right w-16">Tap R</th>
+                          <th className="px-2 py-1 text-right w-16">FC</th>
+                          <th className="px-2 py-1 text-right w-16">FR</th>
+                          <th className="px-2 py-1 text-right w-16">Val</th>
                         </tr>
                       </thead>
                       <tbody>
                         {homePlayers.map((player, index) => {
-                          const { points, fouls, rebounds, blocks, turnovers, assists } = getPlayerStats(player.id)
+                          const {
+                            minutes,
+                            points,
+                            t1Made,
+                            t1Att,
+                            t2Made,
+                            t2Att,
+                            t3Made,
+                            t3Att,
+                            rebounds,
+                            assists,
+                            steals,
+                            turnovers,
+                            blocksCommitted,
+                            blocksReceived,
+                            foulsCommitted,
+                            foulsReceived,
+                            rating,
+                          } = getPlayerStats(player.id)
+
+                          const minutesDisplay = `${Math.floor(minutes)
+                            .toString()
+                            .padStart(2, "0")}:${Math.floor((minutes % 1) * 60)
+                            .toString()
+                            .padStart(2, "0")}`
+
                           return (
                             <tr
                               key={player.id}
@@ -3330,12 +3571,20 @@ export default function PlanillaPage() {
                             >
                               <td className="px-2 py-1 text-left font-semibold">{player.jerseyNumber}</td>
                               <td className="px-2 py-1 text-left whitespace-nowrap">{player.lastName.toUpperCase()}, {player.firstName}</td>
+                              <td className="px-2 py-1 text-right">{minutesDisplay}</td>
                               <td className="px-2 py-1 text-right font-semibold">{points}</td>
-                              <td className="px-2 py-1 text-right">{fouls}</td>
+                              <td className="px-2 py-1 text-right">{t1Made}/{t1Att}</td>
+                              <td className="px-2 py-1 text-right">{t2Made}/{t2Att}</td>
+                              <td className="px-2 py-1 text-right">{t3Made}/{t3Att}</td>
                               <td className="px-2 py-1 text-right">{rebounds}</td>
-                              <td className="px-2 py-1 text-right">{blocks}</td>
-                              <td className="px-2 py-1 text-right">{turnovers}</td>
                               <td className="px-2 py-1 text-right">{assists}</td>
+                              <td className="px-2 py-1 text-right">{steals}</td>
+                              <td className="px-2 py-1 text-right">{turnovers}</td>
+                              <td className="px-2 py-1 text-right">{blocksCommitted}</td>
+                              <td className="px-2 py-1 text-right">{blocksReceived}</td>
+                              <td className="px-2 py-1 text-right">{foulsCommitted}</td>
+                              <td className="px-2 py-1 text-right">{foulsReceived}</td>
+                              <td className="px-2 py-1 text-right font-semibold">{rating}</td>
                             </tr>
                           )
                         })}
@@ -3345,26 +3594,59 @@ export default function PlanillaPage() {
                 </div>
               </div>
 
+              {/* Visitante */}
               <div className="rounded-lg border bg-card overflow-auto">
                 <div className="border-b px-3 py-2 text-sm font-semibold">{awayTeam.name} – Estadísticas</div>
                 <div className="p-3">
-                  <div className="min-w-[520px] overflow-x-auto">
+                  <div className="min-w-[900px] overflow-x-auto">
                     <table className="w-full text-xs border-collapse">
                       <thead>
                         <tr className="border-b text-[11px] text-muted-foreground">
                           <th className="px-2 py-1 text-left w-10">#</th>
                           <th className="px-2 py-1 text-left w-40">Jugador</th>
+                          <th className="px-2 py-1 text-right w-12">Min</th>
                           <th className="px-2 py-1 text-right w-12">Pts</th>
-                          <th className="px-2 py-1 text-right w-16">Faltas</th>
+                          <th className="px-2 py-1 text-right w-16">T1</th>
+                          <th className="px-2 py-1 text-right w-16">T2</th>
+                          <th className="px-2 py-1 text-right w-16">T3</th>
                           <th className="px-2 py-1 text-right w-16">Reb</th>
-                          <th className="px-2 py-1 text-right w-16">Tap</th>
-                          <th className="px-2 py-1 text-right w-16">Per</th>
                           <th className="px-2 py-1 text-right w-16">Asis</th>
+                          <th className="px-2 py-1 text-right w-16">Rec</th>
+                          <th className="px-2 py-1 text-right w-16">Per</th>
+                          <th className="px-2 py-1 text-right w-16">Tap C</th>
+                          <th className="px-2 py-1 text-right w-16">Tap R</th>
+                          <th className="px-2 py-1 text-right w-16">FC</th>
+                          <th className="px-2 py-1 text-right w-16">FR</th>
+                          <th className="px-2 py-1 text-right w-16">Val</th>
                         </tr>
                       </thead>
                       <tbody>
                         {awayPlayers.map((player, index) => {
-                          const { points, fouls, rebounds, blocks, turnovers, assists } = getPlayerStats(player.id)
+                          const {
+                            minutes,
+                            points,
+                            t1Made,
+                            t1Att,
+                            t2Made,
+                            t2Att,
+                            t3Made,
+                            t3Att,
+                            rebounds,
+                            assists,
+                            steals,
+                            turnovers,
+                            blocksCommitted,
+                            blocksReceived,
+                            foulsCommitted,
+                            foulsReceived,
+                            rating,
+                          } = getPlayerStats(player.id)
+
+                          const minutesDisplay = `${Math.floor(minutes)
+                            .toString()
+                            .padStart(2, "0")}:${Math.floor((minutes % 1) * 60)
+                            .toString()
+                            .padStart(2, "0")}`
                           return (
                             <tr
                               key={player.id}
@@ -3372,12 +3654,20 @@ export default function PlanillaPage() {
                             >
                               <td className="px-2 py-1 text-left font-semibold">{player.jerseyNumber}</td>
                               <td className="px-2 py-1 text-left whitespace-nowrap">{player.lastName.toUpperCase()}, {player.firstName}</td>
+                              <td className="px-2 py-1 text-right">{minutesDisplay}</td>
                               <td className="px-2 py-1 text-right font-semibold">{points}</td>
-                              <td className="px-2 py-1 text-right">{fouls}</td>
+                              <td className="px-2 py-1 text-right">{t1Made}/{t1Att}</td>
+                              <td className="px-2 py-1 text-right">{t2Made}/{t2Att}</td>
+                              <td className="px-2 py-1 text-right">{t3Made}/{t3Att}</td>
                               <td className="px-2 py-1 text-right">{rebounds}</td>
-                              <td className="px-2 py-1 text-right">{blocks}</td>
-                              <td className="px-2 py-1 text-right">{turnovers}</td>
                               <td className="px-2 py-1 text-right">{assists}</td>
+                              <td className="px-2 py-1 text-right">{steals}</td>
+                              <td className="px-2 py-1 text-right">{turnovers}</td>
+                              <td className="px-2 py-1 text-right">{blocksCommitted}</td>
+                              <td className="px-2 py-1 text-right">{blocksReceived}</td>
+                              <td className="px-2 py-1 text-right">{foulsCommitted}</td>
+                              <td className="px-2 py-1 text-right">{foulsReceived}</td>
+                              <td className="px-2 py-1 text-right font-semibold">{rating}</td>
                             </tr>
                           )
                         })}
@@ -3774,14 +4064,13 @@ export default function PlanillaPage() {
 
                         // Máximo 5 jugadores en cancha (solo contando habilitados)
                         if (count >= 5) return cleaned
-
                         return [...cleaned, player.id]
                       })
                     }}
                   >
-                    <span className="font-bold">{player.jerseyNumber}</span>
-                    <span className="truncate max-w-[72px]">
-                      {player.lastName.toUpperCase()}, {player.firstName}
+                    <span className="text-xs font-semibold">#{player.jerseyNumber}</span>
+                    <span className="text-[11px] truncate max-w-[72px]">
+                      {player.lastName.toUpperCase()}
                     </span>
                   </button>
                 )

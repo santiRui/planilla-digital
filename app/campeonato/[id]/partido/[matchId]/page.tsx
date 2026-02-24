@@ -43,6 +43,8 @@ type UiEvent = {
   period: number
   gameTime: string
   timestamp: string
+  playerId?: string
+  victimPlayerId?: string
   teamId?: string
   teamName?: string
   playerName?: string
@@ -55,6 +57,38 @@ type UiEvent = {
   reboundType?: string | null
   victimPlayerName?: string | null
   victimJerseyNumber?: number | null
+}
+
+type UiPlayerStat = {
+  playerId: string
+  teamId: string
+  jerseyNumber: number | null
+  playerName: string
+  minutes: number
+  points: number
+  t1Made: number
+  t1Att: number
+  t2Made: number
+  t2Att: number
+  t3Made: number
+  t3Att: number
+  rebounds: number
+  assists: number
+  steals: number
+  turnovers: number
+  blocksCommitted: number
+  blocksReceived: number
+  foulsCommitted: number
+  foulsReceived: number
+  rating: number
+}
+
+type UiPlayer = {
+  id: string
+  teamId: string
+  firstName: string
+  lastName: string
+  jerseyNumber: number | null
 }
 
 type MatchRow = {
@@ -114,6 +148,168 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
   const [error, setError] = useState<string | null>(null)
   const [match, setMatch] = useState<UiMatchDetail | null>(null)
   const [events, setEvents] = useState<UiEvent[]>([])
+  const [homePlayers, setHomePlayers] = useState<UiPlayer[]>([])
+  const [awayPlayers, setAwayPlayers] = useState<UiPlayer[]>([])
+  const [activeTab, setActiveTab] = useState<"historial" | "estadisticas">("historial")
+
+  // Estadísticas derivadas en vivo a partir de los eventos públicos
+  const playerStats = useMemo<UiPlayerStat[]>(() => {
+    if (!match) return []
+
+    const byPlayer = new Map<string, UiPlayerStat & { periods: Map<number, number[]> }>()
+
+    const ensurePlayer = (playerId: string | undefined, teamId: string | undefined, ev: UiEvent): UiPlayerStat & {
+      periods: Map<number, number[]>
+    } | null => {
+      if (!playerId || !teamId) return null
+
+      if (!byPlayer.has(playerId)) {
+        const periods = new Map<number, number[]>()
+        const base: UiPlayerStat & { periods: Map<number, number[]> } = {
+          playerId,
+          teamId,
+          jerseyNumber: ev.jerseyNumber ?? null,
+          playerName:
+            ev.playerName ??
+            ev.victimPlayerName ??
+            "Jugador",
+          minutes: 0,
+          points: 0,
+          t1Made: 0,
+          t1Att: 0,
+          t2Made: 0,
+          t2Att: 0,
+          t3Made: 0,
+          t3Att: 0,
+          rebounds: 0,
+          assists: 0,
+          steals: 0,
+          turnovers: 0,
+          blocksCommitted: 0,
+          blocksReceived: 0,
+          foulsCommitted: 0,
+          foulsReceived: 0,
+          rating: 0,
+          periods,
+        }
+        byPlayer.set(playerId, base)
+      }
+
+      const stat = byPlayer.get(playerId)!
+      // Acumular tiempos para estimar minutos jugados
+      if (ev.gameTime && typeof ev.period === "number") {
+        const [mm, ss] = ev.gameTime.split(":").map((v) => Number(v))
+        if (Number.isFinite(mm) && Number.isFinite(ss)) {
+          const total = mm * 60 + ss
+          const arr = stat.periods.get(ev.period) ?? []
+          arr.push(total)
+          stat.periods.set(ev.period, arr)
+        }
+      }
+      return stat
+    }
+
+    for (const ev of events) {
+      const actor = ensurePlayer(ev.playerId, ev.teamId, ev)
+      const victim = ensurePlayer(ev.victimPlayerId, ev.teamId, ev)
+
+      const isActor = !!actor
+      const isVictim = !!victim
+
+      if (!isActor && !isVictim) continue
+
+      if (actor) {
+        // Anotaciones: la valoración suma 1 por cada punto anotado
+        if (ev.type === "points" && ev.points) {
+          actor.points += ev.points
+          actor.rating += ev.points
+        } else if (ev.type === "shot" && ev.shotType) {
+          if (ev.shotType === 2) {
+            actor.t2Att += 1
+            if (ev.made) {
+              actor.t2Made += 1
+              actor.points += 2
+              actor.rating += 2
+            } else {
+              actor.rating -= 1
+            }
+          } else if (ev.shotType === 3) {
+            actor.t3Att += 1
+            if (ev.made) {
+              actor.t3Made += 1
+              actor.points += 3
+              actor.rating += 3
+            } else {
+              actor.rating -= 1
+            }
+          }
+        } else if (ev.type === "free_throw") {
+          actor.t1Att += 1
+          if (ev.made) {
+            actor.t1Made += 1
+            actor.points += 1
+            actor.rating += 1
+          } else {
+            actor.rating -= 1
+          }
+        }
+
+        if (ev.type === "rebound") {
+          actor.rebounds += 1
+          actor.rating += 1
+        }
+        if (ev.type === "assist") {
+          actor.assists += 1
+          actor.rating += 1
+        }
+        if (ev.type === "steal") {
+          actor.steals += 1
+          actor.rating += 1
+        }
+        if (ev.type === "turnover") {
+          actor.turnovers += 1
+          actor.rating -= 1
+        }
+        if (ev.type === "block") {
+          actor.blocksCommitted += 1
+          actor.rating += 1
+        }
+        if (ev.type === "foul") {
+          actor.foulsCommitted += 1
+          actor.rating -= 1
+        }
+      }
+
+      if (victim) {
+        if (ev.type === "block") {
+          victim.blocksReceived += 1
+          victim.rating -= 1
+        }
+        if (ev.type === "foul") {
+          victim.foulsReceived += 1
+          victim.rating += 1
+        }
+      }
+    }
+
+    // Calcular minutos jugados a partir de tiempos por período
+    for (const stat of byPlayer.values()) {
+      let totalSeconds = 0
+      for (const [, times] of stat.periods) {
+        if (!times.length) continue
+        const maxRemaining = Math.max(...times)
+        const minRemaining = Math.min(...times)
+        if (Number.isFinite(maxRemaining) && Number.isFinite(minRemaining) && maxRemaining >= minRemaining) {
+          totalSeconds += maxRemaining - minRemaining
+        }
+      }
+      stat.minutes = totalSeconds / 60
+      // @ts-expect-error periods is solo auxiliar, no forma parte de UiPlayerStat
+      delete stat.periods
+    }
+
+    return Array.from(byPlayer.values())
+  }, [events, match])
 
   const getLiveStateForMatch = (m: UiMatchDetail | null) => {
     if (!m) {
@@ -198,10 +394,16 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
       let awayTeamPrimaryColor: string | null = null
 
       if (teamIds.length > 0) {
-        const { data: teamRows } = await supabase
-          .from("teams")
-          .select("id, name, logo_url, primary_color")
-          .in("id", teamIds)
+        const [{ data: teamRows }, { data: playerRows }] = await Promise.all([
+          supabase
+            .from("teams")
+            .select("id, name, logo_url, primary_color")
+            .in("id", teamIds),
+          supabase
+            .from("players")
+            .select("id, team_id, first_name, last_name, jersey_number")
+            .in("team_id", teamIds),
+        ])
 
         type TeamUiInfo = { name: string; logoUrl: string | null; primaryColor: string | null }
 
@@ -230,6 +432,17 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
           awayTeamLogoUrl = awayTeam.logoUrl
           awayTeamPrimaryColor = awayTeam.primaryColor
         }
+
+        const allPlayers: UiPlayer[] = (playerRows ?? []).map((p: any) => ({
+          id: p.id as string,
+          teamId: p.team_id as string,
+          firstName: p.first_name as string,
+          lastName: p.last_name as string,
+          jerseyNumber: (p.jersey_number as number | null) ?? null,
+        }))
+
+        setHomePlayers(allPlayers.filter((p) => p.teamId === mRow.home_team_id))
+        setAwayPlayers(allPlayers.filter((p) => p.teamId === mRow.away_team_id))
       }
 
       const scheduledAt = mRow.scheduled_at ? new Date(mRow.scheduled_at) : undefined
@@ -263,7 +476,7 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
       const { data: evRows, error: evError } = await supabase
         .from("match_events")
         .select(
-          "id, team_id, type, period, game_time, occurred_at, points, shot_type, made, team:teams!match_events_team_id_fkey(name, primary_color), player:players!match_events_player_id_fkey(first_name, last_name, jersey_number), victim_player:players!match_events_victim_player_id_fkey(first_name, last_name, jersey_number)",
+          "id, team_id, player_id, victim_player_id, type, period, game_time, occurred_at, points, shot_type, made, team:teams!match_events_team_id_fkey(name, primary_color), player:players!match_events_player_id_fkey(first_name, last_name, jersey_number), victim_player:players!match_events_victim_player_id_fkey(first_name, last_name, jersey_number)",
         )
         .eq("match_id", matchId)
         .order("occurred_at", { ascending: false })
@@ -278,31 +491,34 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
         })
 
         uiEvents = (evRows ?? []).map((e: any) => ({
-        id: e.id,
-        type: e.type as string,
-        period: e.period,
-        gameTime: e.game_time as string,
-        timestamp: (e.occurred_at as string) ?? new Date().toISOString(),
-        teamId: e.team_id as string | undefined,
-        teamName: e.team?.name as string | undefined,
-        playerName:
-          e.player?.first_name && e.player?.last_name
-            ? `${e.player.last_name}, ${e.player.first_name}`
-            : undefined,
-        points: e.points ?? null,
-        shotType: e.shot_type ?? null,
-        made: typeof e.made === "boolean" ? e.made : null,
-        teamColor: e.team?.primary_color ?? null,
-        jerseyNumber: e.player?.jersey_number ?? null,
-        victimPlayerName:
-          e.victim_player?.first_name && e.victim_player?.last_name
-            ? `${e.victim_player.last_name}, ${e.victim_player.first_name}`
-            : null,
-        victimJerseyNumber: e.victim_player?.jersey_number ?? null,
+          id: e.id,
+          type: e.type as string,
+          period: e.period,
+          gameTime: e.game_time as string,
+          timestamp: (e.occurred_at as string) ?? new Date().toISOString(),
+          playerId: e.player_id as string | undefined,
+          victimPlayerId: e.victim_player_id as string | undefined,
+          teamId: e.team_id as string | undefined,
+          teamName: e.team?.name as string | undefined,
+          playerName:
+            e.player?.first_name && e.player?.last_name
+              ? `${e.player.last_name}, ${e.player.first_name}`
+              : undefined,
+          points: e.points ?? null,
+          shotType: e.shot_type ?? null,
+          made: typeof e.made === "boolean" ? e.made : null,
+          teamColor: e.team?.primary_color ?? null,
+          jerseyNumber: e.player?.jersey_number ?? null,
+          victimPlayerName:
+            e.victim_player?.first_name && e.victim_player?.last_name
+              ? `${e.victim_player.last_name}, ${e.victim_player.first_name}`
+              : null,
+          victimJerseyNumber: e.victim_player?.jersey_number ?? null,
         }))
       }
 
       setEvents(uiEvents)
+
       setLoading(false)
     }
 
@@ -317,7 +533,7 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
       const { data: evRows, error: evError } = await supabase
         .from("match_events")
         .select(
-          "id, team_id, type, period, game_time, occurred_at, points, shot_type, made, team:teams!match_events_team_id_fkey(name, primary_color), player:players!match_events_player_id_fkey(first_name, last_name, jersey_number), victim_player:players!match_events_victim_player_id_fkey(first_name, last_name, jersey_number)",
+          "id, team_id, player_id, victim_player_id, type, period, game_time, occurred_at, points, shot_type, made, team:teams!match_events_team_id_fkey(name, primary_color), player:players!match_events_player_id_fkey(first_name, last_name, jersey_number), victim_player:players!match_events_victim_player_id_fkey(first_name, last_name, jersey_number)",
         )
         .eq("match_id", matchId)
         .order("occurred_at", { ascending: false })
@@ -337,6 +553,8 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
         period: e.period,
         gameTime: e.game_time as string,
         timestamp: (e.occurred_at as string) ?? new Date().toISOString(),
+        playerId: e.player_id as string | undefined,
+        victimPlayerId: e.victim_player_id as string | undefined,
         teamId: e.team_id as string | undefined,
         teamName: e.team?.name as string | undefined,
         playerName:
@@ -387,7 +605,7 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
       const { data: evRows, error: evError } = await supabase
         .from("match_events")
         .select(
-          "id, team_id, type, period, game_time, occurred_at, points, shot_type, made, team:teams!match_events_team_id_fkey(name, primary_color), player:players!match_events_player_id_fkey(first_name, last_name, jersey_number), victim_player:players!match_events_victim_player_id_fkey(first_name, last_name, jersey_number)",
+          "id, team_id, player_id, victim_player_id, type, period, game_time, occurred_at, points, shot_type, made, team:teams!match_events_team_id_fkey(name, primary_color), player:players!match_events_player_id_fkey(first_name, last_name, jersey_number), victim_player:players!match_events_victim_player_id_fkey(first_name, last_name, jersey_number)",
         )
         .eq("match_id", matchId)
         .order("occurred_at", { ascending: false })
@@ -402,6 +620,8 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
         period: e.period,
         gameTime: e.game_time as string,
         timestamp: (e.occurred_at as string) ?? new Date().toISOString(),
+        playerId: e.player_id as string | undefined,
+        victimPlayerId: e.victim_player_id as string | undefined,
         teamId: e.team_id as string | undefined,
         teamName: e.team?.name as string | undefined,
         playerName:
@@ -421,7 +641,7 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
       }))
 
       setEvents(uiEvents)
-    }, 8000) // cada 8 segundos
+    }, 10000) // cada 10 segundos
 
     return () => clearInterval(interval)
   }, [matchId, supabase])
@@ -484,6 +704,24 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
   }
 
   const live = getLiveStateForMatch(match)
+
+  const statsByPlayerId = useMemo(() => {
+    const map = new Map<string, UiPlayerStat>()
+    for (const s of playerStats) {
+      map.set(s.playerId, s)
+    }
+    return map
+  }, [playerStats])
+
+  // Sincronizar pestaña activa desde localStorage solo en el cliente para evitar
+  // desajustes entre el HTML del servidor y el primer render del cliente.
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    const stored = window.localStorage.getItem(`public-match-tab:${matchId}`)
+    if (stored === "estadisticas" || stored === "historial") {
+      setActiveTab(stored)
+    }
+  }, [matchId])
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -628,10 +866,20 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
 
       {/* Contenido: Historial & Estadísticas */}
       <main className="flex-1 mx-auto max-w-7xl w-full px-4 py-8 sm:px-6 lg:px-8">
-        <Tabs defaultValue="historial" className="flex flex-col gap-4">
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => {
+            const next = value === "estadisticas" ? "estadisticas" : "historial"
+            setActiveTab(next)
+            if (typeof window !== "undefined") {
+              window.localStorage.setItem(`public-match-tab:${matchId}`, next)
+            }
+          }}
+          className="flex flex-col gap-4"
+        >
           <TabsList className="w-fit">
             <TabsTrigger value="historial">Historial</TabsTrigger>
-            <TabsTrigger value="estadisticas">Estadísticas (próximo)</TabsTrigger>
+            <TabsTrigger value="estadisticas">Estadísticas</TabsTrigger>
           </TabsList>
 
           <TabsContent value="historial" className="mt-2">
@@ -898,13 +1146,151 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
               <CardHeader>
                 <CardTitle>Estadísticas del partido</CardTitle>
                 <CardDescription>
-                  Esta sección se implementará próximamente.
+                  Estadísticas finales por jugador basadas en la planilla digital.
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <p className="text-sm text-muted-foreground">
-                  Próximamente vas a poder ver acá estadísticas avanzadas del partido.
-                </p>
+                {(!match || !match.homeTeamId || !match.awayTeamId) && (
+                  <p className="text-sm text-muted-foreground">
+                    No se pudo determinar los equipos del partido.
+                  </p>
+                )}
+
+                {match && match.homeTeamId && match.awayTeamId && (
+                  <div className="grid gap-6 lg:grid-cols-2">
+                    {/* Local */}
+                    <div className="rounded-lg border bg-card overflow-auto">
+                      <div className="border-b px-3 py-2 text-sm font-semibold">{match.homeTeamName} – Estadísticas</div>
+                      <div className="p-3">
+                        <div className="min-w-[900px] overflow-x-auto">
+                          <table className="w-full text-xs border-collapse">
+                            <thead>
+                              <tr className="border-b text-[11px] text-muted-foreground">
+                                <th className="px-2 py-1 text-left w-10">#</th>
+                                <th className="px-2 py-1 text-left w-40">Jugador</th>
+                                <th className="px-2 py-1 text-right w-12">Min</th>
+                                <th className="px-2 py-1 text-right w-12">Pts</th>
+                                <th className="px-2 py-1 text-right w-16">T1</th>
+                                <th className="px-2 py-1 text-right w-16">T2</th>
+                                <th className="px-2 py-1 text-right w-16">T3</th>
+                                <th className="px-2 py-1 text-right w-16">Reb</th>
+                                <th className="px-2 py-1 text-right w-16">Asis</th>
+                                <th className="px-2 py-1 text-right w-16">Rec</th>
+                                <th className="px-2 py-1 text-right w-16">Per</th>
+                                <th className="px-2 py-1 text-right w-16">Tap C</th>
+                                <th className="px-2 py-1 text-right w-16">Tap R</th>
+                                <th className="px-2 py-1 text-right w-16">FC</th>
+                                <th className="px-2 py-1 text-right w-16">FR</th>
+                                <th className="px-2 py-1 text-right w-16">Val</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {homePlayers
+                                .slice()
+                                .sort((a, b) => (a.jerseyNumber ?? 999) - (b.jerseyNumber ?? 999))
+                                .map((p) => {
+                                  const s = statsByPlayerId.get(p.id)
+                                  const minutes = s?.minutes ?? 0
+                                  const minutesDisplay = `${Math.floor(minutes)
+                                    .toString()
+                                    .padStart(2, "0")}:${Math.floor((minutes % 1) * 60)
+                                    .toString()
+                                    .padStart(2, "0")}`
+
+                                  return (
+                                    <tr key={p.id} className="border-b last:border-0">
+                                      <td className="px-2 py-1 text-left font-semibold">{p.jerseyNumber ?? ""}</td>
+                                      <td className="px-2 py-1 text-left whitespace-nowrap">{`${p.lastName.toUpperCase()}, ${p.firstName}`}</td>
+                                      <td className="px-2 py-1 text-right">{minutesDisplay}</td>
+                                      <td className="px-2 py-1 text-right font-semibold">{s?.points ?? 0}</td>
+                                      <td className="px-2 py-1 text-right">{(s?.t1Made ?? 0)}/{(s?.t1Att ?? 0)}</td>
+                                      <td className="px-2 py-1 text-right">{(s?.t2Made ?? 0)}/{(s?.t2Att ?? 0)}</td>
+                                      <td className="px-2 py-1 text-right">{(s?.t3Made ?? 0)}/{(s?.t3Att ?? 0)}</td>
+                                      <td className="px-2 py-1 text-right">{s?.rebounds ?? 0}</td>
+                                      <td className="px-2 py-1 text-right">{s?.assists ?? 0}</td>
+                                      <td className="px-2 py-1 text-right">{s?.steals ?? 0}</td>
+                                      <td className="px-2 py-1 text-right">{s?.turnovers ?? 0}</td>
+                                      <td className="px-2 py-1 text-right">{s?.blocksCommitted ?? 0}</td>
+                                      <td className="px-2 py-1 text-right">{s?.blocksReceived ?? 0}</td>
+                                      <td className="px-2 py-1 text-right">{s?.foulsCommitted ?? 0}</td>
+                                      <td className="px-2 py-1 text-right">{s?.foulsReceived ?? 0}</td>
+                                      <td className="px-2 py-1 text-right font-semibold">{s?.rating ?? 0}</td>
+                                    </tr>
+                                  )
+                                })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Visitante */}
+                    <div className="rounded-lg border bg-card overflow-auto">
+                      <div className="border-b px-3 py-2 text-sm font-semibold">{match.awayTeamName} – Estadísticas</div>
+                      <div className="p-3">
+                        <div className="min-w-[900px] overflow-x-auto">
+                          <table className="w-full text-xs border-collapse">
+                            <thead>
+                              <tr className="border-b text-[11px] text-muted-foreground">
+                                <th className="px-2 py-1 text-left w-10">#</th>
+                                <th className="px-2 py-1 text-left w-40">Jugador</th>
+                                <th className="px-2 py-1 text-right w-12">Min</th>
+                                <th className="px-2 py-1 text-right w-12">Pts</th>
+                                <th className="px-2 py-1 text-right w-16">T1</th>
+                                <th className="px-2 py-1 text-right w-16">T2</th>
+                                <th className="px-2 py-1 text-right w-16">T3</th>
+                                <th className="px-2 py-1 text-right w-16">Reb</th>
+                                <th className="px-2 py-1 text-right w-16">Asis</th>
+                                <th className="px-2 py-1 text-right w-16">Rec</th>
+                                <th className="px-2 py-1 text-right w-16">Per</th>
+                                <th className="px-2 py-1 text-right w-16">Tap C</th>
+                                <th className="px-2 py-1 text-right w-16">Tap R</th>
+                                <th className="px-2 py-1 text-right w-16">FC</th>
+                                <th className="px-2 py-1 text-right w-16">FR</th>
+                                <th className="px-2 py-1 text-right w-16">Val</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {awayPlayers
+                                .slice()
+                                .sort((a, b) => (a.jerseyNumber ?? 999) - (b.jerseyNumber ?? 999))
+                                .map((p) => {
+                                  const s = statsByPlayerId.get(p.id)
+                                  const minutes = s?.minutes ?? 0
+                                  const minutesDisplay = `${Math.floor(minutes)
+                                    .toString()
+                                    .padStart(2, "0")}:${Math.floor((minutes % 1) * 60)
+                                    .toString()
+                                    .padStart(2, "0")}`
+
+                                  return (
+                                    <tr key={p.id} className="border-b last:border-0">
+                                      <td className="px-2 py-1 text-left font-semibold">{p.jerseyNumber ?? ""}</td>
+                                      <td className="px-2 py-1 text-left whitespace-nowrap">{`${p.lastName.toUpperCase()}, ${p.firstName}`}</td>
+                                      <td className="px-2 py-1 text-right">{minutesDisplay}</td>
+                                      <td className="px-2 py-1 text-right font-semibold">{s?.points ?? 0}</td>
+                                      <td className="px-2 py-1 text-right">{(s?.t1Made ?? 0)}/{(s?.t1Att ?? 0)}</td>
+                                      <td className="px-2 py-1 text-right">{(s?.t2Made ?? 0)}/{(s?.t2Att ?? 0)}</td>
+                                      <td className="px-2 py-1 text-right">{(s?.t3Made ?? 0)}/{(s?.t3Att ?? 0)}</td>
+                                      <td className="px-2 py-1 text-right">{s?.rebounds ?? 0}</td>
+                                      <td className="px-2 py-1 text-right">{s?.assists ?? 0}</td>
+                                      <td className="px-2 py-1 text-right">{s?.steals ?? 0}</td>
+                                      <td className="px-2 py-1 text-right">{s?.turnovers ?? 0}</td>
+                                      <td className="px-2 py-1 text-right">{s?.blocksCommitted ?? 0}</td>
+                                      <td className="px-2 py-1 text-right">{s?.blocksReceived ?? 0}</td>
+                                      <td className="px-2 py-1 text-right">{s?.foulsCommitted ?? 0}</td>
+                                      <td className="px-2 py-1 text-right">{s?.foulsReceived ?? 0}</td>
+                                      <td className="px-2 py-1 text-right font-semibold">{s?.rating ?? 0}</td>
+                                    </tr>
+                                  )
+                                })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
