@@ -597,9 +597,11 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
     }
   }, [matchId, supabase])
 
-  // Polling periódico para refrescar el historial incluso si falla el realtime
+  // Polling periódico para refrescar el historial incluso si falla el realtime.
+  // No hace falta cuando el partido ya está finalizado.
   useEffect(() => {
     if (!matchId) return
+    if (match?.status === "finalizado") return
 
     const interval = setInterval(async () => {
       const { data: evRows, error: evError } = await supabase
@@ -644,7 +646,7 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
     }, 10000) // cada 10 segundos
 
     return () => clearInterval(interval)
-  }, [matchId, supabase])
+  }, [matchId, match?.status, supabase])
 
   // Suscripción en tiempo real para mantener marcador y estado vivos actualizados
   useEffect(() => {
