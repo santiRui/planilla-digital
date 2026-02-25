@@ -482,7 +482,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     const { data: existing, error: existingError } = await auth.adminClient
       .from("matches")
       .select(
-        "id, tournament_id, phase, status, home_team_id, away_team_id, home_score, away_score, playoff_series_id, series_game_number",
+        "id, tournament_id, phase, status, home_team_id, away_team_id, home_score, away_score, playoff_series_id, series_game_number, started_at, finished_at",
       )
       .eq("id", id)
       .single()
@@ -529,12 +529,17 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       }
     }
 
+    // Si se está marcando como finalizado, registramos hora de finalización si aún no existe.
+    if (requestedStatus === "finalizado" && !existing.finished_at) {
+      update.finished_at = new Date().toISOString()
+    }
+
     const { data: updated, error: updateError } = await auth.adminClient
       .from("matches")
       .update(update)
       .eq("id", id)
       .select(
-        "id, tournament_id, phase, status, home_team_id, away_team_id, home_score, away_score, playoff_series_id, series_game_number",
+        "id, tournament_id, phase, status, home_team_id, away_team_id, home_score, away_score, playoff_series_id, series_game_number, started_at, finished_at",
       )
       .single()
 

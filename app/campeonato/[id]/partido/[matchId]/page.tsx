@@ -715,6 +715,94 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
     return map
   }, [playerStats])
 
+  const homeTotals = useMemo(() => {
+    const acc = {
+      minutes: 0,
+      points: 0,
+      t1Made: 0,
+      t1Att: 0,
+      t2Made: 0,
+      t2Att: 0,
+      t3Made: 0,
+      t3Att: 0,
+      rebounds: 0,
+      assists: 0,
+      steals: 0,
+      turnovers: 0,
+      blocksCommitted: 0,
+      blocksReceived: 0,
+      foulsCommitted: 0,
+      foulsReceived: 0,
+      rating: 0,
+    }
+    for (const p of homePlayers) {
+      const s = statsByPlayerId.get(p.id)
+      if (!s) continue
+      acc.minutes += s.minutes
+      acc.points += s.points
+      acc.t1Made += s.t1Made
+      acc.t1Att += s.t1Att
+      acc.t2Made += s.t2Made
+      acc.t2Att += s.t2Att
+      acc.t3Made += s.t3Made
+      acc.t3Att += s.t3Att
+      acc.rebounds += s.rebounds
+      acc.assists += s.assists
+      acc.steals += s.steals
+      acc.turnovers += s.turnovers
+      acc.blocksCommitted += s.blocksCommitted
+      acc.blocksReceived += s.blocksReceived
+      acc.foulsCommitted += s.foulsCommitted
+      acc.foulsReceived += s.foulsReceived
+      acc.rating += s.rating
+    }
+    return acc
+  }, [homePlayers, statsByPlayerId])
+
+  const awayTotals = useMemo(() => {
+    const acc = {
+      minutes: 0,
+      points: 0,
+      t1Made: 0,
+      t1Att: 0,
+      t2Made: 0,
+      t2Att: 0,
+      t3Made: 0,
+      t3Att: 0,
+      rebounds: 0,
+      assists: 0,
+      steals: 0,
+      turnovers: 0,
+      blocksCommitted: 0,
+      blocksReceived: 0,
+      foulsCommitted: 0,
+      foulsReceived: 0,
+      rating: 0,
+    }
+    for (const p of awayPlayers) {
+      const s = statsByPlayerId.get(p.id)
+      if (!s) continue
+      acc.minutes += s.minutes
+      acc.points += s.points
+      acc.t1Made += s.t1Made
+      acc.t1Att += s.t1Att
+      acc.t2Made += s.t2Made
+      acc.t2Att += s.t2Att
+      acc.t3Made += s.t3Made
+      acc.t3Att += s.t3Att
+      acc.rebounds += s.rebounds
+      acc.assists += s.assists
+      acc.steals += s.steals
+      acc.turnovers += s.turnovers
+      acc.blocksCommitted += s.blocksCommitted
+      acc.blocksReceived += s.blocksReceived
+      acc.foulsCommitted += s.foulsCommitted
+      acc.foulsReceived += s.foulsReceived
+      acc.rating += s.rating
+    }
+    return acc
+  }, [awayPlayers, statsByPlayerId])
+
   // Sincronizar pestaña activa desde localStorage solo en el cliente para evitar
   // desajustes entre el HTML del servidor y el primer render del cliente.
   useEffect(() => {
@@ -1183,7 +1271,6 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
                                 <th className="px-2 py-1 text-right w-16">Tap R</th>
                                 <th className="px-2 py-1 text-right w-16">FC</th>
                                 <th className="px-2 py-1 text-right w-16">FR</th>
-                                <th className="px-2 py-1 text-right w-16">Val</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -1220,6 +1307,38 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
                                     </tr>
                                   )
                                 })}
+                              {/* Totales equipo local */}
+                              <tr className="border-t font-semibold bg-muted/40">
+                                <td className="px-2 py-1 text-left" colSpan={2}>
+                                  Total
+                                </td>
+                                <td className="px-2 py-1 text-right">
+                                  {`${Math.floor(homeTotals.minutes)
+                                    .toString()
+                                    .padStart(2, "0")}:${Math.floor((homeTotals.minutes % 1) * 60)
+                                    .toString()
+                                    .padStart(2, "0")}`}
+                                </td>
+                                <td className="px-2 py-1 text-right">{homeTotals.points}</td>
+                                <td className="px-2 py-1 text-right">
+                                  {homeTotals.t1Made}/{homeTotals.t1Att}
+                                </td>
+                                <td className="px-2 py-1 text-right">
+                                  {homeTotals.t2Made}/{homeTotals.t2Att}
+                                </td>
+                                <td className="px-2 py-1 text-right">
+                                  {homeTotals.t3Made}/{homeTotals.t3Att}
+                                </td>
+                                <td className="px-2 py-1 text-right">{homeTotals.rebounds}</td>
+                                <td className="px-2 py-1 text-right">{homeTotals.assists}</td>
+                                <td className="px-2 py-1 text-right">{homeTotals.steals}</td>
+                                <td className="px-2 py-1 text-right">{homeTotals.turnovers}</td>
+                                <td className="px-2 py-1 text-right">{homeTotals.blocksCommitted}</td>
+                                <td className="px-2 py-1 text-right">{homeTotals.blocksReceived}</td>
+                                <td className="px-2 py-1 text-right">{homeTotals.foulsCommitted}</td>
+                                <td className="px-2 py-1 text-right">{homeTotals.foulsReceived}</td>
+                                <td className="px-2 py-1 text-right">{homeTotals.rating}</td>
+                              </tr>
                             </tbody>
                           </table>
                         </div>
@@ -1286,6 +1405,39 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
                                     </tr>
                                   )
                                 })}
+
+                              {/* Totales equipo visitante */}
+                              <tr className="border-t font-semibold bg-muted/40">
+                                <td className="px-2 py-1 text-left" colSpan={2}>
+                                  Total
+                                </td>
+                                <td className="px-2 py-1 text-right">
+                                  {`${Math.floor(awayTotals.minutes)
+                                    .toString()
+                                    .padStart(2, "0")}:${Math.floor((awayTotals.minutes % 1) * 60)
+                                    .toString()
+                                    .padStart(2, "0")}`}
+                                </td>
+                                <td className="px-2 py-1 text-right">{awayTotals.points}</td>
+                                <td className="px-2 py-1 text-right">
+                                  {awayTotals.t1Made}/{awayTotals.t1Att}
+                                </td>
+                                <td className="px-2 py-1 text-right">
+                                  {awayTotals.t2Made}/{awayTotals.t2Att}
+                                </td>
+                                <td className="px-2 py-1 text-right">
+                                  {awayTotals.t3Made}/{awayTotals.t3Att}
+                                </td>
+                                <td className="px-2 py-1 text-right">{awayTotals.rebounds}</td>
+                                <td className="px-2 py-1 text-right">{awayTotals.assists}</td>
+                                <td className="px-2 py-1 text-right">{awayTotals.steals}</td>
+                                <td className="px-2 py-1 text-right">{awayTotals.turnovers}</td>
+                                <td className="px-2 py-1 text-right">{awayTotals.blocksCommitted}</td>
+                                <td className="px-2 py-1 text-right">{awayTotals.blocksReceived}</td>
+                                <td className="px-2 py-1 text-right">{awayTotals.foulsCommitted}</td>
+                                <td className="px-2 py-1 text-right">{awayTotals.foulsReceived}</td>
+                                <td className="px-2 py-1 text-right">{awayTotals.rating}</td>
+                              </tr>
                             </tbody>
                           </table>
                         </div>

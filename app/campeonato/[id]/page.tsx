@@ -1,6 +1,6 @@
 "use client"
 
-import { use, useEffect, useMemo, useState } from "react"
+import { use, useCallback, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -64,8 +64,36 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
   const [championship, setChampionship] = useState<TournamentRow | null>(null)
   const [teams, setTeams] = useState<UiTeam[]>([])
   const [matches, setMatches] = useState<UiMatch[]>([])
-  // Placeholder hasta que conectemos una tabla de posiciones real en Supabase
-  const [standings] = useState<any[]>([])
+  const [teamStats, setTeamStats] = useState<
+    Array<{
+      matchId: string
+      teamId: string
+      playerId: string
+      minutes: number
+      points: number
+      t1Made: number
+      t1Att: number
+      t2Made: number
+      t2Att: number
+      t3Made: number
+      t3Att: number
+      rebounds: number
+      assists: number
+      steals: number
+      turnovers: number
+      blocksCommitted: number
+      blocksReceived: number
+      foulsCommitted: number
+      foulsReceived: number
+    }>
+  >([])
+  const [players, setPlayers] = useState<Array<{ id: string; name: string; number: number | null }>>([])
+  // Pestaña activa en los Tabs (fechas, en_vivo, tabla, equipos)
+  const [activeTab, setActiveTab] = useState<"fechas" | "en_vivo" | "tabla" | "equipos">("fechas")
+  // Filtro de fase para el fixture (fase_regular, cuartos, semifinal, final)
+  const [phaseFilter, setPhaseFilter] = useState<"fase_regular" | "cuartos" | "semifinal" | "final">("fase_regular")
+  // Estado colapsado/expandido por grupo de fecha
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
 
   const getLiveStateForMatch = (match: UiMatch) => {
     // Si el partido ya está finalizado, usamos siempre el resultado oficial de matches
@@ -271,6 +299,15 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
       })
 
       setMatches(uiMatches)
+
+      // 3) Cargar estadísticas iniciales de jugadores para todos los partidos finalizados del torneo
+      const finalizedMatchIds = (matchRows ?? [])
+        .filter((m: any) => m.status === "finalizado")
+        .map((m: any) => m.id as string)
+
+      if (finalizedMatchIds.length > 0) {
+        await loadTeamStatsForMatches(finalizedMatchIds)
+      }
       setLoading(false)
 
       // Suscripción en tiempo real a cambios de partidos de este torneo
@@ -334,6 +371,13 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
   const liveMatches = matches.filter((m) => m.status === "en_juego").length
   const scheduledMatches = matches.filter((m) => m.status === "programado").length
 
+  // Cuando el usuario selecciona la pestaña "tabla", redirigir a la página pública de posiciones.
+  useEffect(() => {
+    if (activeTab !== "tabla") return
+    if (typeof window === "undefined") return
+    void router.push(`/campeonato/${id}/posiciones`)
+  }, [activeTab, id, router])
+
   // Agrupado de fixture similar al admin: por fase, ronda y zona
   const groupedFixture = useMemo(() => {
     if (!matches.length) return [] as Array<{
@@ -346,13 +390,10 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
     const acc = new Map<string, { phase: string | null; round: number; zoneCode: string | null; matches: UiMatch[] }>()
 
     for (const m of matches) {
-      const phase = m.phase ?? "fase_regular"
-      const round = m.round
-      const zoneCode = phase === "fase_regular" ? m.zoneCode ?? null : null
-      const key = `${phase}:${zoneCode ?? ""}:${round}`
+      const key = `${m.phase ?? "fase_regular"}__${m.round ?? 1}__${m.zoneCode ?? ""}`
       const existing = acc.get(key)
       if (existing) existing.matches.push(m)
-      else acc.set(key, { phase, round, zoneCode, matches: [m] })
+      else acc.set(key, { phase: m.phase ?? "fase_regular", round: m.round ?? 1, zoneCode: m.zoneCode ?? null, matches: [m] })
     }
 
     const list = Array.from(acc.values())
@@ -388,8 +429,17 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
       })
     }
 
-    return list
-  }, [matches])
+    // Filtrar por fase seleccionada
+    const filtered = Array.from(acc.values()).filter((g) => (g.phase ?? "fase_regular") === phaseFilter)
+
+    return filtered.sort((a, b) => {
+      if ((a.round ?? 1) !== (b.round ?? 1)) {
+        return (a.round ?? 1) - (b.round ?? 1)
+      }
+      if ((a.zoneCode ?? "") !== (b.zoneCode ?? "")) return (a.zoneCode ?? "").localeCompare(b.zoneCode ?? "")
+      return 0
+    })
+  }, [matches, phaseFilter])
 
   const branchColors = {
     masculino: "bg-blue-500/10 text-blue-600 border-blue-500/20",
@@ -402,6 +452,97 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
     femenino: "Femenino",
     mixto: "Mixto",
   }
+
+  // Carga/recalcula estadísticas de equipos para una lista de partidos finalizados
+  const loadTeamStatsForMatches = useCallback(
+    async (matchIds: string[]) => {
+      if (!matchIds.length) return
+
+      const { data: statsRows, error: statsError } = await supabase
+        .from("match_player_stats")
+        .select(
+          "match_id, team_id, player_id, minutes, points, t1_made, t1_att, t2_made, t2_att, t3_made, t3_att, rebounds, assists, steals, turnovers, blocks_committed, blocks_received, fouls_committed, fouls_received",
+        )
+        .in("match_id", matchIds)
+
+      if (statsError || !statsRows) return
+
+      const mappedStats = (statsRows as any[]).map((r) => ({
+        matchId: r.match_id as string,
+        teamId: r.team_id as string,
+        playerId: r.player_id as string,
+        minutes: Number(r.minutes) || 0,
+        points: r.points ?? 0,
+        t1Made: r.t1_made ?? 0,
+        t1Att: r.t1_att ?? 0,
+        t2Made: r.t2_made ?? 0,
+        t2Att: r.t2_att ?? 0,
+        t3Made: r.t3_made ?? 0,
+        t3Att: r.t3_att ?? 0,
+        rebounds: r.rebounds ?? 0,
+        assists: r.assists ?? 0,
+        steals: r.steals ?? 0,
+        turnovers: r.turnovers ?? 0,
+        blocksCommitted: r.blocks_committed ?? 0,
+        blocksReceived: r.blocks_received ?? 0,
+        foulsCommitted: r.fouls_committed ?? 0,
+        foulsReceived: r.fouls_received ?? 0,
+      }))
+      setTeamStats(mappedStats)
+
+      const playerIds = Array.from(new Set(mappedStats.map((s) => s.playerId))) as string[]
+      if (playerIds.length > 0) {
+        const { data: playerRows, error: playersError } = await supabase
+          .from("players")
+          .select("id, first_name, last_name, shirt_number")
+          .in("id", playerIds)
+
+        if (!playersError && playerRows) {
+          setPlayers(
+            (playerRows as any[]).map((p) => ({
+              id: p.id as string,
+              name: `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim() || "Jugador",
+              number: (p.shirt_number as number | null) ?? null,
+            })),
+          )
+        }
+      }
+    },
+    [supabase],
+  )
+
+  // Helpers para stats de equipos
+  const teamStatsByTeam = useMemo(() => {
+    const map = new Map<string, typeof teamStats>()
+    for (const row of teamStats) {
+      const list = map.get(row.teamId) ?? []
+      list.push(row)
+      map.set(row.teamId, list)
+    }
+    return map
+  }, [teamStats])
+
+  const playersById = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; number: number | null }>()
+    for (const p of players) map.set(p.id, p)
+    return map
+  }, [players])
+
+  // Refresco en vivo de estadísticas de equipos mientras haya partidos del torneo (para futuras vistas dedicadas)
+  useEffect(() => {
+    if (matches.length === 0) return
+
+    const finalizedIds = matches.filter((m) => m.status === "finalizado").map((m) => m.id)
+    if (finalizedIds.length === 0) return
+
+    void loadTeamStatsForMatches(finalizedIds)
+
+    const idInterval = window.setInterval(() => {
+      void loadTeamStatsForMatches(finalizedIds)
+    }, 10000)
+
+    return () => window.clearInterval(idInterval)
+  }, [matches, loadTeamStatsForMatches])
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -497,7 +638,7 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
 
       {/* Tabs: Fechas, En vivo, Tabla, Equipos */}
       <main className="flex-1 mx-auto max-w-7xl w-full px-4 py-10 sm:px-6 lg:px-8">
-        <Tabs defaultValue="fechas" className="flex flex-col gap-6">
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)} className="flex flex-col gap-6">
           <TabsList>
             <TabsTrigger value="fechas">Fechas</TabsTrigger>
             <TabsTrigger value="en_vivo">En vivo</TabsTrigger>
@@ -507,6 +648,44 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
 
           {/* Fechas: lista de partidos agrupados por ronda */}
           <TabsContent value="fechas" className="mt-4">
+            {/* Filtro de fase */}
+            <div className="flex flex-wrap gap-2 mb-4">
+              <Button
+                size="sm"
+                variant={phaseFilter === "fase_regular" ? "default" : "outline"}
+                onClick={() => setPhaseFilter("fase_regular")}
+              >
+                Fase de grupos
+              </Button>
+              {matches.some((m) => m.phase === "cuartos") && (
+                <Button
+                  size="sm"
+                  variant={phaseFilter === "cuartos" ? "default" : "outline"}
+                  onClick={() => setPhaseFilter("cuartos")}
+                >
+                  Cuartos de final
+                </Button>
+              )}
+              {matches.some((m) => m.phase === "semifinal") && (
+                <Button
+                  size="sm"
+                  variant={phaseFilter === "semifinal" ? "default" : "outline"}
+                  onClick={() => setPhaseFilter("semifinal")}
+                >
+                  Semifinales
+                </Button>
+              )}
+              {matches.some((m) => m.phase === "final") && (
+                <Button
+                  size="sm"
+                  variant={phaseFilter === "final" ? "default" : "outline"}
+                  onClick={() => setPhaseFilter("final")}
+                >
+                  Final
+                </Button>
+              )}
+            </div>
+
             <div className="space-y-6">
               {groupedFixture.length === 0 ? (
                 <Card>
@@ -516,136 +695,149 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
                 </Card>
               ) : (
                 groupedFixture.map((group) => {
-                  const title =
-                    (group.phase ?? "fase_regular") === "fase_regular"
-                      ? group.zoneCode
-                        ? `Fecha ${group.round} - Zona ${group.zoneCode}`
-                        : `Fecha ${group.round}`
-                      : `Playoffs - Fecha ${group.round}`
+                  const groupKey = `${group.phase ?? "fase_regular"}-${group.round}-${group.zoneCode ?? ""}`
+                  const collapsed = collapsedGroups[groupKey] ?? false
 
                   return (
-                    <section key={`${group.phase}:${group.zoneCode ?? ""}:${group.round}`} className="space-y-3">
-                      <h2 className="text-lg font-semibold">{title}</h2>
-                      <div className="space-y-2">
-                        {group.matches.map((m) => (
-                          <Link key={m.id} href={`/campeonato/${championship?.id ?? ""}/partido/${m.id}`}>
-                            <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors">
-                              <CardContent className="py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                                <div className="flex items-center gap-4">
-                                  {/* Local */}
-                                  <div className="flex items-center gap-3">
-                                    {(() => {
-                                      const team = teams.find((t) => t.id === m.homeTeamId)
-                                      if (team?.logoUrl) {
+                    <section key={groupKey} className="space-y-3">
+                      <button
+                        type="button"
+                        className="w-full flex items-center justify-between text-left"
+                        onClick={() =>
+                          setCollapsedGroups((prev) => ({
+                            ...prev,
+                            [groupKey]: !collapsed,
+                          }))
+                        }
+                      >
+                        <h2 className="text-lg font-semibold">
+                          Fecha {group.round} {group.zoneCode ? `- Zona ${group.zoneCode}` : ""}
+                        </h2>
+                        <span className="text-sm text-muted-foreground">{collapsed ? "➤" : "▼"}</span>
+                      </button>
+
+                      {!collapsed && (
+                        <div className="space-y-3">
+                          {group.matches.map((match) => (
+                            <Link key={match.id} href={`/campeonato/${championship?.id ?? ""}/partido/${match.id}`}>
+                              <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors">
+                                <CardContent className="py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                                  <div className="flex items-center gap-4">
+                                    {/* Local */}
+                                    <div className="flex items-center gap-3">
+                                      {(() => {
+                                        const team = teams.find((t) => t.id === match.homeTeamId)
+                                        if (team?.logoUrl) {
+                                          return (
+                                            <div className="h-10 w-10 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0">
+                                              <img
+                                                src={team.logoUrl}
+                                                alt={team.name}
+                                                className="h-full w-full object-cover"
+                                              />
+                                            </div>
+                                          )
+                                        }
+                                        const bg = team?.primaryColor ?? "#666"
                                         return (
-                                          <div className="h-10 w-10 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0">
-                                            <img
-                                              src={team.logoUrl}
-                                              alt={team.name}
-                                              className="h-full w-full object-cover"
-                                            />
+                                          <div
+                                            className="h-10 w-10 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0"
+                                            style={{ backgroundColor: bg }}
+                                          >
+                                            {match.homeTeamName.substring(0, 2).toUpperCase()}
                                           </div>
                                         )
-                                      }
-                                      const bg = team?.primaryColor ?? "#666"
-                                      return (
-                                        <div
-                                          className="h-10 w-10 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0"
-                                          style={{ backgroundColor: bg }}
-                                        >
-                                          {m.homeTeamName.substring(0, 2).toUpperCase()}
-                                        </div>
-                                      )
-                                    })()}
-                                    <span className="font-medium truncate max-w-[120px] sm:max-w-[180px]">
-                                      {m.homeTeamName}
-                                    </span>
-                                  </div>
-
-                                  {/* Centro: VS cuando está programado, marcador cuando está en juego/finalizado */}
-                                  {m.status === "programado" ? (
-                                    <div className="flex flex-col items-center gap-0.5 min-w-[70px] text-center">
-                                      <p className="text-sm font-semibold">VS</p>
-                                      <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                                        No comenzado
+                                      })()}
+                                      <span className="font-medium truncate max-w-[120px] sm:max-w-[180px]">
+                                        {match.homeTeamName}
                                       </span>
                                     </div>
-                                  ) : (
-                                    (() => {
-                                      const live = getLiveStateForMatch(m)
-                                      return (
-                                        <div className="flex flex-col items-center gap-0.5 min-w-[70px]">
-                                          <p
-                                            className={
-                                              m.status === "en_juego"
-                                                ? "text-lg font-bold text-[var(--color-live)]"
-                                                : "text-lg font-bold"
-                                            }
-                                          >
-                                            {live.homeScore} - {live.awayScore}
-                                          </p>
-                                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground text-center">
-                                            {m.status === "finalizado"
-                                              ? "Finalizado"
-                                              : `${
-                                                  typeof live.period === "number"
-                                                    ? `Cuarto ${live.period}`
-                                                    : "En juego"
-                                                } · ${formatGameClock(live.gameTime)}`}
-                                          </span>
-                                        </div>
-                                      )
-                                    })()
-                                  )}
 
-                                  {/* Visitante */}
-                                  <div className="flex items-center gap-3 ml-auto">
-                                    <span className="font-medium truncate text-right max-w-[120px] sm:max-w-[180px]">
-                                      {m.awayTeamName}
-                                    </span>
-                                    {(() => {
-                                      const team = teams.find((t) => t.id === m.awayTeamId)
-                                      if (team?.logoUrl) {
+                                    {/* Centro: VS cuando está programado, marcador cuando está en juego/finalizado */}
+                                    {match.status === "programado" ? (
+                                      <div className="flex flex-col items-center gap-0.5 min-w-[70px] text-center">
+                                        <p className="text-sm font-semibold">VS</p>
+                                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                                          No comenzado
+                                        </span>
+                                      </div>
+                                    ) : (
+                                      (() => {
+                                        const live = getLiveStateForMatch(match)
                                         return (
-                                          <div className="h-10 w-10 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0">
-                                            <img
-                                              src={team.logoUrl}
-                                              alt={team.name}
-                                              className="h-full w-full object-cover"
-                                            />
+                                          <div className="flex flex-col items-center gap-0.5 min-w-[70px]">
+                                            <p
+                                              className={
+                                                match.status === "en_juego"
+                                                  ? "text-lg font-bold text-[var(--color-live)]"
+                                                  : "text-lg font-bold"
+                                              }
+                                            >
+                                              {live.homeScore} - {live.awayScore}
+                                            </p>
+                                            <span className="text-[10px] uppercase tracking-wide text-muted-foreground text-center">
+                                              {match.status === "finalizado"
+                                                ? "Finalizado"
+                                                : `${
+                                                    typeof live.period === "number"
+                                                      ? `Cuarto ${live.period}`
+                                                      : "En juego"
+                                                  } · ${formatGameClock(live.gameTime)}`}
+                                            </span>
                                           </div>
                                         )
-                                      }
-                                      const bg = team?.primaryColor ?? "#666"
-                                      return (
-                                        <div
-                                          className="h-10 w-10 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0"
-                                          style={{ backgroundColor: bg }}
-                                        >
-                                          {m.awayTeamName.substring(0, 2).toUpperCase()}
-                                        </div>
-                                      )
-                                    })()}
-                                  </div>
-                                </div>
-
-                                <div className="flex items-center gap-4">
-                                  <div className="text-right text-xs text-muted-foreground">
-                                    {m.scheduledDate ? (
-                                      <>
-                                        <p>{m.scheduledDate.toLocaleDateString("es-AR")}</p>
-                                        {m.scheduledTime && <p>{m.scheduledTime}</p>}
-                                      </>
-                                    ) : (
-                                      <p>Sin programar</p>
+                                      })()
                                     )}
+
+                                    {/* Visitante */}
+                                    <div className="flex items-center gap-3 ml-auto">
+                                      <span className="font-medium truncate text-right max-w-[120px] sm:max-w-[180px]">
+                                        {match.awayTeamName}
+                                      </span>
+                                      {(() => {
+                                        const team = teams.find((t) => t.id === match.awayTeamId)
+                                        if (team?.logoUrl) {
+                                          return (
+                                            <div className="h-10 w-10 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0">
+                                              <img
+                                                src={team.logoUrl}
+                                                alt={team.name}
+                                                className="h-full w-full object-cover"
+                                              />
+                                            </div>
+                                          )
+                                        }
+                                        const bg = team?.primaryColor ?? "#666"
+                                        return (
+                                          <div
+                                            className="h-10 w-10 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0"
+                                            style={{ backgroundColor: bg }}
+                                          >
+                                            {match.awayTeamName.substring(0, 2).toUpperCase()}
+                                          </div>
+                                        )
+                                      })()}
+                                    </div>
                                   </div>
-                                </div>
-                              </CardContent>
-                            </Card>
-                          </Link>
-                        ))}
-                      </div>
+
+                                  <div className="flex items-center gap-4">
+                                    <div className="text-right text-xs text-muted-foreground">
+                                      {match.scheduledDate ? (
+                                        <>
+                                          <p>{match.scheduledDate.toLocaleDateString("es-AR")}</p>
+                                          {match.scheduledTime && <p>{match.scheduledTime}</p>}
+                                        </>
+                                      ) : (
+                                        <p>Sin programar</p>
+                                      )}
+                                    </div>
+                                  </div>
+                                </CardContent>
+                              </Card>
+                            </Link>
+                          ))}
+                        </div>
+                      )}
                     </section>
                   )
                 })
@@ -758,7 +950,16 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
             )}
           </TabsContent>
 
-          {/* Equipos: listado simple por ahora */}
+          {/* Tabla: muestra placeholder mientras el useEffect redirige a /posiciones */}
+          <TabsContent value="tabla" className="mt-4">
+            <Card>
+              <CardContent className="py-8 text-center text-muted-foreground">
+                Cargando tabla de posiciones...
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Equipos: tarjetas que llevan a la vista dedicada de estadísticas por equipo */}
           <TabsContent value="equipos" className="mt-4">
             {teams.length === 0 ? (
               <Card>
@@ -767,22 +968,75 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
                 </CardContent>
               </Card>
             ) : (
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {teams.map((team) => (
-                  <Card key={team.id} className="h-full">
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-base">{team.name}</CardTitle>
-                      <CardDescription>{team.club}</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <p className="text-xs text-muted-foreground">
-                        Estadísticas detalladas por jugador se implementarán a continuación.
-                      </p>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            )}
+              <div className="space-y-4">
+                {teams.map((team) => {
+                  const rows = teamStatsByTeam.get(team.id) ?? []
+
+                  const totals = rows.reduce(
+                    (acc, r) => {
+                      acc.points += r.points
+                      acc.minutes += r.minutes
+                      return acc
+                    },
+                    { points: 0, minutes: 0 },
+                  )
+
+                  const matchIds = Array.from(new Set(rows.map((r) => r.matchId)))
+                  const playedMatches = matchIds.length
+
+                  let standingPoints = 0
+                  for (const mid of matchIds) {
+                    const match = matches.find((m) => m.id === mid)
+                    if (!match || match.status !== "finalizado") continue
+                    const isHome = match.homeTeamId === team.id
+                    const teamScore = isHome ? match.homeScore ?? 0 : match.awayScore ?? 0
+                    const oppScore = isHome ? match.awayScore ?? 0 : match.homeScore ?? 0
+                    standingPoints += teamScore > oppScore ? 2 : 1
+                  }
+
+                  return (
+                    <Link key={team.id} href={`/campeonato/${championship?.id ?? ""}/equipo/${team.id}`}>
+                      <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors">
+                        <CardHeader className="pb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="flex items-center gap-3">
+                          {team.logoUrl ? (
+                            <div className="h-9 w-9 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0">
+                              <img src={team.logoUrl} alt={team.name} className="h-full w-full object-cover" />
+                            </div>
+                          ) : (
+                            <div
+                              className="h-9 w-9 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0"
+                              style={{ backgroundColor: team.primaryColor ?? "#666" }}
+                            >
+                              {team.name.substring(0, 2).toUpperCase()}
+                            </div>
+                          )}
+                          <div>
+                            <CardTitle className="text-base">{team.name}</CardTitle>
+                            {team.club && <CardDescription>{team.club}</CardDescription>}
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-3 text-xs text-muted-foreground">
+                          <div>
+                            <div className="font-semibold text-base text-foreground">{playedMatches}</div>
+                            <div>PJ</div>
+                          </div>
+                          <div>
+                            <div className="font-semibold text-base text-foreground">{standingPoints}</div>
+                            <div>PTS</div>
+                          </div>
+                          <div>
+                            <div className="font-semibold text-base text-foreground">{totals.points}</div>
+                            <div>Puntos</div>
+                          </div>
+                        </div>
+                      </CardHeader>
+                    </Card>
+                  </Link>
+                )
+              })}
+            </div>
+          )}
           </TabsContent>
         </Tabs>
       </main>

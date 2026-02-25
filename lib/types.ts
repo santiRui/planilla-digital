@@ -23,6 +23,7 @@ export interface Category {
   championshipId: string
   branch: Branch
   ageGroup: string
+  scoringCap?: number | null
 }
 
 export interface Team {

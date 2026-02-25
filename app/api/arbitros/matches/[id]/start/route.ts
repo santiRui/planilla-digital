@@ -64,7 +64,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
     const { data: current, error: currentError } = await auth.adminClient
       .from("matches")
-      .select("id, status, home_score, away_score")
+      .select("id, status, home_score, away_score, started_at")
       .eq("id", id)
       .maybeSingle()
 
@@ -77,16 +77,24 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     }
 
     if (current.status === "en_juego") {
+      // Si ya está en juego, no tocamos nada más.
       return NextResponse.json({ ok: true })
+    }
+
+    const update: any = {
+      status: "en_juego",
+      home_score: current.home_score ?? 0,
+      away_score: current.away_score ?? 0,
+    }
+
+    // Registramos la hora real de inicio sólo la primera vez que se inicia.
+    if (!current.started_at) {
+      update.started_at = new Date().toISOString()
     }
 
     const { error: updateError } = await auth.adminClient
       .from("matches")
-      .update({
-        status: "en_juego",
-        home_score: current.home_score ?? 0,
-        away_score: current.away_score ?? 0,
-      })
+      .update(update)
       .eq("id", id)
 
     if (updateError) {

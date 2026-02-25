@@ -123,6 +123,22 @@ export default function JornadaPage() {
   const getVenueName = (id?: string | null) => venues.find((v) => v.id === id)?.name || "-"
   const getCourtName = (id?: string | null) => courts.find((c) => c.id === id)?.name || "-"
 
+  const formatTime = (d?: Date | null) => {
+    if (!d) return "-"
+    return d.toTimeString().slice(0, 5)
+  }
+
+  const formatDuration = (start?: Date | null, end?: Date | null) => {
+    if (!start || !end) return "-"
+    const ms = end.getTime() - start.getTime()
+    if (ms <= 0) return "-"
+    const totalMinutes = Math.round(ms / 60000)
+    const hours = Math.floor(totalMinutes / 60)
+    const minutes = totalMinutes % 60
+    if (hours <= 0) return `${minutes} min`
+    return `${hours}h ${minutes.toString().padStart(2, "0")}m`
+  }
+
   const openStatusDialog = (match: MatchRow, status: "suspendido" | "demorado") => {
     setStatusDialogMatch(match)
     setStatusDialogStatus(status)
@@ -280,7 +296,10 @@ export default function JornadaPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Horario</TableHead>
+                  <TableHead>Horario prog.</TableHead>
+                  <TableHead>Inicio real</TableHead>
+                  <TableHead>Fin</TableHead>
+                  <TableHead>Duración</TableHead>
                   <TableHead>Partido</TableHead>
                   <TableHead>Torneo / Fecha</TableHead>
                   <TableHead>Sede / Cancha</TableHead>
@@ -301,6 +320,9 @@ export default function JornadaPage() {
                         <span className="text-muted-foreground">Sin hora</span>
                       )}
                     </TableCell>
+                    <TableCell className="whitespace-nowrap">{formatTime(match.startedAt)}</TableCell>
+                    <TableCell className="whitespace-nowrap">{formatTime(match.finishedAt)}</TableCell>
+                    <TableCell className="whitespace-nowrap">{formatDuration(match.startedAt, match.finishedAt)}</TableCell>
                     <TableCell>
                       <div className="font-medium">
                         {match.homeTeamName} vs {match.awayTeamName}
@@ -457,6 +479,8 @@ type MatchRow = {
   courtId?: string | null
   homeScore?: number | null
   awayScore?: number | null
+  startedAt?: Date | null
+  finishedAt?: Date | null
   refereeIds: string[]
   tableOfficialIds: string[]
   createdAt: Date
@@ -493,6 +517,8 @@ function mapMatchFromDb(row: any): MatchRow {
     courtId: row.court_id ?? null,
     homeScore: row.home_score ?? null,
     awayScore: row.away_score ?? null,
+    startedAt: row.started_at ? new Date(row.started_at as string) : null,
+    finishedAt: row.finished_at ? new Date(row.finished_at as string) : null,
     refereeIds,
     tableOfficialIds,
     createdAt: row.created_at ? new Date(row.created_at) : new Date(0),

@@ -68,6 +68,7 @@ export default function CategoriasPage() {
     name: "",
     branch: "masculino" as Branch,
     ageGroup: "",
+    scoringCap: "",
   })
 
   useEffect(() => {
@@ -76,7 +77,10 @@ export default function CategoriasPage() {
       setError(null)
 
       const [{ data: categoriesData, error: categoriesError }, { data: linkRows, error: linkError }] = await Promise.all([
-        supabase.from("categories").select("id, name, age_group, branch, created_at").order("created_at", { ascending: true }),
+        supabase
+          .from("categories")
+          .select("id, name, age_group, branch, scoring_cap, created_at")
+          .order("created_at", { ascending: true }),
         supabase.from("team_categories").select("category_id").order("created_at", { ascending: true }),
       ])
 
@@ -137,6 +141,7 @@ export default function CategoriasPage() {
           name: formData.name,
           ageGroup: formData.ageGroup,
           branch: formData.branch,
+          scoringCap: formData.scoringCap ? Number(formData.scoringCap) : null,
         }),
       })
 
@@ -166,6 +171,7 @@ export default function CategoriasPage() {
       name: "",
       branch: "masculino",
       ageGroup: "",
+      scoringCap: "",
     })
   }
 
@@ -175,6 +181,7 @@ export default function CategoriasPage() {
       name: category.name,
       branch: category.branch,
       ageGroup: category.age_group,
+      scoringCap: category.scoring_cap != null ? String(category.scoring_cap) : "",
     })
     setIsOpen(true)
   }
@@ -253,6 +260,17 @@ export default function CategoriasPage() {
                   value={formData.ageGroup}
                   onChange={(e) => setFormData({ ...formData, ageGroup: e.target.value })}
                   placeholder="Ej: U15, U17, Primera"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="scoringCap">Límite de Scoring (opcional)</Label>
+                <Input
+                  id="scoringCap"
+                  type="number"
+                  min={0}
+                  value={formData.scoringCap}
+                  onChange={(e) => setFormData({ ...formData, scoringCap: e.target.value })}
+                  placeholder="Ej: 500"
                 />
               </div>
               <div className="grid gap-2">

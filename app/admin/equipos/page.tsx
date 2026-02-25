@@ -43,6 +43,7 @@ export default function EquiposPage() {
   const [categories, setCategories] = useState<Category[]>([])
   const [teams, setTeams] = useState<Team[]>([])
   const [teamPlayerCounts, setTeamPlayerCounts] = useState<Record<string, number>>({})
+  const [teamScoring, setTeamScoring] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -69,7 +70,10 @@ export default function EquiposPage() {
         { data: teamsData, error: teamsError },
         { data: teamCategoryRows, error: teamCategoryError },
       ] = await Promise.all([
-        supabase.from("categories").select("id, name, branch, age_group").order("created_at", { ascending: true }),
+        supabase
+          .from("categories")
+          .select("id, name, branch, age_group, scoring_cap")
+          .order("created_at", { ascending: true }),
         supabase
           .from("teams")
           .select("id, name, logo_url, primary_color, secondary_color, created_at")
@@ -87,6 +91,7 @@ export default function EquiposPage() {
           name: c.name,
           branch: c.branch,
           ageGroup: c.age_group,
+          scoringCap: typeof c.scoring_cap === "number" ? c.scoring_cap : null,
         })) as Category[],
       )
 
@@ -113,6 +118,7 @@ export default function EquiposPage() {
       )
 
       const counts: Record<string, number> = {}
+      const scoringByTeam: Record<string, number> = {}
       const { data: sessionData } = await supabase.auth.getSession()
       const token = sessionData.session?.access_token
 
@@ -128,14 +134,16 @@ export default function EquiposPage() {
           setError(json?.error ?? "No se pudieron cargar los jugadores")
         } else {
           ;(json.players ?? []).forEach((p: any) => {
-            const teamId = p.team_id
+            const teamId = p.team_id as string | undefined
             if (!teamId) return
             counts[teamId] = (counts[teamId] ?? 0) + 1
+            const playerScoring = typeof p.scoring === "number" ? p.scoring : 0
+            scoringByTeam[teamId] = (scoringByTeam[teamId] ?? 0) + playerScoring
           })
         }
       }
-
       setTeamPlayerCounts(counts)
+      setTeamScoring(scoringByTeam)
       setLoading(false)
     }
 
@@ -155,6 +163,11 @@ export default function EquiposPage() {
 
       if (!formData.name || !formData.categoryId) {
         setError("Completá nombre y categoría.")
+        return
+      }
+
+      if (exceedsScoringCap) {
+        setError("Este equipo supera el límite de scoring de la categoría seleccionada.")
         return
       }
 
@@ -251,10 +264,18 @@ export default function EquiposPage() {
     return `${category.name}${category.ageGroup ? ` (${category.ageGroup})` : ""}`
   }
   const getPlayerCount = (teamId: string) => teamPlayerCounts[teamId] ?? 0
+  const getTeamScoring = (teamId: string) => teamScoring[teamId] ?? 0
 
   const categoryById = useMemo(() => {
     return Object.fromEntries(categories.map((c) => [c.id, c])) as Record<string, Category>
   }, [categories])
+
+  const selectedCategory = categories.find((c) => c.id === formData.categoryId) || null
+  const currentTeamScoring = editingTeam ? getTeamScoring(editingTeam.id) : 0
+  const exceedsScoringCap =
+    !!selectedCategory && typeof selectedCategory.scoringCap === "number" && selectedCategory.scoringCap >= 0
+      ? currentTeamScoring > selectedCategory.scoringCap
+      : false
 
   const filteredTeams = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -350,10 +371,22 @@ export default function EquiposPage() {
                         <SelectItem key={category.id} value={category.id}>
                           {category.name}
                           {category.ageGroup ? ` (${category.ageGroup})` : ""}
+                          {typeof category.scoringCap === "number" && ` (límite: ${category.scoringCap})`}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
+
+                  {editingTeam &&
+                    selectedCategory &&
+                    typeof selectedCategory.scoringCap === "number" &&
+                    selectedCategory.scoringCap >= 0 && (
+                      <p className={exceedsScoringCap ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
+                        Este equipo tiene un scoring de {currentTeamScoring} y el límite de la categoría es {" "}
+                        {selectedCategory.scoringCap}.
+                        {exceedsScoringCap && " No vas a poder guardar mientras supere ese límite."}
+                      </p>
+                    )}
                 </div>
                 <div className="grid gap-2">
                   <Label htmlFor="logoUrl">Logo (URL)</Label>
@@ -529,9 +562,15 @@ export default function EquiposPage() {
               <CardContent>
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-muted-foreground">{team.logoUrl ? "Con logo" : "Sin logo"}</span>
-                  <div className="flex items-center gap-1 text-muted-foreground">
-                    <UserCircle className="h-4 w-4" />
-                    <span>{getPlayerCount(team.id)} jugadores</span>
+                  <div className="flex flex-col items-end gap-1 text-muted-foreground">
+                    <div className="flex items-center gap-1">
+                      <span>Scoring:</span>
+                      <span className="font-medium">{getTeamScoring(team.id)}</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <UserCircle className="h-4 w-4" />
+                      <span>{getPlayerCount(team.id)} jugadores</span>
+                    </div>
                   </div>
                 </div>
               </CardContent>

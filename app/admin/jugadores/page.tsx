@@ -64,6 +64,8 @@ export default function JugadoresPage() {
     jerseyNumber: 0,
     teamId: "",
     isFederated: true,
+    federatedCategory: "mayores" as "mayores" | "intermedia",
+    labasSeasons: 0,
   })
 
   const teamNameCounts = useMemo(() => {
@@ -113,7 +115,9 @@ export default function JugadoresPage() {
         supabase.from("teams").select("id, name").order("created_at", { ascending: true }),
         supabase
           .from("players")
-          .select("id, team_id, first_name, last_name, dni, birth_date, jersey_number, height_cm, is_federated, photo_url, created_at")
+          .select(
+            "id, team_id, first_name, last_name, dni, birth_date, jersey_number, height_cm, is_federated, federated_category, labas_seasons, scoring, photo_url, created_at",
+          )
           .order("jersey_number", { ascending: true }),
       ])
 
@@ -156,6 +160,8 @@ export default function JugadoresPage() {
         jerseyNumber: formData.jerseyNumber,
         heightCm: null,
         isFederated: formData.isFederated,
+        federatedCategory: formData.isFederated ? formData.federatedCategory : null,
+        labasSeasons: formData.labasSeasons,
         photoUrl: null,
       }
 
@@ -204,6 +210,8 @@ export default function JugadoresPage() {
       jerseyNumber: 0,
       teamId: "",
       isFederated: true,
+      federatedCategory: "mayores",
+      labasSeasons: 0,
     })
     setTeamInput("")
   }
@@ -219,6 +227,8 @@ export default function JugadoresPage() {
       jerseyNumber: player.jerseyNumber,
       teamId: player.teamId,
       isFederated: player.isFederated,
+      federatedCategory: player.federatedCategory ?? "mayores",
+      labasSeasons: player.labasSeasons ?? 0,
     })
     setTeamInput(teamIdToLabel[player.teamId] ?? "")
     setIsOpen(true)
@@ -395,13 +405,42 @@ export default function JugadoresPage() {
                       onChange={(e) => setFormData({ ...formData, jerseyNumber: Number.parseInt(e.target.value) || 0 })}
                     />
                   </div>
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="isFederated">Jugador Federado</Label>
+                    <Switch
+                      id="isFederated"
+                      checked={formData.isFederated}
+                      onCheckedChange={(checked) => setFormData({ ...formData, isFederated: checked })}
+                    />
+                  </div>
                 </div>
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="isFederated">Jugador Federado</Label>
-                  <Switch
-                    id="isFederated"
-                    checked={formData.isFederated}
-                    onCheckedChange={(checked) => setFormData({ ...formData, isFederated: checked })}
+                {formData.isFederated ? (
+                  <div className="grid gap-2">
+                    <Label htmlFor="federatedCategory">Categoría federada</Label>
+                    <Select
+                      value={formData.federatedCategory}
+                      onValueChange={(v) => setFormData({ ...formData, federatedCategory: v as "mayores" | "intermedia" })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Seleccionar" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="mayores">Mayores (400)</SelectItem>
+                        <SelectItem value="intermedia">Intermedia (200)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ) : null}
+                <div className="grid gap-2">
+                  <Label htmlFor="labasSeasons">Trayectoria LaBas (temporadas)</Label>
+                  <Input
+                    id="labasSeasons"
+                    type="number"
+                    min="0"
+                    value={formData.labasSeasons}
+                    onChange={(e) =>
+                      setFormData({ ...formData, labasSeasons: Math.max(0, Number.parseInt(e.target.value || "0", 10)) })
+                    }
                   />
                 </div>
               </div>
@@ -483,6 +522,7 @@ export default function JugadoresPage() {
                   <TableHead>Jugador</TableHead>
                   <TableHead>Equipo</TableHead>
                   <TableHead>Edad</TableHead>
+                  <TableHead>Scoring</TableHead>
                   <TableHead className="text-center">Federado</TableHead>
                   <TableHead className="w-[50px]"></TableHead>
                 </TableRow>
@@ -499,6 +539,7 @@ export default function JugadoresPage() {
                     </TableCell>
                     <TableCell>{getTeamName(player.teamId)}</TableCell>
                     <TableCell>{calculateAge(player.birthDate)} años</TableCell>
+                    <TableCell>{player.scoring}</TableCell>
                     <TableCell className="text-center">
                       <span
                         className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
@@ -574,6 +615,9 @@ type PlayerRow = {
   jerseyNumber: number
   heightCm?: number | null
   isFederated: boolean
+  federatedCategory?: "mayores" | "intermedia" | null
+  labasSeasons?: number | null
+  scoring: number
   photoUrl?: string | null
   createdAt?: string
 }
@@ -602,6 +646,9 @@ function mapPlayerFromDb(row: any): PlayerRow {
     jerseyNumber: row.jersey_number,
     heightCm: row.height_cm ?? null,
     isFederated: row.is_federated,
+    federatedCategory: (row.federated_category as "mayores" | "intermedia" | null) ?? null,
+    labasSeasons: typeof row.labas_seasons === "number" ? row.labas_seasons : null,
+    scoring: typeof row.scoring === "number" ? row.scoring : 0,
     photoUrl: row.photo_url ?? null,
     createdAt: row.created_at,
   }

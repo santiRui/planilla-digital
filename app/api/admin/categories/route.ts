@@ -7,6 +7,7 @@ const createCategorySchema = z.object({
   name: z.string().min(1),
   ageGroup: z.string().min(1),
   branch: z.enum(["masculino", "femenino", "mixto"]),
+  scoringCap: z.number().int().min(0).optional().nullable(),
 })
 
 async function assertAdmin(accessToken: string) {
@@ -53,7 +54,7 @@ export async function GET(req: Request) {
 
     const { data, error } = await auth.adminClient
       .from("categories")
-      .select("id, name, age_group, branch, created_at")
+      .select("id, name, age_group, branch, scoring_cap, created_at")
       .order("created_at", { ascending: true })
 
     if (error) {
@@ -90,7 +91,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Datos inválidos", details: parsed.error.flatten() }, { status: 400 })
     }
 
-    const { name, ageGroup, branch } = parsed.data
+    const { name, ageGroup, branch, scoringCap } = parsed.data
 
     const { data: category, error } = await auth.adminClient
       .from("categories")
@@ -98,8 +99,9 @@ export async function POST(req: Request) {
         name,
         branch,
         age_group: ageGroup,
+        scoring_cap: scoringCap ?? null,
       })
-      .select("id, name, age_group, branch, created_at")
+      .select("id, name, age_group, branch, scoring_cap, created_at")
       .single()
 
     if (error || !category) {

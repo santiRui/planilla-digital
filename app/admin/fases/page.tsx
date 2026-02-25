@@ -52,6 +52,7 @@ export default function FasesPage() {
     bestOfFinal: 1,
     tiebreakMode: "olimpico_sorteo",
   })
+  const [hasPlayoffConfig, setHasPlayoffConfig] = useState(false)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -192,6 +193,29 @@ export default function FasesPage() {
         setTeamZones(map)
       }
 
+      // Cargar configuración de playoffs (si existe) para saber cuántos clasifican.
+      const configRes = await fetch(
+        `/api/admin/playoff/config?tournamentId=${encodeURIComponent(selectedTournament)}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      )
+      const configJson = (await configRes.json().catch(() => null)) as any
+      if (configRes.ok && configJson?.config) {
+        const cfg = configJson.config
+        setPlayoffConfig((prev) => ({
+          ...prev,
+          qualifiedTeams: (cfg.qualifiedTeams as 2 | 4 | 8) ?? prev.qualifiedTeams,
+          bestOfCuartos: cfg.bestOfCuartos ?? prev.bestOfCuartos,
+          bestOfSemifinal: cfg.bestOfSemifinal ?? prev.bestOfSemifinal,
+          bestOfFinal: cfg.bestOfFinal ?? prev.bestOfFinal,
+          tiebreakMode: (cfg.tiebreakMode as PlayoffConfig["tiebreakMode"]) ?? prev.tiebreakMode,
+        }))
+        setHasPlayoffConfig(true)
+      } else {
+        setHasPlayoffConfig(false)
+      }
+
       setLoading(false)
     }
 
@@ -201,9 +225,16 @@ export default function FasesPage() {
   const categoryMatches = matches
   const categoryTeams = teams
 
+  // Tabla oficial (solo partidos finalizados)
   const categoryStandings = useMemo(() => {
     const regularMatches = categoryMatches.filter((m) => m.phase === "fase_regular")
     return computeStandings(categoryTeams, regularMatches)
+  }, [categoryMatches, categoryTeams])
+
+  // Tabla proyectada (incluye partidos en juego con marcador en vivo)
+  const categoryStandingsProjected = useMemo(() => {
+    const regularMatches = categoryMatches.filter((m) => m.phase === "fase_regular")
+    return computeProjectedStandings(categoryTeams, regularMatches)
   }, [categoryMatches, categoryTeams])
 
   const distinctZones = useMemo(() => {
@@ -216,11 +247,12 @@ export default function FasesPage() {
     for (const z of distinctZones) {
       const zoneTeams = categoryTeams.filter((t) => teamZones[t.id] === z)
       const zoneMatches = categoryMatches.filter((m) => m.phase === "fase_regular" && (m.zoneCode ?? null) === z)
-      out.push({ zoneCode: z, standings: computeStandings(zoneTeams, zoneMatches) })
+      out.push({ zoneCode: z, standings: computeProjectedStandings(zoneTeams, zoneMatches) })
     }
     return out
   }, [categoryMatches, categoryTeams, distinctZones, teamZones])
 
+  // Equipos clasificados según la tabla oficial (no proyectada), para generar playoff.
   const qualifiedTeams = useMemo(() => {
     const zonesCount = distinctZones.length
     if (zonesCount >= 2 && playoffConfig.qualifiedTeams % zonesCount === 0) {
@@ -258,6 +290,24 @@ export default function FasesPage() {
   const getTeamName = (id: string) => teams.find((t) => t.id === id)?.name || "TBD"
   const getTeamColor = (id: string) => teams.find((t) => t.id === id)?.primaryColor || "#666"
   const getTeamLogo = (id: string) => teams.find((t) => t.id === id)?.logoUrl || ""
+
+  // Mapa de partidos en juego por equipo (fase regular)
+  const liveMatchesByTeam = useMemo(() => {
+    const map = new Map<string, MatchRow[]>()
+    for (const m of categoryMatches) {
+      if (m.phase !== "fase_regular") continue
+      if (m.status !== "en_juego") continue
+      const ids: string[] = []
+      if (m.homeTeamId) ids.push(m.homeTeamId)
+      if (m.awayTeamId) ids.push(m.awayTeamId)
+      for (const id of ids) {
+        const list = map.get(id) ?? []
+        list.push(m)
+        map.set(id, list)
+      }
+    }
+    return map
+  }, [categoryMatches])
 
   const isQualifiedTeamsValid = useMemo(() => {
     return [2, 4, 8].includes(playoffConfig.qualifiedTeams)
@@ -507,7 +557,7 @@ export default function FasesPage() {
                       </p>
                     )}
                   </div>
-                ) : categoryStandings.length === 0 ? (
+                ) : categoryStandingsProjected.length === 0 ? (
                   <p className="text-center text-muted-foreground py-4">No hay datos de posiciones</p>
                 ) : (
                   <div className="space-y-2">
@@ -524,14 +574,24 @@ export default function FasesPage() {
                         <span>Prom</span>
                       </div>
                     </div>
-                    {categoryStandings.map((standing, index) => {
+                    {categoryStandingsProjected.map((standing, index) => {
                       const diff = standing.pointsFor - standing.pointsAgainst
                       const avg = standing.played > 0 ? (standing.pointsFor / standing.played).toFixed(1) : "0.0"
+                      const live = liveMatchesByTeam.get(standing.teamId)?.[0]
+                      const isLive = !!live
+                      const liveHome =
+                        typeof live?.liveHomeScore === "number" && live.liveHomeScore >= 0
+                          ? live.liveHomeScore
+                          : live?.homeScore ?? null
+                      const liveAway =
+                        typeof live?.liveAwayScore === "number" && live.liveAwayScore >= 0
+                          ? live.liveAwayScore
+                          : live?.awayScore ?? null
                       return (
                         <div
                           key={standing.teamId}
                           className={`flex items-center justify-between p-3 rounded-lg ${
-                            index < playoffConfig.qualifiedTeams
+                            hasPlayoffConfig && index < playoffConfig.qualifiedTeams
                               ? "bg-[var(--color-success)]/10 border border-[var(--color-success)]/20"
                               : "bg-muted/50"
                           }`}
@@ -557,7 +617,14 @@ export default function FasesPage() {
                                 {getTeamName(standing.teamId).substring(0, 2).toUpperCase()}
                               </div>
                             )}
-                            <span className="font-medium">{getTeamName(standing.teamId)}</span>
+                            <div className="flex flex-col">
+                              <span className="font-medium">{getTeamName(standing.teamId)}</span>
+                              {isLive && live && liveHome != null && liveAway != null && (
+                                <span className="text-[11px] text-[var(--color-success)] font-medium">
+                                  En juego: {getTeamName(live.homeTeamId)} {liveHome} - {liveAway} {getTeamName(live.awayTeamId)}
+                                </span>
+                              )}
+                            </div>
                           </div>
                           {/* Valores alineados bajo el encabezado */}
                           <div className="flex justify-end pr-1">
@@ -801,6 +868,10 @@ type MatchRow = {
   status: "programado" | "en_juego" | "finalizado"
   homeScore?: number
   awayScore?: number
+  liveHomeScore?: number | null
+  liveAwayScore?: number | null
+  livePeriod?: number | null
+  liveGameTime?: string | null
   zoneCode?: string | null
 }
 
@@ -825,6 +896,10 @@ function mapMatchFromDb(row: any): MatchRow {
     status: row.status,
     homeScore: row.home_score ?? undefined,
     awayScore: row.away_score ?? undefined,
+    liveHomeScore: row.live_home_score ?? null,
+    liveAwayScore: row.live_away_score ?? null,
+    livePeriod: row.live_period ?? null,
+    liveGameTime: row.live_game_time ?? null,
     zoneCode: row.zone_code ?? null,
   }
 }
@@ -873,6 +948,67 @@ function computeStandings(teams: Team[], matches: MatchRow[]): StandingRow[] {
   const list = Array.from(rows.values())
   for (const r of list) {
     // 2 puntos por victoria, 1 punto por derrota
+    r.points = r.won * 2 + r.lost * 1
+  }
+
+  list.sort((a, b) => {
+    if (b.points !== a.points) return b.points - a.points
+    const aDiff = a.pointsFor - a.pointsAgainst
+    const bDiff = b.pointsFor - b.pointsAgainst
+    if (bDiff !== aDiff) return bDiff - aDiff
+    return b.pointsFor - a.pointsFor
+  })
+
+  return list
+}
+
+// Versión proyectada de la tabla de posiciones que incorpora partidos en juego usando
+// el marcador en vivo. Parte de la tabla "oficial" (solo partidos finalizados) y
+// le suma, de forma provisoria, lo que estaría pasando si los partidos en juego
+// terminaran con el resultado actual.
+function computeProjectedStandings(teams: Team[], matches: MatchRow[]): StandingRow[] {
+  const base = computeStandings(teams, matches)
+  const rows = new Map<string, StandingRow>()
+  for (const r of base) {
+    rows.set(r.teamId, { ...r })
+  }
+
+  for (const m of matches) {
+    if (m.phase !== "fase_regular") continue
+    if (m.status !== "en_juego") continue
+    if (!rows.has(m.homeTeamId) || !rows.has(m.awayTeamId)) continue
+
+    const home = rows.get(m.homeTeamId)!
+    const away = rows.get(m.awayTeamId)!
+
+    const homeScore =
+      typeof m.liveHomeScore === "number" && m.liveHomeScore >= 0 ? m.liveHomeScore : m.homeScore ?? 0
+    const awayScore =
+      typeof m.liveAwayScore === "number" && m.liveAwayScore >= 0 ? m.liveAwayScore : m.awayScore ?? 0
+
+    // Si todavía no hay puntos en vivo ni finales, no impacta la proyección.
+    if (homeScore === 0 && awayScore === 0 && m.homeScore == null && m.awayScore == null) continue
+
+    home.played += 1
+    away.played += 1
+
+    home.pointsFor += homeScore
+    home.pointsAgainst += awayScore
+
+    away.pointsFor += awayScore
+    away.pointsAgainst += homeScore
+
+    if (homeScore > awayScore) {
+      home.won += 1
+      away.lost += 1
+    } else if (awayScore > homeScore) {
+      away.won += 1
+      home.lost += 1
+    }
+  }
+
+  const list = Array.from(rows.values())
+  for (const r of list) {
     r.points = r.won * 2 + r.lost * 1
   }
 

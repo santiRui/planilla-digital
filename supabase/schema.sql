@@ -91,10 +91,14 @@ create table if not exists public.categories (
   name text not null,
   branch public.branch not null,
   age_group text not null,
+  scoring_cap int,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (name, branch, age_group)
 );
+
+alter table public.categories
+add column if not exists scoring_cap int;
 
 alter table public.tournaments
 add column if not exists category_id uuid references public.categories(id) on delete restrict;
@@ -216,6 +220,12 @@ add column if not exists series_game_number int;
 
 alter table public.matches
 add column if not exists zone_code text;
+
+alter table public.matches
+add column if not exists started_at timestamptz;
+
+alter table public.matches
+add column if not exists finished_at timestamptz;
 
 create index if not exists matches_tournament_round_idx on public.matches(tournament_id, round);
 create index if not exists matches_tournament_phase_idx on public.matches(tournament_id, phase);

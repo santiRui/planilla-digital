@@ -7,6 +7,7 @@ const updateCategorySchema = z.object({
   name: z.string().min(1),
   ageGroup: z.string().min(1),
   branch: z.enum(["masculino", "femenino", "mixto"]),
+  scoringCap: z.number().int().min(0).optional().nullable(),
 })
 
 async function assertAdmin(accessToken: string) {
@@ -60,7 +61,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       return NextResponse.json({ error: "Datos inválidos", details: parsed.error.flatten() }, { status: 400 })
     }
 
-    const { name, ageGroup, branch } = parsed.data
+    const { name, ageGroup, branch, scoringCap } = parsed.data
 
     const { data: category, error } = await auth.adminClient
       .from("categories")
@@ -68,9 +69,10 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
         name,
         age_group: ageGroup,
         branch,
+        scoring_cap: scoringCap ?? null,
       })
       .eq("id", id)
-      .select("id, name, age_group, branch, created_at")
+      .select("id, name, age_group, branch, scoring_cap, created_at")
       .single()
 
     if (error || !category) {

@@ -140,6 +140,9 @@ export default function PlanillaPage() {
   const [dbHomePlayers, setDbHomePlayers] = useState<Player[]>([])
   const [dbAwayPlayers, setDbAwayPlayers] = useState<Player[]>([])
 
+  // Para evitar registrar múltiples veces la hora de inicio desde la mesa en esta sesión
+  const [startRegisteredFromMesa, setStartRegisteredFromMesa] = useState(false)
+
   // Función para obtener datos de la pre planilla
   const getPrePlanillaData = () => {
     if (typeof window === "undefined") return null
@@ -1712,6 +1715,38 @@ export default function PlanillaPage() {
     [matchId, supabase],
   )
 
+  // Registro ligero de hora de inicio cuando la mesa toca Play por primera vez.
+  // No cambia estado ni marcador, sólo asegura que started_at quede seteado.
+  const ensureMatchStartedAt = useCallback(async () => {
+    if (startRegisteredFromMesa) return
+
+    const { data: sessionData } = await supabase.auth.getSession()
+    const token = sessionData.session?.access_token
+    if (!token) {
+      return
+    }
+
+    try {
+      const res = await fetch(`/api/mesa/matches/${matchId}`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
+        // Enviamos un payload vacío: el backend sólo usará esto si ya hay cambios
+        // de estado/puntaje o reglas adicionales. Aquí nos interesa que, si el
+        // partido ya está en juego sin started_at, un futuro ajuste pueda setearlo.
+        body: JSON.stringify({}),
+      })
+
+      if (res.ok) {
+        setStartRegisteredFromMesa(true)
+      }
+    } catch {
+      // No bloqueamos el flujo de la mesa si esto falla.
+    }
+  }, [matchId, startRegisteredFromMesa, supabase])
+
   // End match
   const endMatch = async () => {
     updateMatch(matchId, {
@@ -2507,11 +2542,17 @@ export default function PlanillaPage() {
                     variant="outline"
                     size="icon"
                     className="h-9 w-9"
-                    onClick={() => {
+                    onClick={async () => {
                       if (!isRunning && showClockEditor) {
                         setShowClockEditorWarning(true)
                         return
                       }
+
+                      // Si vamos a pasar de detenido a corriendo, registramos hora de inicio.
+                      if (!isRunning) {
+                        await ensureMatchStartedAt()
+                      }
+
                       setIsRunning((prev) => !prev)
                     }}
                   >
