@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useMemo, Fragment } from "react"
+import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -113,6 +113,7 @@ type PersistedMatchState = {
   homeColorOverride: string | null
   awayColorOverride: string | null
   showClockEditor: boolean
+  flipSides?: boolean
   pendingEventIds: string[]
   pendingDeleteEventIds: string[]
 }
@@ -287,24 +288,53 @@ export default function PlanillaPage() {
   // Obtener datos de la pre planilla
   const prePlanillaData = getPrePlanillaData()
   
-  // Jugadores disponibles para el partido (titulares + banco) según pre planilla
+  // Jugadores disponibles para el partido (titulares + banco) según pre planilla,
+  // aplicando también los dorsales modificados (jerseyByPlayerId) de la pre planilla.
   const homePlayers = useMemo(() => {
     const allPlayers = storeMatch ? storeHomePlayers : dbHomePlayers
+
+    // Si no hay pre planilla o no hay selección de jugadores, usar todos los jugadores del equipo
     if (!prePlanillaData || !prePlanillaData.home?.selectedPlayerIds?.length) {
-      // Sin pre planilla o sin selección: usar todos los jugadores del equipo
-      return allPlayers
+      const overrides = prePlanillaData?.home?.jerseyByPlayerId ?? {}
+      return allPlayers.map((player) =>
+        overrides[player.id] !== undefined && overrides[player.id] !== null
+          ? { ...player, jerseyNumber: overrides[player.id] }
+          : player,
+      )
     }
 
-    return allPlayers.filter((player) => prePlanillaData.home.selectedPlayerIds.includes(player.id))
+    const overrides = prePlanillaData.home.jerseyByPlayerId ?? {}
+
+    return allPlayers
+      .filter((player) => prePlanillaData.home.selectedPlayerIds.includes(player.id))
+      .map((player) =>
+        overrides[player.id] !== undefined && overrides[player.id] !== null
+          ? { ...player, jerseyNumber: overrides[player.id] }
+          : player,
+      )
   }, [storeMatch, storeHomePlayers, dbHomePlayers, prePlanillaData])
 
   const awayPlayers = useMemo(() => {
     const allPlayers = storeMatch ? storeAwayPlayers : dbAwayPlayers
+
     if (!prePlanillaData || !prePlanillaData.away?.selectedPlayerIds?.length) {
-      return allPlayers
+      const overrides = prePlanillaData?.away?.jerseyByPlayerId ?? {}
+      return allPlayers.map((player) =>
+        overrides[player.id] !== undefined && overrides[player.id] !== null
+          ? { ...player, jerseyNumber: overrides[player.id] }
+          : player,
+      )
     }
 
-    return allPlayers.filter((player) => prePlanillaData.away.selectedPlayerIds.includes(player.id))
+    const overrides = prePlanillaData.away.jerseyByPlayerId ?? {}
+
+    return allPlayers
+      .filter((player) => prePlanillaData.away.selectedPlayerIds.includes(player.id))
+      .map((player) =>
+        overrides[player.id] !== undefined && overrides[player.id] !== null
+          ? { ...player, jerseyNumber: overrides[player.id] }
+          : player,
+      )
   }, [storeMatch, storeAwayPlayers, dbAwayPlayers, prePlanillaData])
 
   const [homeScore, setHomeScore] = useState(0)
@@ -408,6 +438,17 @@ export default function PlanillaPage() {
     }
   })
   const [showClockEditor, setShowClockEditor] = useState(false)
+  const [flipSides, setFlipSides] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false
+    try {
+      const raw = window.localStorage.getItem(`planilla-state:${matchId}`)
+      if (!raw) return false
+      const data = JSON.parse(raw) as Partial<PersistedMatchState>
+      return Boolean((data as any).flipSides)
+    } catch {
+      return false
+    }
+  })
   const [showClockEditorWarning, setShowClockEditorWarning] = useState(false)
   
   // Estados para faltas
@@ -536,6 +577,7 @@ export default function PlanillaPage() {
     try {
       const data = JSON.parse(raw) as PersistedMatchState
 
+      // Primero restauramos directamente los scores persistidos
       setHomeScore(data.homeScore)
       setAwayScore(data.awayScore)
       setPeriod(data.period)
@@ -568,13 +610,18 @@ export default function PlanillaPage() {
       setPendingEventIds(data.pendingEventIds ?? [])
       setPendingDeleteEventIds(data.pendingDeleteEventIds ?? [])
 
-      // Recalcular marcador a partir del historial por si los campos de score no son fiables
-      if (restoredEvents.length > 0) {
+      // Recalcular marcador a partir del historial por si los campos de score no son fiables.
+      // Para evitar asignar todo al visitante cuando todavía no se conocen los equipos,
+      // solo hacemos este recálculo si podemos determinar los IDs de local y visitante.
+      const homeId = homeTeam?.id ?? match?.homeTeamId
+      const awayId = awayTeam?.id ?? match?.awayTeamId
+
+      if (restoredEvents.length > 0 && homeId && awayId) {
         let restoredHomeScore = 0
         let restoredAwayScore = 0
 
         restoredEvents.forEach((ev) => {
-          const isHome = ev.teamId === homeTeam?.id
+          const isHome = ev.teamId === homeId
 
           if (ev.type === "points" && ev.points) {
             if (isHome) restoredHomeScore += ev.points
@@ -605,11 +652,12 @@ export default function PlanillaPage() {
       setHomeColorOverride(data.homeColorOverride)
       setAwayColorOverride(data.awayColorOverride)
       setShowClockEditor(data.showClockEditor)
+      setFlipSides((data as any).flipSides ?? false)
       setRestoredFromStorage(true)
     } catch {
       // Si hay datos corruptos, los ignoramos
     }
-  }, [matchId])
+  }, [matchId, match?.homeTeamId, match?.awayTeamId, homeTeam?.id, awayTeam?.id])
 
   // Ajustar el reloj visible al tiempo del último evento registrado en el historial
   // Solo lo hacemos en la inicialización: cuando el reloj sigue en su valor base (10 minutos) y no está corriendo.
@@ -664,6 +712,7 @@ export default function PlanillaPage() {
       homeColorOverride,
       awayColorOverride,
       showClockEditor,
+      flipSides,
       pendingEventIds,
       pendingDeleteEventIds,
     }
@@ -1345,6 +1394,20 @@ export default function PlanillaPage() {
     [awayPlayers, onCourtPlayers.away],
   )
 
+  // Lados visuales en la pestaña Cancha (solo afectan layout, no la lógica interna)
+  const leftTeamSide: "home" | "away" = flipSides ? "away" : "home"
+  const rightTeamSide: "home" | "away" = flipSides ? "home" : "away"
+  const leftTeam = leftTeamSide === "home" ? homeTeam : awayTeam
+  const rightTeam = rightTeamSide === "home" ? homeTeam : awayTeam
+  const leftColor = leftTeamSide === "home" ? homeColor : awayColor
+  const rightColor = rightTeamSide === "home" ? homeColor : awayColor
+  const leftVisiblePlayers = leftTeamSide === "home" ? visibleHomePlayers : visibleAwayPlayers
+  const rightVisiblePlayers = rightTeamSide === "home" ? visibleHomePlayers : visibleAwayPlayers
+  const leftOnCourtIds = leftTeamSide === "home" ? onCourtPlayers.home : onCourtPlayers.away
+  const rightOnCourtIds = rightTeamSide === "home" ? onCourtPlayers.home : onCourtPlayers.away
+  const leftAllPlayers = leftTeamSide === "home" ? homePlayers : awayPlayers
+  const rightAllPlayers = rightTeamSide === "home" ? homePlayers : awayPlayers
+
   const getFreeThrowCountForFoul = (foul: MatchEvent): 1 | 2 | 3 => {
     const type = foul.foulType
     if (type === "technical") return 1
@@ -1879,7 +1942,15 @@ export default function PlanillaPage() {
     const sx = y * 1000
     const sy = (1 - x) * 536
 
-    const isLeftHoop = teamSide === "home"
+    // Si flipSides está activo, el equipo que se ve a la derecha usa el aro derecho como "propio".
+    // Para mantener la lógica simple, definimos un lado efectivo del aro que depende de flipSides.
+    const effectiveSide: "home" | "away" = flipSides
+      ? teamSide === "home"
+        ? "away"
+        : "home"
+      : teamSide
+
+    const isLeftHoop = effectiveSide === "home"
     const hoop = isLeftHoop ? { x: 55, y: 268 } : { x: 945, y: 268 }
 
     // Geometría exacta del SVG actual:
@@ -2214,6 +2285,34 @@ export default function PlanillaPage() {
 
     const baseBgColor = teamSide === "home" ? `${homeColor}14` : `${awayColor}14`
 
+    const longPressTimeoutRef = useRef<number | null>(null)
+    const longPressTriggeredRef = useRef(false)
+
+    const clearLongPress = () => {
+      if (longPressTimeoutRef.current !== null) {
+        window.clearTimeout(longPressTimeoutRef.current)
+        longPressTimeoutRef.current = null
+      }
+    }
+
+    const startLongPress = () => {
+      if (isDisqualified) return
+      // Solo tiene sentido sustituir si el jugador está actualmente en cancha
+      const currentOnCourt = onCourtPlayers[teamSide]
+      if (!currentOnCourt.includes(player.id)) return
+
+      clearLongPress()
+      longPressTriggeredRef.current = false
+
+      longPressTimeoutRef.current = window.setTimeout(() => {
+        const remaining = onCourtPlayers[teamSide].filter((id) => id !== player.id)
+        setSubsDialogTeamSide(teamSide)
+        setSubsSelection(remaining)
+        setShowSubsDialog(true)
+        longPressTriggeredRef.current = true
+      }, 1000)
+    }
+
     return (
       <div
         className={`rounded-lg border p-2 ${isSelected ? "border-primary" : ""} ${isDisqualified ? "border-red-500 bg-red-50" : ""}`}
@@ -2223,7 +2322,18 @@ export default function PlanillaPage() {
           type="button"
           className="w-full"
           disabled={isDisqualified}
+          onMouseDown={startLongPress}
+          onMouseUp={clearLongPress}
+          onMouseLeave={clearLongPress}
+          onTouchStart={startLongPress}
+          onTouchEnd={clearLongPress}
           onClick={() => {
+            // Si se disparó el long-press, ignoramos el click de soltar
+            if (longPressTriggeredRef.current) {
+              longPressTriggeredRef.current = false
+              return
+            }
+            clearLongPress()
             if (pendingFreeThrow) {
               return
             }
@@ -2398,6 +2508,111 @@ export default function PlanillaPage() {
     )
   }
 
+  const renderTeamHeader = (side: "home" | "away", position: "left" | "right") => {
+    const label = side === "home" ? "LOCAL" : "VISITANTE"
+    const team = side === "home" ? homeTeam : awayTeam
+    const color = side === "home" ? homeColor : awayColor
+    const score = side === "home" ? homeScore : awayScore
+    const foulsInPeriod = teamFoulsInPeriod[side]
+    const foulWarning = teamFoulWarning[side]
+    const timeouts = teamTimeouts[side]
+
+    const openTimeoutDialog = () => setTimeoutDialogTeamSide(side)
+
+    const openSubsDialog = () => {
+      setSubsDialogTeamSide(side)
+      const ids = side === "home" ? onCourtPlayers.home : onCourtPlayers.away
+      const all = side === "home" ? homePlayers : awayPlayers
+      setSubsSelection(ids.length ? ids : all.map((p) => p.id))
+      setShowSubsDialog(true)
+    }
+
+    const borderStyle =
+      position === "left"
+        ? { borderLeftColor: color, borderLeftWidth: 6 }
+        : { borderRightColor: color, borderRightWidth: 6 }
+
+    const isRight = position === "right"
+
+    return (
+      <div className="rounded-md border px-2 py-1.5" style={borderStyle}>
+        <div className={`flex items-center justify-between gap-2 ${isRight ? "flex-row-reverse" : ""}`}>
+          <div className={`min-w-0 ${isRight ? "text-right" : ""}`}>
+            <div className="truncate text-xs text-muted-foreground">{label}</div>
+            <div
+              className="truncate text-sm font-semibold cursor-pointer hover:underline"
+              onClick={openSubsDialog}
+            >
+              {team.name}
+            </div>
+            <div className={`flex items-center gap-1 text-xs text-muted-foreground mt-1 ${isRight ? "justify-end" : ""}`}>
+              <span>Faltas:</span>
+              <div className={`px-1.5 py-0.5 rounded font-medium ${foulWarning ? "bg-red-100 text-red-700" : "bg-muted"}`}>
+                {foulsInPeriod}
+              </div>
+            </div>
+            {period <= 4 ? (
+              <div className={`flex items-center gap-1 text-[11px] text-muted-foreground mt-0.5 ${isRight ? "justify-end" : ""}`}>
+                <span>TM 1T:</span>
+                <div className="flex gap-0.5">
+                  {[0, 1].map((i) => {
+                    const used = Math.min(timeouts.firstHalf, 2)
+                    const active = i < used
+                    return (
+                      <span
+                        key={i}
+                        className={`h-4 w-4 rounded border bg-muted flex items-center justify-center text-[10px] leading-none cursor-pointer ${active ? "font-bold" : ""}`}
+                        onClick={openTimeoutDialog}
+                      >
+                        {active ? "X" : ""}
+                      </span>
+                    )
+                  })}
+                </div>
+                <span>2T:</span>
+                <div className="flex gap-0.5">
+                  {[0, 1, 2].map((i) => {
+                    const used = Math.min(timeouts.secondHalf, 3)
+                    const active = i < used
+                    return (
+                      <span
+                        key={i}
+                        className={`h-4 w-4 rounded border bg-muted flex items-center justify-center text-[10px] leading-none cursor-pointer ${active ? "font-bold" : ""}`}
+                        onClick={openTimeoutDialog}
+                      >
+                        {active ? "X" : ""}
+                      </span>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1 text-[11px] text-muted-foreground mt-0.5">
+                <span>TM:</span>
+                <div className="flex gap-0.5">
+                  {[0].map((i) => {
+                    const used = Math.min(timeouts.overtime, 1)
+                    const active = i < used
+                    return (
+                      <span
+                        key={i}
+                        className={`h-4 w-4 rounded border bg-muted flex items-center justify-center text-[10px] leading-none cursor-pointer ${active ? "font-bold" : ""}`}
+                        onClick={openTimeoutDialog}
+                      >
+                        {active ? "X" : ""}
+                      </span>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="text-2xl font-bold tabular-nums">{score}</div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-background flex flex-col overflow-hidden">
       <header className="sticky top-0 z-10 border-b bg-card">
@@ -2440,91 +2655,8 @@ export default function PlanillaPage() {
 
           <div className="flex-1">
             <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-1.5">
-              {/* Local */}
-              <div
-                className="rounded-md border px-2 py-1.5"
-                style={{ borderLeftColor: homeColor, borderLeftWidth: 6 }}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="truncate text-xs text-muted-foreground">LOCAL</div>
-                    <div
-                      className="truncate text-sm font-semibold cursor-pointer hover:underline"
-                      onClick={() => {
-                        setSubsDialogTeamSide("home")
-                        setSubsSelection(
-                          onCourtPlayers.home.length ? onCourtPlayers.home : homePlayers.map((p) => p.id),
-                        )
-                        setShowSubsDialog(true)
-                      }}
-                    >
-                      {homeTeam.name}
-                    </div>
-                    <div className="flex items-center gap-1 text-xs text-muted-foreground mt-1">
-                      <span>Faltas:</span>
-                      <div className={`px-1.5 py-0.5 rounded font-medium ${teamFoulWarning.home ? "bg-red-100 text-red-700" : "bg-muted"}`}>
-                        {teamFoulsInPeriod.home}
-                      </div>
-                    </div>
-                    {period <= 4 ? (
-                      <div className="flex items-center gap-1 text-[11px] text-muted-foreground mt-0.5">
-                        <span>TM 1T:</span>
-                        <div className="flex gap-0.5">
-                          {[0, 1].map((i) => {
-                            const used = Math.min(teamTimeouts.home.firstHalf, 2)
-                            const active = i < used
-                            return (
-                              <span
-                                key={i}
-                                className={`h-4 w-4 rounded border bg-muted flex items-center justify-center text-[10px] leading-none cursor-pointer ${active ? "font-bold" : ""}`}
-                                onClick={() => setTimeoutDialogTeamSide("home")}
-                              >
-                                {active ? "X" : ""}
-                              </span>
-                            )
-                          })}
-                        </div>
-                        <span>2T:</span>
-                        <div className="flex gap-0.5">
-                          {[0, 1, 2].map((i) => {
-                            const used = Math.min(teamTimeouts.home.secondHalf, 3)
-                            const active = i < used
-                            return (
-                              <span
-                                key={i}
-                                className={`h-4 w-4 rounded border bg-muted flex items-center justify-center text-[10px] leading-none cursor-pointer ${active ? "font-bold" : ""}`}
-                                onClick={() => setTimeoutDialogTeamSide("home")}
-                              >
-                                {active ? "X" : ""}
-                              </span>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-1 text-[11px] text-muted-foreground mt-0.5">
-                        <span>TM:</span>
-                        <div className="flex gap-0.5">
-                          {[0].map((i) => {
-                            const used = Math.min(teamTimeouts.home.overtime, 1)
-                            const active = i < used
-                            return (
-                              <span
-                                key={i}
-                                className={`h-4 w-4 rounded border bg-muted flex items-center justify-center text-[10px] leading-none cursor-pointer ${active ? "font-bold" : ""}`}
-                                onClick={() => setTimeoutDialogTeamSide("home")}
-                              >
-                                {active ? "X" : ""}
-                              </span>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <div className="text-2xl font-bold tabular-nums">{homeScore}</div>
-                </div>
-              </div>
+              {/* Bloque izquierdo: puede ser local o visitante según flipSides, pero siempre con franja a la izquierda */}
+              {!flipSides ? renderTeamHeader("home", "left") : renderTeamHeader("away", "left")}
 
               {/* Reloj / Período */}
               <div className="text-center">
@@ -2614,91 +2746,8 @@ export default function PlanillaPage() {
                 </div>
               </div>
 
-              {/* Visitante */}
-              <div
-                className="rounded-md border px-2 py-1.5"
-                style={{ borderRightColor: awayColor, borderRightWidth: 6 }}
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="text-2xl font-bold tabular-nums">{awayScore}</div>
-                  <div className="min-w-0 text-right">
-                    <div className="truncate text-xs text-muted-foreground">VISITANTE</div>
-                    <div
-                      className="truncate text-sm font-semibold cursor-pointer hover:underline"
-                      onClick={() => {
-                        setSubsDialogTeamSide("away")
-                        setSubsSelection(
-                          onCourtPlayers.away.length ? onCourtPlayers.away : awayPlayers.map((p) => p.id),
-                        )
-                        setShowSubsDialog(true)
-                      }}
-                    >
-                      {awayTeam.name}
-                    </div>
-                    <div className="flex items-center justify-end gap-1 text-xs text-muted-foreground mt-1">
-                      <div className={`px-1.5 py-0.5 rounded font-medium ${teamFoulWarning.away ? "bg-red-100 text-red-700" : "bg-muted"}`}>
-                        {teamFoulsInPeriod.away}
-                      </div>
-                      <span>Faltas:</span>
-                    </div>
-                    {period <= 4 ? (
-                      <div className="flex items-center justify-end gap-1 text-[11px] text-muted-foreground mt-0.5">
-                        <span>TM 1T:</span>
-                        <div className="flex gap-0.5">
-                          {[0, 1].map((i) => {
-                            const used = Math.min(teamTimeouts.away.firstHalf, 2)
-                            const active = i < used
-                            return (
-                              <span
-                                key={i}
-                                className={`h-4 w-4 rounded border bg-muted flex items-center justify-center text-[10px] leading-none cursor-pointer ${active ? "font-bold" : ""}`}
-                                onClick={() => setTimeoutDialogTeamSide("away")}
-                              >
-                                {active ? "X" : ""}
-                              </span>
-                            )
-                          })}
-                        </div>
-                        <span>2T:</span>
-                        <div className="flex gap-0.5">
-                          {[0, 1, 2].map((i) => {
-                            const used = Math.min(teamTimeouts.away.secondHalf, 3)
-                            const active = i < used
-                            return (
-                              <span
-                                key={i}
-                                className={`h-4 w-4 rounded border bg-muted flex items-center justify-center text-[10px] leading-none cursor-pointer ${active ? "font-bold" : ""}`}
-                                onClick={() => setTimeoutDialogTeamSide("away")}
-                              >
-                                {active ? "X" : ""}
-                              </span>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex items-center justify-end gap-1 text-[11px] text-muted-foreground mt-0.5">
-                        <span>TM:</span>
-                        <div className="flex gap-0.5">
-                          {[0].map((i) => {
-                            const used = Math.min(teamTimeouts.away.overtime, 1)
-                            const active = i < used
-                            return (
-                              <span
-                                key={i}
-                                className={`h-4 w-4 rounded border bg-muted flex items-center justify-center text-[10px] leading-none cursor-pointer ${active ? "font-bold" : ""}`}
-                                onClick={() => setTimeoutDialogTeamSide("away")}
-                              >
-                                {active ? "X" : ""}
-                              </span>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
+              {/* Bloque derecho: el otro equipo, siempre con franja a la derecha */}
+              {!flipSides ? renderTeamHeader("away", "right") : renderTeamHeader("home", "right")}
             </div>
           </div>
 
@@ -2746,24 +2795,25 @@ export default function PlanillaPage() {
         <Tabs value={mainTab} onValueChange={(v) => setMainTab(v as any)} className="h-full">
           <TabsContent value="cancha" className="m-0 h-full pb-16 md:pb-4">
             <div className="h-full grid grid-cols-1 gap-2 p-3 md:grid-cols-12">
+              {/* Panel izquierdo (depende de flipSides) */}
               <div className="hidden md:block md:col-span-3 overflow-hidden">
                 <div className="rounded-lg border bg-card overflow-hidden flex flex-col">
                   <div
                     className="px-3 py-2 text-sm font-semibold cursor-pointer"
-                    style={{ borderLeftColor: homeColor, borderLeftWidth: 6 }}
+                    style={{ borderLeftColor: leftColor, borderLeftWidth: 6 }}
                     onClick={() => {
-                      setSubsDialogTeamSide("home")
+                      setSubsDialogTeamSide(leftTeamSide)
                       setSubsSelection(
-                        onCourtPlayers.home.length ? onCourtPlayers.home : homePlayers.map((p) => p.id),
+                        leftOnCourtIds.length ? leftOnCourtIds : leftAllPlayers.map((p) => p.id),
                       )
                       setShowSubsDialog(true)
                     }}
                   >
-                    {homeTeam.name}
+                    {leftTeam.name}
                   </div>
                   <div className="flex-1 overflow-auto p-2 space-y-2">
-                    {visibleHomePlayers.map((player) => (
-                      <PlayerButton key={player.id} player={player} teamSide="home" />
+                    {leftVisiblePlayers.map((player) => (
+                      <PlayerButton key={player.id} player={player} teamSide={leftTeamSide} />
                     ))}
                   </div>
                 </div>
@@ -2985,24 +3035,25 @@ export default function PlanillaPage() {
                 </div>
               </div>
 
+              {/* Panel derecho (depende de flipSides) */}
               <div className="hidden md:block md:col-span-3 overflow-hidden">
                 <div className="rounded-lg border bg-card overflow-hidden flex flex-col">
                   <div
                     className="px-3 py-2 text-sm font-semibold text-right cursor-pointer"
-                    style={{ borderRightColor: awayColor, borderRightWidth: 6 }}
+                    style={{ borderRightColor: rightColor, borderRightWidth: 6 }}
                     onClick={() => {
-                      setSubsDialogTeamSide("away")
+                      setSubsDialogTeamSide(rightTeamSide)
                       setSubsSelection(
-                        onCourtPlayers.away.length ? onCourtPlayers.away : awayPlayers.map((p) => p.id),
+                        rightOnCourtIds.length ? rightOnCourtIds : rightAllPlayers.map((p) => p.id),
                       )
                       setShowSubsDialog(true)
                     }}
                   >
-                    {awayTeam.name}
+                    {rightTeam.name}
                   </div>
                   <div className="flex-1 overflow-auto p-2 space-y-2">
-                    {visibleAwayPlayers.map((player) => (
-                      <PlayerButton key={player.id} player={player} teamSide="away" />
+                    {rightVisiblePlayers.map((player) => (
+                      <PlayerButton key={player.id} player={player} teamSide={rightTeamSide} />
                     ))}
                   </div>
                 </div>
@@ -3529,6 +3580,22 @@ export default function PlanillaPage() {
                       </div>
                     </div>
                   </div>
+                </div>
+                <div className="rounded-md border p-3 flex flex-col gap-3">
+                  <div>
+                    <div className="text-sm font-semibold">Lados de equipos</div>
+                    <div className="text-xs text-muted-foreground">
+                      Cambia qué equipo se muestra a la izquierda o derecha en la pestaña Cancha. No afecta quién es
+                      local o visitante.
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setFlipSides((prev) => !prev)}
+                  >
+                    {flipSides ? "Mostrar local a la izquierda" : "Mostrar local a la derecha"}
+                  </Button>
                 </div>
                 <div className="rounded-md border p-3">
                   <div className="text-sm font-semibold">Acciones</div>

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, type ChangeEvent } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -174,8 +174,8 @@ export default function PrePlanillaPage() {
           .in("role", ["tecnico", "asistente"]),
       ])
 
-      if (teamsRes.error) setError((prev) => prev ?? teamsRes.error.message)
-      if (playersRes.error) setError((prev) => prev ?? playersRes.error.message)
+      if (teamsRes.error) setError((prev: string | null) => prev ?? teamsRes.error.message)
+      if (playersRes.error) setError((prev: string | null) => prev ?? playersRes.error.message)
 
       const teams = (teamsRes.data ?? []) as any[]
       const homeDbTeam = teams.find((t) => t.id === mappedMatch.home_team_id)
@@ -208,8 +208,8 @@ export default function PrePlanillaPage() {
         return mapped
       })
 
-      const home = allPlayers.filter((p) => p.teamId === mappedMatch.home_team_id)
-      const away = allPlayers.filter((p) => p.teamId === mappedMatch.away_team_id)
+      const home = allPlayers.filter((p: Player) => p.teamId === mappedMatch.home_team_id)
+      const away = allPlayers.filter((p: Player) => p.teamId === mappedMatch.away_team_id)
       setHomePlayers(home)
       setAwayPlayers(away)
 
@@ -251,9 +251,11 @@ export default function PrePlanillaPage() {
   const selectedPlayers = useMemo(() => {
     const ids = new Set(activeState.selectedPlayerIds)
     return activePlayers
-      .filter((p) => ids.has(p.id))
-      .map((p) => ({ player: p, jersey: getJersey(p, activeState) }))
-      .sort((a, b) => a.jersey - b.jersey)
+      .filter((p: Player) => ids.has(p.id))
+      .map((p: Player) => ({ player: p, jersey: getJersey(p, activeState) }))
+      .sort(
+        (a: { player: Player; jersey: number }, b: { player: Player; jersey: number }) => a.jersey - b.jersey,
+      )
   }, [activePlayers, activeState])
 
   const staffOptions = useMemo(() => {
@@ -262,7 +264,7 @@ export default function PrePlanillaPage() {
   }, [staffByTeamId, activeTeam])
 
   const toggleStaffSelected = (staffId: string) => {
-    setState((prev) => {
+    setState((prev: PrePlanillaState) => {
       const cur = prev[activeSide]
       const exists = cur.staffIds.includes(staffId)
       if (exists) {
@@ -270,7 +272,7 @@ export default function PrePlanillaPage() {
           ...prev,
           [activeSide]: {
             ...cur,
-            staffIds: cur.staffIds.filter((id) => id !== staffId),
+            staffIds: cur.staffIds.filter((id: string) => id !== staffId),
           },
         }
       }
@@ -304,22 +306,22 @@ export default function PrePlanillaPage() {
     const raw = jerseyDialogValue.trim()
     const next = Number(raw)
 
-    if (!raw || Number.isNaN(next) || next <= 0) {
+    if (!raw || Number.isNaN(next) || next < 0) {
       setJerseyDialogError("Número inválido")
       return
     }
 
     const selectedIds = new Set(activeState.selectedPlayerIds)
     const duplicates = activePlayers
-      .filter((p) => selectedIds.has(p.id) && p.id !== jerseyDialogPlayer.id)
-      .some((p) => getJersey(p, activeState) === next)
+      .filter((p: Player) => selectedIds.has(p.id) && p.id !== jerseyDialogPlayer.id)
+      .some((p: Player) => getJersey(p, activeState) === next)
 
     if (duplicates) {
       setJerseyDialogError("Ya hay un jugador seleccionado con ese dorsal")
       return
     }
 
-    setState((prev) => ({
+    setState((prev: PrePlanillaState) => ({
       ...prev,
       [activeSide]: {
         ...prev[activeSide],
@@ -331,7 +333,7 @@ export default function PrePlanillaPage() {
     }))
 
     try {
-      await supabase
+      await (supabase as any)
         .from("players")
         .update({ jersey_number: next })
         .eq("id", jerseyDialogPlayer.id)
@@ -344,13 +346,13 @@ export default function PrePlanillaPage() {
   }
 
   const togglePlayerSelected = (playerId: string) => {
-    setState((prev) => {
+    setState((prev: PrePlanillaState) => {
       const cur = prev[activeSide]
       const exists = cur.selectedPlayerIds.includes(playerId)
 
       if (exists) {
-        const nextSelected = cur.selectedPlayerIds.filter((id) => id !== playerId)
-        const nextStarters = cur.starters.filter((id) => id !== playerId)
+        const nextSelected = cur.selectedPlayerIds.filter((id: string) => id !== playerId)
+        const nextStarters = cur.starters.filter((id: string) => id !== playerId)
         const nextCaptainId = cur.captainId === playerId ? null : cur.captainId
         return {
           ...prev,
@@ -365,14 +367,14 @@ export default function PrePlanillaPage() {
 
       if (cur.selectedPlayerIds.length >= 12) return prev
 
-      const player = activePlayers.find((p) => p.id === playerId)
+      const player = activePlayers.find((p: Player) => p.id === playerId)
       if (!player) return prev
       const jersey = getJersey(player, cur)
 
       const duplicates = cur.selectedPlayerIds
-        .map((id) => activePlayers.find((p) => p.id === id))
+        .map((id: string) => activePlayers.find((p: Player) => p.id === id))
         .filter(Boolean)
-        .some((p) => p && getJersey(p, cur) === jersey)
+        .some((p: Player | undefined) => p && getJersey(p, cur) === jersey)
 
       if (duplicates) return prev
 
@@ -394,25 +396,27 @@ export default function PrePlanillaPage() {
     const jersey = getJersey(player, activeState)
     const selectedIds = new Set(activeState.selectedPlayerIds)
     const duplicate = activePlayers
-      .filter((p) => selectedIds.has(p.id))
-      .some((p) => getJersey(p, activeState) === jersey)
+      .filter((p: Player) => selectedIds.has(p.id))
+      .some((p: Player) => getJersey(p, activeState) === jersey)
 
     return !duplicate
   }
 
   const toggleStarter = (playerId: string) => {
-    setState((prev) => {
+    setState((prev: PrePlanillaState) => {
       const cur = prev[activeSide]
       if (!cur.selectedPlayerIds.includes(playerId)) return prev
       const exists = cur.starters.includes(playerId)
-      const nextStarters = exists ? cur.starters.filter((id) => id !== playerId) : [...cur.starters, playerId]
+      const nextStarters = exists
+        ? cur.starters.filter((id: string) => id !== playerId)
+        : [...cur.starters, playerId]
       const nextCaptainId = exists && cur.captainId === playerId ? null : cur.captainId
       return { ...prev, [activeSide]: { ...cur, starters: nextStarters, captainId: nextCaptainId } }
     })
   }
 
   const setCaptain = (playerId: string) => {
-    setState((prev) => {
+    setState((prev: PrePlanillaState) => {
       const cur = prev[activeSide]
       if (!cur.selectedPlayerIds.includes(playerId)) return prev
       const nextStarters = cur.starters.includes(playerId) ? cur.starters : [...cur.starters, playerId]
@@ -426,8 +430,8 @@ export default function PrePlanillaPage() {
 
     const selectedIds = new Set(activeState.selectedPlayerIds)
     const jerseys = activePlayers
-      .filter((p) => selectedIds.has(p.id))
-      .map((p) => getJersey(p, activeState))
+      .filter((p: Player) => selectedIds.has(p.id))
+      .map((p: Player) => getJersey(p, activeState))
 
     return new Set(jerseys).size === jerseys.length
   }
@@ -574,7 +578,7 @@ export default function PrePlanillaPage() {
                 <p className="text-xs text-muted-foreground">No hay técnicos/asistentes cargados para este equipo.</p>
               ) : (
                 <div className="space-y-2">
-                  {staffOptions.map((s) => {
+                  {staffOptions.map((s: StaffRow) => {
                     const selectedIndex = activeState.staffIds.indexOf(s.id)
                     const selected = selectedIndex !== -1
                     const tag = selected ? (selectedIndex === 0 ? "DT" : "AS") : null
@@ -610,8 +614,10 @@ export default function PrePlanillaPage() {
               <div className="space-y-2">
                 {activePlayers
                   .slice()
-                  .sort((a, b) => getJersey(a, activeState) - getJersey(b, activeState))
-                  .map((p) => {
+                  .sort(
+                    (a: Player, b: Player) => getJersey(a, activeState) - getJersey(b, activeState),
+                  )
+                  .map((p: Player) => {
                     const selected = activeState.selectedPlayerIds.includes(p.id)
                     const jersey = getJersey(p, activeState)
                     const enabled = canSelectPlayer(p)
@@ -669,7 +675,7 @@ export default function PrePlanillaPage() {
                 <Input
                   id="jersey"
                   value={jerseyDialogValue}
-                  onChange={(e) => setJerseyDialogValue(e.target.value)}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setJerseyDialogValue(e.target.value)}
                   inputMode="numeric"
                 />
                 {jerseyDialogError && <p className="text-sm text-destructive">{jerseyDialogError}</p>}
@@ -698,7 +704,7 @@ export default function PrePlanillaPage() {
           </div>
 
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            {selectedPlayers.map(({ player, jersey }) => (
+            {selectedPlayers.map(({ player, jersey }: { player: Player; jersey: number }) => (
               <StarterTile
                 key={player.id}
                 playerId={player.id}
@@ -723,7 +729,7 @@ export default function PrePlanillaPage() {
             disabled={!canContinueStarters()}
             onClick={() => {
               // Marcar equipo como confirmado sin requerir firma digital
-              setState((prev) => ({
+              setState((prev: PrePlanillaState) => ({
                 ...prev,
                 [activeSide]: {
                   ...prev[activeSide],
