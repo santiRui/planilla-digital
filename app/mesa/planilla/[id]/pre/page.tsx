@@ -299,7 +299,7 @@ export default function PrePlanillaPage() {
     setJerseyDialogOpen(true)
   }
 
-  const commitJerseyChange = () => {
+  const commitJerseyChange = async () => {
     if (!jerseyDialogPlayer) return
     const raw = jerseyDialogValue.trim()
     const next = Number(raw)
@@ -329,6 +329,15 @@ export default function PrePlanillaPage() {
         },
       },
     }))
+
+    try {
+      await supabase
+        .from("players")
+        .update({ jersey_number: next })
+        .eq("id", jerseyDialogPlayer.id)
+    } catch {
+      // Si falla la persistencia en BD, mantenemos el cambio local
+    }
 
     setJerseyDialogOpen(false)
     setJerseyDialogPlayer(null)
