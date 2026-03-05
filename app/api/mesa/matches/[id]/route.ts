@@ -114,6 +114,7 @@ type MatchLite = {
   away_team_id: string
   home_score: number | null
   away_score: number | null
+  status_reason?: string | null
 }
 
 type StandingRow = {
@@ -124,6 +125,7 @@ type StandingRow = {
   pointsFor: number
   pointsAgainst: number
   points: number
+  np: number
 }
 
 function computeStandings(teamIds: string[], finalMatches: MatchLite[]): StandingRow[] {
@@ -137,6 +139,7 @@ function computeStandings(teamIds: string[], finalMatches: MatchLite[]): Standin
       pointsFor: 0,
       pointsAgainst: 0,
       points: 0,
+      np: 0,
     })
   }
 
@@ -156,23 +159,39 @@ function computeStandings(teamIds: string[], finalMatches: MatchLite[]): Standin
     away.pointsFor += m.away_score
     away.pointsAgainst += m.home_score
 
+    const reason = ((m as any).status_reason as string | null | undefined) ?? null
+    const isNoShow = !!reason && reason.startsWith("no_presentacion:")
+    const absent = isNoShow ? (reason.split(":")[1] as "home" | "away" | undefined) : undefined
+
+    const homeAbsent = isNoShow && absent === "home"
+    const awayAbsent = isNoShow && absent === "away"
+
     if (m.home_score > m.away_score) {
       home.won += 1
-      away.lost += 1
+      home.points += 2
+      if (awayAbsent) {
+        away.np += 1
+      } else {
+        away.lost += 1
+        away.points += 1
+      }
     } else {
       away.won += 1
-      home.lost += 1
+      away.points += 2
+      if (homeAbsent) {
+        home.np += 1
+      } else {
+        home.lost += 1
+        home.points += 1
+      }
     }
   }
 
   const list = Array.from(rows.values())
-  for (const r of list) {
-    // 2 puntos por victoria, 1 punto por derrota
-    r.points = r.won * 2 + r.lost * 1
-  }
 
   list.sort((a, b) => {
     if (b.points !== a.points) return b.points - a.points
+    if (a.np !== b.np) return a.np - b.np
     const aDiff = a.pointsFor - a.pointsAgainst
     const bDiff = b.pointsFor - b.pointsAgainst
     if (bDiff !== aDiff) return bDiff - aDiff

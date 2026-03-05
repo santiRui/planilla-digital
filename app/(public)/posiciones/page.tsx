@@ -16,6 +16,7 @@ export default function PosicionesPage() {
     .sort((a, b) => {
       // Sort by points first, then by point difference
       if (b.points !== a.points) return b.points - a.points
+      if (a.np !== b.np) return a.np - b.np
       const aDiff = a.pointsFor - a.pointsAgainst
       const bDiff = b.pointsFor - b.pointsAgainst
       return bDiff - aDiff
@@ -67,6 +68,7 @@ export default function PosicionesPage() {
                   <TableHead className="text-center w-12">PJ</TableHead>
                   <TableHead className="text-center w-12">G</TableHead>
                   <TableHead className="text-center w-12">P</TableHead>
+                  <TableHead className="text-center w-12">NP</TableHead>
                   <TableHead className="text-center w-16">PF</TableHead>
                   <TableHead className="text-center w-16">PC</TableHead>
                   <TableHead className="text-center w-16">DIF</TableHead>
@@ -76,7 +78,7 @@ export default function PosicionesPage() {
               <TableBody>
                 {categoryStandings.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={10} className="text-center py-8 text-muted-foreground">
                       No hay datos de clasificación disponibles
                     </TableCell>
                   </TableRow>
@@ -104,13 +106,13 @@ export default function PosicionesPage() {
                             </div>
                             <div>
                               <p className="font-medium">{team?.name || "Desconocido"}</p>
-                              <p className="text-xs text-muted-foreground hidden sm:block">{team?.neighborhood}</p>
                             </div>
                           </div>
                         </TableCell>
                         <TableCell className="text-center">{standing.played}</TableCell>
                         <TableCell className="text-center text-[var(--color-success)]">{standing.won}</TableCell>
                         <TableCell className="text-center text-destructive">{standing.lost}</TableCell>
+                        <TableCell className="text-center">{standing.np}</TableCell>
                         <TableCell className="text-center">{standing.pointsFor}</TableCell>
                         <TableCell className="text-center">{standing.pointsAgainst}</TableCell>
                         <TableCell
@@ -138,8 +140,8 @@ export default function PosicionesPage() {
           <span>Clasificación</span>
         </div>
         <span className="text-xs">
-          PJ: Partidos Jugados | G: Ganados | P: Perdidos | PF: Puntos a Favor | PC: Puntos en Contra | DIF: Diferencia
-          | PTS: Puntos
+          PJ: Partidos Jugados | G: Ganados | P: Perdidos | NP: No Presentación | PF: Puntos a Favor | PC: Puntos en Contra
+          | DIF: Diferencia | PTS: Puntos
         </span>
       </div>
     </div>

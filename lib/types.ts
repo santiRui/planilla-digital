@@ -147,6 +147,7 @@ export interface TeamStanding {
   played: number
   won: number
   lost: number
+  np: number
   pointsFor: number
   pointsAgainst: number
   points: number // Tournament points

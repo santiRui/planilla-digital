@@ -38,6 +38,7 @@ type MatchRow = {
   awayScore?: number
   liveHomeScore?: number | null
   liveAwayScore?: number | null
+  statusReason?: string | null
 }
 
 type StandingRow = {
@@ -48,6 +49,7 @@ type StandingRow = {
   pointsFor: number
   pointsAgainst: number
   points: number
+  np: number
 }
 
 function computeStandings(teams: Team[], matches: MatchRow[]): StandingRow[] {
@@ -62,6 +64,7 @@ function computeStandings(teams: Team[], matches: MatchRow[]): StandingRow[] {
       pointsFor: 0,
       pointsAgainst: 0,
       points: 0,
+      np: 0,
     })
   }
 
@@ -85,22 +88,40 @@ function computeStandings(teams: Team[], matches: MatchRow[]): StandingRow[] {
     away.pointsFor += awayScore
     away.pointsAgainst += homeScore
 
+    const reason = (m.statusReason ?? "").toString()
+    const isNoShow = reason.startsWith("no_presentacion:")
+    const absent = isNoShow ? (reason.split(":")[1] as "home" | "away" | undefined) : undefined
+
+    const homeAbsent = isNoShow && absent === "home"
+    const awayAbsent = isNoShow && absent === "away"
+
     if (homeScore > awayScore) {
       home.won += 1
-      away.lost += 1
+      home.points += 2
+      if (awayAbsent) {
+        away.np += 1
+        // sin puntos para el ausente
+      } else {
+        away.lost += 1
+        away.points += 1
+      }
     } else if (awayScore > homeScore) {
       away.won += 1
-      home.lost += 1
+      away.points += 2
+      if (homeAbsent) {
+        home.np += 1
+      } else {
+        home.lost += 1
+        home.points += 1
+      }
     }
   }
 
   const list = Array.from(rows.values())
-  for (const r of list) {
-    r.points = r.won * 2 + r.lost * 1
-  }
 
   list.sort((a, b) => {
     if (b.points !== a.points) return b.points - a.points
+    if (a.np !== b.np) return a.np - b.np
     const aDiff = a.pointsFor - a.pointsAgainst
     const bDiff = b.pointsFor - b.pointsAgainst
     if (bDiff !== aDiff) return bDiff - aDiff
@@ -148,12 +169,10 @@ function computeProjectedStandings(teams: Team[], matches: MatchRow[]): Standing
   }
 
   const list = Array.from(rows.values())
-  for (const r of list) {
-    r.points = r.won * 2 + r.lost * 1
-  }
 
   list.sort((a, b) => {
     if (b.points !== a.points) return b.points - a.points
+    if (a.np !== b.np) return a.np - b.np
     const aDiff = a.pointsFor - a.pointsAgainst
     const bDiff = b.pointsFor - b.pointsAgainst
     if (bDiff !== aDiff) return bDiff - aDiff
@@ -194,17 +213,18 @@ export default function PosicionesPage({ params }: PosicionesPageProps) {
         return
       }
 
+      const rawTournament = tRow as any
       const tournament: Tournament = {
-        id: tRow.id as string,
-        name: tRow.name as string,
-        categoryId: (tRow.category_id as string | null) ?? null,
+        id: rawTournament.id as string,
+        name: rawTournament.name as string,
+        categoryId: (rawTournament.category_id as string | null) ?? null,
       }
       setTournament(tournament)
 
       const { data: matchRows, error: matchError } = await supabase
         .from("matches")
         .select(
-          "id, home_team_id, away_team_id, phase, status, home_score, away_score, live_home_score, live_away_score",
+          "id, home_team_id, away_team_id, phase, status, home_score, away_score, live_home_score, live_away_score, status_reason",
         )
         .eq("tournament_id", id)
 
@@ -226,6 +246,7 @@ export default function PosicionesPage({ params }: PosicionesPageProps) {
         awayScore: m.away_score ?? undefined,
         liveHomeScore: (m.live_home_score as number | null) ?? null,
         liveAwayScore: (m.live_away_score as number | null) ?? null,
+        statusReason: (m.status_reason as string | null) ?? null,
       }))
 
       setMatches(mappedMatches)
@@ -274,7 +295,7 @@ export default function PosicionesPage({ params }: PosicionesPageProps) {
       const { data: matchRows, error: matchError } = await supabase
         .from("matches")
         .select(
-          "id, home_team_id, away_team_id, phase, status, home_score, away_score, live_home_score, live_away_score",
+          "id, home_team_id, away_team_id, phase, status, home_score, away_score, live_home_score, live_away_score, status_reason",
         )
         .eq("tournament_id", tournament.id)
 
@@ -290,6 +311,7 @@ export default function PosicionesPage({ params }: PosicionesPageProps) {
             awayScore: m.away_score ?? undefined,
             liveHomeScore: (m.live_home_score as number | null) ?? null,
             liveAwayScore: (m.live_away_score as number | null) ?? null,
+            statusReason: (m.status_reason as string | null) ?? null,
           })),
         )
       }
@@ -400,6 +422,7 @@ export default function PosicionesPage({ params }: PosicionesPageProps) {
                       <TableHead className="text-center w-14">PJ</TableHead>
                       <TableHead className="text-center w-14">G</TableHead>
                       <TableHead className="text-center w-14">P</TableHead>
+                      <TableHead className="text-center w-14">NP</TableHead>
                       <TableHead className="text-center w-16">PF</TableHead>
                       <TableHead className="text-center w-16">PC</TableHead>
                       <TableHead className="text-center w-16">DIF</TableHead>
@@ -447,7 +470,14 @@ export default function PosicionesPage({ params }: PosicionesPageProps) {
                                 </div>
                               )}
                               <div className="flex flex-col">
-                                <p className="font-medium">{team?.name || "Equipo"}</p>
+                                <div className="flex items-center gap-2">
+                                  <p className="font-medium">{team?.name || "Equipo"}</p>
+                                  {standing.np > 0 && (
+                                    <Badge variant="destructive" className="h-5 px-2 text-[10px]">
+                                      NP
+                                    </Badge>
+                                  )}
+                                </div>
                                 <p className="text-xs text-muted-foreground">{team?.clubName}</p>
                                 {isLive && live && liveHome != null && liveAway != null && (
                                   <p className="text-[11px] text-[var(--color-success)] font-medium">
@@ -459,16 +489,18 @@ export default function PosicionesPage({ params }: PosicionesPageProps) {
                             </div>
                           </TableCell>
                           <TableCell className="text-center">{standing.played}</TableCell>
-                          <TableCell className="text-center text-green-600 font-medium">{standing.won}</TableCell>
-                          <TableCell className="text-center text-red-600 font-medium">{standing.lost}</TableCell>
+                          <TableCell className="text-center">{standing.won}</TableCell>
+                          <TableCell className="text-center">{standing.lost}</TableCell>
+                          <TableCell className="text-center">{standing.np}</TableCell>
                           <TableCell className="text-center">{standing.pointsFor}</TableCell>
                           <TableCell className="text-center">{standing.pointsAgainst}</TableCell>
-                          <TableCell
-                            className={`text-center font-medium ${diff > 0 ? "text-green-600" : diff < 0 ? "text-red-600" : ""}`}
-                          >
-                            {diff > 0 ? `+${diff}` : diff}
+                          <TableCell className="text-center">
+                            <span className={diff >= 0 ? "text-green-600" : "text-red-600"}>
+                              {diff >= 0 ? "+" : ""}
+                              {diff}
+                            </span>
                           </TableCell>
-                          <TableCell className="text-center font-bold text-lg">{standing.points}</TableCell>
+                          <TableCell className="text-center font-bold">{standing.points}</TableCell>
                         </TableRow>
                       )
                     })}

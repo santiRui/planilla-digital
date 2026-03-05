@@ -52,6 +52,10 @@ export default function FasesPage() {
     bestOfFinal: 1,
     tiebreakMode: "olimpico_sorteo",
   })
+  const [qualifiedTeamsInput, setQualifiedTeamsInput] = useState<string>("8")
+  const [bestOfCuartosInput, setBestOfCuartosInput] = useState<string>("1")
+  const [bestOfSemifinalInput, setBestOfSemifinalInput] = useState<string>("1")
+  const [bestOfFinalInput, setBestOfFinalInput] = useState<string>("1")
   const [hasPlayoffConfig, setHasPlayoffConfig] = useState(false)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -211,6 +215,10 @@ export default function FasesPage() {
           bestOfFinal: cfg.bestOfFinal ?? prev.bestOfFinal,
           tiebreakMode: (cfg.tiebreakMode as PlayoffConfig["tiebreakMode"]) ?? prev.tiebreakMode,
         }))
+        setQualifiedTeamsInput(String(cfg.qualifiedTeams ?? 8))
+        setBestOfCuartosInput(String(cfg.bestOfCuartos ?? 1))
+        setBestOfSemifinalInput(String(cfg.bestOfSemifinal ?? 1))
+        setBestOfFinalInput(String(cfg.bestOfFinal ?? 1))
         setHasPlayoffConfig(true)
       } else {
         setHasPlayoffConfig(false)
@@ -343,6 +351,29 @@ export default function FasesPage() {
 
   const handleGeneratePhase = async () => {
     if (!selectedTournament) return
+
+    const qualifiedTeams = Number.parseInt(qualifiedTeamsInput, 10)
+    const bestOfCuartos = Number.parseInt(bestOfCuartosInput, 10)
+    const bestOfSemifinal = Number.parseInt(bestOfSemifinalInput, 10)
+    const bestOfFinal = Number.parseInt(bestOfFinalInput, 10)
+
+    if (!qualifiedTeamsInput.trim() || !Number.isFinite(qualifiedTeams) || ![2, 4, 8].includes(qualifiedTeams)) {
+      setError("Faltan datos: completá los equipos que clasifican (solo 2, 4 u 8).")
+      return
+    }
+    if (!bestOfCuartosInput.trim() || !Number.isFinite(bestOfCuartos) || bestOfCuartos < 1 || bestOfCuartos > 9) {
+      setError("Faltan datos: completá Cuartos (best-of) entre 1 y 9.")
+      return
+    }
+    if (!bestOfSemifinalInput.trim() || !Number.isFinite(bestOfSemifinal) || bestOfSemifinal < 1 || bestOfSemifinal > 9) {
+      setError("Faltan datos: completá Semifinal (best-of) entre 1 y 9.")
+      return
+    }
+    if (!bestOfFinalInput.trim() || !Number.isFinite(bestOfFinal) || bestOfFinal < 1 || bestOfFinal > 9) {
+      setError("Faltan datos: completá Final (best-of) entre 1 y 9.")
+      return
+    }
+
     setSubmitting(true)
     setError(null)
     try {
@@ -361,10 +392,10 @@ export default function FasesPage() {
         },
         body: JSON.stringify({
           tournamentId: selectedTournament,
-          qualifiedTeams: playoffConfig.qualifiedTeams,
-          bestOfCuartos: playoffConfig.bestOfCuartos,
-          bestOfSemifinal: playoffConfig.bestOfSemifinal,
-          bestOfFinal: playoffConfig.bestOfFinal,
+          qualifiedTeams,
+          bestOfCuartos,
+          bestOfSemifinal,
+          bestOfFinal,
           tiebreakMode: playoffConfig.tiebreakMode,
         }),
       })
@@ -563,10 +594,11 @@ export default function FasesPage() {
                   <div className="space-y-2">
                     {/* Encabezado de columnas */}
                     <div className="flex justify-end pr-1">
-                      <div className="grid grid-cols-8 gap-2 min-w-[280px] sm:min-w-[360px] text-[11px] sm:text-xs text-muted-foreground uppercase tracking-wide text-center">
+                      <div className="grid grid-cols-9 gap-2 min-w-[320px] sm:min-w-[400px] text-[11px] sm:text-xs text-muted-foreground uppercase tracking-wide text-center">
                         <span>PJ</span>
                         <span>G</span>
                         <span>P</span>
+                        <span>NP</span>
                         <span>Pts</span>
                         <span>Pts+</span>
                         <span>Pts-</span>
@@ -628,10 +660,11 @@ export default function FasesPage() {
                           </div>
                           {/* Valores alineados bajo el encabezado */}
                           <div className="flex justify-end pr-1">
-                            <div className="grid grid-cols-8 gap-2 min-w-[280px] sm:min-w-[360px] text-xs sm:text-sm text-foreground text-center">
+                            <div className="grid grid-cols-9 gap-2 min-w-[320px] sm:min-w-[400px] text-xs sm:text-sm text-foreground text-center">
                               <span>{standing.played}</span>
                               <span>{standing.won}</span>
                               <span>{standing.lost}</span>
+                              <span>{standing.np}</span>
                               <span>{standing.points}</span>
                               <span>{standing.pointsFor}</span>
                               <span>{standing.pointsAgainst}</span>
@@ -661,13 +694,17 @@ export default function FasesPage() {
                       type="number"
                       min={2}
                       max={32}
-                      value={playoffConfig.qualifiedTeams}
+                      value={qualifiedTeamsInput}
                       onChange={(e) => {
-                        const n = Number.parseInt(e.target.value || "0")
-                        setPlayoffConfig((prev) => ({
-                          ...prev,
-                          qualifiedTeams: n as 2 | 4 | 8,
-                        }))
+                        const next = e.target.value
+                        setQualifiedTeamsInput(next)
+                        const n = Number.parseInt(next, 10)
+                        if (Number.isFinite(n) && [2, 4, 8].includes(n)) {
+                          setPlayoffConfig((prev) => ({
+                            ...prev,
+                            qualifiedTeams: n as 2 | 4 | 8,
+                          }))
+                        }
                       }}
                     />
                     {!isQualifiedTeamsValid && (
@@ -683,13 +720,18 @@ export default function FasesPage() {
                         type="number"
                         min={1}
                         max={9}
-                        value={playoffConfig.bestOfCuartos}
-                        onChange={(e) =>
-                          setPlayoffConfig((prev) => ({
-                            ...prev,
-                            bestOfCuartos: Math.max(1, Number.parseInt(e.target.value || "1")),
-                          }))
-                        }
+                        value={bestOfCuartosInput}
+                        onChange={(e) => {
+                          const next = e.target.value
+                          setBestOfCuartosInput(next)
+                          const n = Number.parseInt(next, 10)
+                          if (Number.isFinite(n) && n >= 1 && n <= 9) {
+                            setPlayoffConfig((prev) => ({
+                              ...prev,
+                              bestOfCuartos: n,
+                            }))
+                          }
+                        }}
                       />
                     </div>
                     <div className="space-y-2">
@@ -698,13 +740,18 @@ export default function FasesPage() {
                         type="number"
                         min={1}
                         max={9}
-                        value={playoffConfig.bestOfSemifinal}
-                        onChange={(e) =>
-                          setPlayoffConfig((prev) => ({
-                            ...prev,
-                            bestOfSemifinal: Math.max(1, Number.parseInt(e.target.value || "1")),
-                          }))
-                        }
+                        value={bestOfSemifinalInput}
+                        onChange={(e) => {
+                          const next = e.target.value
+                          setBestOfSemifinalInput(next)
+                          const n = Number.parseInt(next, 10)
+                          if (Number.isFinite(n) && n >= 1 && n <= 9) {
+                            setPlayoffConfig((prev) => ({
+                              ...prev,
+                              bestOfSemifinal: n,
+                            }))
+                          }
+                        }}
                       />
                     </div>
                     <div className="space-y-2">
@@ -713,13 +760,18 @@ export default function FasesPage() {
                         type="number"
                         min={1}
                         max={9}
-                        value={playoffConfig.bestOfFinal}
-                        onChange={(e) =>
-                          setPlayoffConfig((prev) => ({
-                            ...prev,
-                            bestOfFinal: Math.max(1, Number.parseInt(e.target.value || "1")),
-                          }))
-                        }
+                        value={bestOfFinalInput}
+                        onChange={(e) => {
+                          const next = e.target.value
+                          setBestOfFinalInput(next)
+                          const n = Number.parseInt(next, 10)
+                          if (Number.isFinite(n) && n >= 1 && n <= 9) {
+                            setPlayoffConfig((prev) => ({
+                              ...prev,
+                              bestOfFinal: n,
+                            }))
+                          }
+                        }}
                       />
                     </div>
                   </div>
@@ -873,6 +925,7 @@ type MatchRow = {
   livePeriod?: number | null
   liveGameTime?: string | null
   zoneCode?: string | null
+  statusReason?: string | null
 }
 
 type StandingRow = {
@@ -880,6 +933,7 @@ type StandingRow = {
   played: number
   won: number
   lost: number
+  np: number
   pointsFor: number
   pointsAgainst: number
   points: number
@@ -901,6 +955,7 @@ function mapMatchFromDb(row: any): MatchRow {
     livePeriod: row.live_period ?? null,
     liveGameTime: row.live_game_time ?? null,
     zoneCode: row.zone_code ?? null,
+    statusReason: row.status_reason ?? null,
   }
 }
 
@@ -913,6 +968,7 @@ function computeStandings(teams: Team[], matches: MatchRow[]): StandingRow[] {
       played: 0,
       won: 0,
       lost: 0,
+      np: 0,
       pointsFor: 0,
       pointsAgainst: 0,
       points: 0,
@@ -936,23 +992,39 @@ function computeStandings(teams: Team[], matches: MatchRow[]): StandingRow[] {
     away.pointsFor += match.awayScore
     away.pointsAgainst += match.homeScore
 
+    const reason = (match.statusReason ?? "").toString()
+    const isNoShow = reason.startsWith("no_presentacion:")
+    const absent = isNoShow ? (reason.split(":")[1] as "home" | "away" | undefined) : undefined
+
+    const homeAbsent = isNoShow && absent === "home"
+    const awayAbsent = isNoShow && absent === "away"
+
     if (match.homeScore > match.awayScore) {
       home.won += 1
-      away.lost += 1
+      home.points += 2
+      if (awayAbsent) {
+        away.np += 1
+      } else {
+        away.lost += 1
+        away.points += 1
+      }
     } else {
       away.won += 1
-      home.lost += 1
+      away.points += 2
+      if (homeAbsent) {
+        home.np += 1
+      } else {
+        home.lost += 1
+        home.points += 1
+      }
     }
   }
 
   const list = Array.from(rows.values())
-  for (const r of list) {
-    // 2 puntos por victoria, 1 punto por derrota
-    r.points = r.won * 2 + r.lost * 1
-  }
 
   list.sort((a, b) => {
     if (b.points !== a.points) return b.points - a.points
+    if (a.np !== b.np) return a.np - b.np
     const aDiff = a.pointsFor - a.pointsAgainst
     const bDiff = b.pointsFor - b.pointsAgainst
     if (bDiff !== aDiff) return bDiff - aDiff
@@ -1001,19 +1073,21 @@ function computeProjectedStandings(teams: Team[], matches: MatchRow[]): Standing
     if (homeScore > awayScore) {
       home.won += 1
       away.lost += 1
+      home.points += 2
+      away.points += 1
     } else if (awayScore > homeScore) {
       away.won += 1
       home.lost += 1
+      away.points += 2
+      home.points += 1
     }
   }
 
   const list = Array.from(rows.values())
-  for (const r of list) {
-    r.points = r.won * 2 + r.lost * 1
-  }
 
   list.sort((a, b) => {
     if (b.points !== a.points) return b.points - a.points
+    if (a.np !== b.np) return a.np - b.np
     const aDiff = a.pointsFor - a.pointsAgainst
     const bDiff = b.pointsFor - b.pointsAgainst
     if (bDiff !== aDiff) return bDiff - aDiff

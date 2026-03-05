@@ -67,6 +67,8 @@ export default function JugadoresPage() {
     federatedCategory: "mayores" as "mayores" | "intermedia",
     labasSeasons: 0,
   })
+  const [jerseyNumberInput, setJerseyNumberInput] = useState<string>("0")
+  const [labasSeasonsInput, setLabasSeasonsInput] = useState<string>("0")
 
   const teamNameCounts = useMemo(() => {
     const counts: Record<string, number> = {}
@@ -143,6 +145,18 @@ export default function JugadoresPage() {
         return
       }
 
+      const jerseyNumber = Number.parseInt(jerseyNumberInput, 10)
+      if (!jerseyNumberInput.trim() || !Number.isFinite(jerseyNumber) || jerseyNumber < 0 || jerseyNumber > 99) {
+        setFormError({
+          title: "Faltan datos",
+          description: "Completá el número de camiseta (0 a 99).",
+        })
+        return
+      }
+
+      const parsedLabas = Number.parseInt(labasSeasonsInput, 10)
+      const labasSeasons = !labasSeasonsInput.trim() || !Number.isFinite(parsedLabas) ? 0 : Math.max(0, parsedLabas)
+
       if (!formData.firstName || !formData.lastName || !formData.teamId || !formData.dni || !formData.birthDate) {
         setFormError({
           title: "Faltan datos",
@@ -157,11 +171,11 @@ export default function JugadoresPage() {
         lastName: formData.lastName,
         dni: formData.dni,
         birthDate: formData.birthDate,
-        jerseyNumber: formData.jerseyNumber,
+        jerseyNumber,
         heightCm: null,
         isFederated: formData.isFederated,
         federatedCategory: formData.isFederated ? formData.federatedCategory : null,
-        labasSeasons: formData.labasSeasons,
+        labasSeasons,
         photoUrl: null,
       }
 
@@ -213,6 +227,8 @@ export default function JugadoresPage() {
       federatedCategory: "mayores",
       labasSeasons: 0,
     })
+    setJerseyNumberInput("0")
+    setLabasSeasonsInput("0")
     setTeamInput("")
   }
 
@@ -230,6 +246,8 @@ export default function JugadoresPage() {
       federatedCategory: player.federatedCategory ?? "mayores",
       labasSeasons: player.labasSeasons ?? 0,
     })
+    setJerseyNumberInput(String(player.jerseyNumber))
+    setLabasSeasonsInput(String(player.labasSeasons ?? 0))
     setTeamInput(teamIdToLabel[player.teamId] ?? "")
     setIsOpen(true)
   }
@@ -401,8 +419,14 @@ export default function JugadoresPage() {
                       type="number"
                       min="0"
                       max="99"
-                      value={formData.jerseyNumber}
-                      onChange={(e) => setFormData({ ...formData, jerseyNumber: Number.parseInt(e.target.value) || 0 })}
+                      value={jerseyNumberInput}
+                      onChange={(e) => {
+                        setJerseyNumberInput(e.target.value)
+                        const n = Number.parseInt(e.target.value, 10)
+                        if (Number.isFinite(n) && n >= 0 && n <= 99) {
+                          setFormData((prev) => ({ ...prev, jerseyNumber: n }))
+                        }
+                      }}
                     />
                   </div>
                   <div className="flex items-center justify-between">
@@ -437,10 +461,14 @@ export default function JugadoresPage() {
                     id="labasSeasons"
                     type="number"
                     min="0"
-                    value={formData.labasSeasons}
-                    onChange={(e) =>
-                      setFormData({ ...formData, labasSeasons: Math.max(0, Number.parseInt(e.target.value || "0", 10)) })
-                    }
+                    value={labasSeasonsInput}
+                    onChange={(e) => {
+                      setLabasSeasonsInput(e.target.value)
+                      const n = Number.parseInt(e.target.value, 10)
+                      if (Number.isFinite(n) && n >= 0) {
+                        setFormData((prev) => ({ ...prev, labasSeasons: n }))
+                      }
+                    }}
                   />
                 </div>
               </div>

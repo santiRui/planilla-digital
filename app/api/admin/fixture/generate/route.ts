@@ -6,6 +6,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server"
 const generateFixtureSchema = z.object({
   tournamentId: z.string().min(1),
   zonesCount: z.number().int().min(1).max(26).optional(),
+  wheelsCount: z.number().int().min(1).max(6).optional(),
 })
 
 async function assertAdmin(accessToken: string) {
@@ -85,6 +86,30 @@ function roundRobinPairs(teamIds: string[]) {
   return result
 }
 
+function roundRobinPairsWithWheels(teamIds: string[], wheelsCount: number) {
+  const wheels = Math.max(1, Math.floor(wheelsCount || 1))
+  const base = roundRobinPairs(teamIds)
+
+  // For N teams (with BYE handled inside roundRobinPairs), base rounds are the max round number.
+  const baseRounds = base.reduce((max, m) => Math.max(max, m.round), 0)
+
+  const out: Array<{ round: number; homeTeamId: string; awayTeamId: string }> = []
+
+  for (let wheel = 1; wheel <= wheels; wheel += 1) {
+    const roundOffset = (wheel - 1) * baseRounds
+    const swap = wheel % 2 === 0
+    for (const m of base) {
+      out.push({
+        round: roundOffset + m.round,
+        homeTeamId: swap ? m.awayTeamId : m.homeTeamId,
+        awayTeamId: swap ? m.homeTeamId : m.awayTeamId,
+      })
+    }
+  }
+
+  return out
+}
+
 export async function POST(req: Request) {
   try {
     const authHeader = req.headers.get("authorization")
@@ -109,6 +134,7 @@ export async function POST(req: Request) {
 
     const { tournamentId } = parsed.data
     const zonesCount = Number(parsed.data.zonesCount ?? 1)
+    const wheelsCount = Number(parsed.data.wheelsCount ?? 1)
 
     const { data: tournament, error: tournamentError } = await auth.adminClient
       .from("tournaments")
@@ -199,7 +225,7 @@ export async function POST(req: Request) {
     }
 
     const insertRows = zones.flatMap((z) => {
-      const pairs = roundRobinPairs(z.teamIds)
+      const pairs = roundRobinPairsWithWheels(z.teamIds, wheelsCount)
       return pairs.map((p) => ({
         tournament_id: tournamentId,
         home_team_id: p.homeTeamId,

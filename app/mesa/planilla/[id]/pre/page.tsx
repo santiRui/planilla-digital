@@ -84,6 +84,8 @@ export default function PrePlanillaPage() {
 
   const supabase = useMemo(() => createSupabaseBrowserClient(), [])
 
+  const [profileRole, setProfileRole] = useState<"admin" | "arbitro" | "oficial_mesa" | null>(null)
+
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -96,6 +98,11 @@ export default function PrePlanillaPage() {
 
   const [step, setStep] = useState<"teams" | "roster" | "starters">("teams")
   const [activeSide, setActiveSide] = useState<Side>("home")
+
+  const [noShowDialogOpen, setNoShowDialogOpen] = useState(false)
+  const [noShowAbsentSide, setNoShowAbsentSide] = useState<Side>("home")
+  const [noShowSubmitting, setNoShowSubmitting] = useState(false)
+  const [noShowError, setNoShowError] = useState<string | null>(null)
 
   const [state, setState] = useState<PrePlanillaState>(() => {
     if (typeof window === "undefined") return defaultState()
@@ -126,6 +133,51 @@ export default function PrePlanillaPage() {
       return defaultState()
     }
   })
+
+  const finalizeNoShow = async () => {
+    setNoShowError(null)
+    setNoShowSubmitting(true)
+
+    const homeScore = noShowAbsentSide === "home" ? 0 : 20
+    const awayScore = noShowAbsentSide === "away" ? 0 : 20
+
+    try {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData.session?.access_token
+      if (!token) {
+        setNoShowError("No autorizado")
+        setNoShowSubmitting(false)
+        return
+      }
+
+      const res = await fetch(`/api/mesa/matches/${matchId}`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          status: "finalizado",
+          homeScore,
+          awayScore,
+          statusReason: `no_presentacion:${noShowAbsentSide}`,
+        }),
+      })
+
+      if (!res.ok) {
+        setNoShowError("No se pudo finalizar el partido")
+        setNoShowSubmitting(false)
+        return
+      }
+
+      setNoShowDialogOpen(false)
+      router.push("/mesa")
+    } catch {
+      setNoShowError("No se pudo finalizar el partido")
+    } finally {
+      setNoShowSubmitting(false)
+    }
+  }
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -232,6 +284,40 @@ export default function PrePlanillaPage() {
 
     run()
   }, [supabase, matchId])
+
+  useEffect(() => {
+    const run = async () => {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const session = sessionData.session
+      const user = session?.user
+      if (!user) {
+        setProfileRole(null)
+        return
+      }
+
+      const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle()
+      const rawProfile = profile as any
+      const role = rawProfile?.role ?? null
+      if (role === "admin" || role === "arbitro" || role === "oficial_mesa") {
+        setProfileRole(role)
+      } else {
+        setProfileRole(null)
+      }
+    }
+
+    run()
+  }, [supabase])
+
+  useEffect(() => {
+    if (!match) return
+    if (match.status === "en_juego" && profileRole === "arbitro") {
+      router.replace(`/mesa/planilla/${matchId}`)
+      return
+    }
+    if (match.status === "finalizado") {
+      router.replace("/mesa")
+    }
+  }, [match, matchId, profileRole, router])
 
   const teamForSide = (side: Side) => (side === "home" ? homeTeam : awayTeam)
   const playersForSide = (side: Side) => (side === "home" ? homePlayers : awayPlayers)
@@ -459,6 +545,14 @@ export default function PrePlanillaPage() {
     )
   }
 
+  if ((match?.status === "en_juego" && profileRole === "arbitro") || match?.status === "finalizado") {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <p className="text-muted-foreground">Redirigiendo...</p>
+      </div>
+    )
+  }
+
   if (error || !match || !homeTeam || !awayTeam) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -540,6 +634,12 @@ export default function PrePlanillaPage() {
             </button>
           </div>
 
+          <div className="mt-4 flex items-center justify-center">
+            <Button variant="outline" onClick={() => setNoShowDialogOpen(true)}>
+              Finalizar por no presentación
+            </Button>
+          </div>
+
           {bothConfirmed && (
             <div className="mt-6 flex items-center justify-center">
               <Button
@@ -553,6 +653,60 @@ export default function PrePlanillaPage() {
           )}
         </div>
       )}
+
+      <Dialog open={noShowDialogOpen} onOpenChange={setNoShowDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Finalizar por no presentación</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="text-sm">Seleccioná el equipo que no se presentó.</div>
+
+            <div className="grid gap-2">
+              <button
+                type="button"
+                className={`rounded-md border px-3 py-2 text-left ${noShowAbsentSide === "home" ? "border-primary" : ""}`}
+                onClick={() => setNoShowAbsentSide("home")}
+                disabled={noShowSubmitting}
+              >
+                <div className="text-xs text-muted-foreground">No se presentó</div>
+                <div className="font-semibold">{homeTeam.name} (LOCAL)</div>
+              </button>
+              <button
+                type="button"
+                className={`rounded-md border px-3 py-2 text-left ${noShowAbsentSide === "away" ? "border-primary" : ""}`}
+                onClick={() => setNoShowAbsentSide("away")}
+                disabled={noShowSubmitting}
+              >
+                <div className="text-xs text-muted-foreground">No se presentó</div>
+                <div className="font-semibold">{awayTeam.name} (VISITANTE)</div>
+              </button>
+            </div>
+
+            {noShowError && <div className="text-sm text-destructive">{noShowError}</div>}
+
+            <div className="rounded-md border bg-muted/40 p-3 text-sm">
+              Resultado:
+              <div className="mt-1 font-semibold">
+                {noShowAbsentSide === "home" ? `${awayTeam.name} 20 – 0 ${homeTeam.name}` : `${homeTeam.name} 20 – 0 ${awayTeam.name}`}
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                El equipo presente suma 2 puntos. El equipo ausente suma NP y 0 puntos.
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setNoShowDialogOpen(false)} disabled={noShowSubmitting}>
+              Cancelar
+            </Button>
+            <Button onClick={finalizeNoShow} disabled={noShowSubmitting}>
+              Finalizar partido
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {step === "roster" && activeTeam && (
         <div className="p-3 space-y-3">

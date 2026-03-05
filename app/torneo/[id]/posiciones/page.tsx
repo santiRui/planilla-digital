@@ -105,6 +105,9 @@ export default function TournamentStandingsPage({ params }: { params: Promise<{ 
                 .filter((s) => s.categoryId === category.id)
                 .sort((a, b) => {
                   if (b.points !== a.points) return b.points - a.points
+                  const aNp = (a as any).np ?? 0
+                  const bNp = (b as any).np ?? 0
+                  if (aNp !== bNp) return aNp - bNp
                   const aDiff = a.pointsFor - a.pointsAgainst
                   const bDiff = b.pointsFor - b.pointsAgainst
                   return bDiff - aDiff
@@ -131,6 +134,7 @@ export default function TournamentStandingsPage({ params }: { params: Promise<{ 
                               <TableHead className="text-center">PJ</TableHead>
                               <TableHead className="text-center">PG</TableHead>
                               <TableHead className="text-center">PP</TableHead>
+                              <TableHead className="text-center">NP</TableHead>
                               <TableHead className="text-center">PF</TableHead>
                               <TableHead className="text-center">PC</TableHead>
                               <TableHead className="text-center">DIF</TableHead>
@@ -179,6 +183,7 @@ export default function TournamentStandingsPage({ params }: { params: Promise<{ 
                                   <TableCell className="text-center text-red-600 font-medium">
                                     {standing.lost}
                                   </TableCell>
+                                  <TableCell className="text-center">{standing.np}</TableCell>
                                   <TableCell className="text-center">{standing.pointsFor}</TableCell>
                                   <TableCell className="text-center">{standing.pointsAgainst}</TableCell>
                                   <TableCell

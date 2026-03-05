@@ -621,14 +621,14 @@ export const matches: Match[] = [
 
 // Team Standings for Liga A1 Masculino
 export const standings: TeamStanding[] = [
-  { teamId: "tm1", categoryId: "ch1", played: 2, won: 2, lost: 0, pointsFor: 163, pointsAgainst: 143, points: 4 },
-  { teamId: "tm5", categoryId: "ch1", played: 2, won: 2, lost: 0, pointsFor: 162, pointsAgainst: 156, points: 4 },
-  { teamId: "tm4", categoryId: "ch1", played: 1, won: 1, lost: 0, pointsFor: 70, pointsAgainst: 65, points: 2 },
-  { teamId: "tm8", categoryId: "ch1", played: 1, won: 1, lost: 0, pointsFor: 75, pointsAgainst: 68, points: 2 },
-  { teamId: "tm2", categoryId: "ch1", played: 2, won: 0, lost: 2, pointsFor: 149, pointsAgainst: 158, points: 0 },
-  { teamId: "tm3", categoryId: "ch1", played: 2, won: 0, lost: 2, pointsFor: 136, pointsAgainst: 155, points: 0 },
-  { teamId: "tm6", categoryId: "ch1", played: 1, won: 0, lost: 1, pointsFor: 79, pointsAgainst: 82, points: 0 },
-  { teamId: "tm7", categoryId: "ch1", played: 1, won: 0, lost: 1, pointsFor: 68, pointsAgainst: 75, points: 0 },
+  { teamId: "tm1", categoryId: "ch1", played: 2, won: 2, lost: 0, np: 0, pointsFor: 163, pointsAgainst: 143, points: 4 },
+  { teamId: "tm5", categoryId: "ch1", played: 2, won: 2, lost: 0, np: 0, pointsFor: 162, pointsAgainst: 156, points: 4 },
+  { teamId: "tm4", categoryId: "ch1", played: 1, won: 1, lost: 0, np: 0, pointsFor: 70, pointsAgainst: 65, points: 2 },
+  { teamId: "tm8", categoryId: "ch1", played: 1, won: 1, lost: 0, np: 0, pointsFor: 75, pointsAgainst: 68, points: 2 },
+  { teamId: "tm2", categoryId: "ch1", played: 2, won: 0, lost: 2, np: 0, pointsFor: 149, pointsAgainst: 158, points: 0 },
+  { teamId: "tm3", categoryId: "ch1", played: 2, won: 0, lost: 2, np: 0, pointsFor: 136, pointsAgainst: 155, points: 0 },
+  { teamId: "tm6", categoryId: "ch1", played: 1, won: 0, lost: 1, np: 0, pointsFor: 79, pointsAgainst: 82, points: 0 },
+  { teamId: "tm7", categoryId: "ch1", played: 1, won: 0, lost: 1, np: 0, pointsFor: 68, pointsAgainst: 75, points: 0 },
 ]
 
 // Helper functions

@@ -175,7 +175,9 @@ export const useAppStore = create<AppState>()(
           let won = 0,
             lost = 0,
             pointsFor = 0,
-            pointsAgainst = 0
+            pointsAgainst = 0,
+            points = 0,
+            np = 0
 
           teamMatches.forEach((match) => {
             const isHome = match.homeTeamId === team.id
@@ -185,8 +187,23 @@ export const useAppStore = create<AppState>()(
             pointsFor += teamScore
             pointsAgainst += opponentScore
 
-            if (teamScore > opponentScore) won++
-            else lost++
+            const reason = ((match as any).statusReason as string | null | undefined) ?? null
+            const isNoShow = !!reason && reason.startsWith("no_presentacion:")
+            const absent = isNoShow ? (reason.split(":")[1] as "home" | "away" | undefined) : undefined
+
+            const isAbsent = isNoShow && ((absent === "home" && isHome) || (absent === "away" && !isHome))
+
+            if (teamScore > opponentScore) {
+              won++
+              points += 2
+            } else {
+              if (isAbsent) {
+                np += 1
+              } else {
+                lost++
+                points += 1
+              }
+            }
           })
 
           return {
@@ -195,10 +212,11 @@ export const useAppStore = create<AppState>()(
             played: teamMatches.length,
             won,
             lost,
+            np,
             pointsFor,
             pointsAgainst,
-            // 2 puntos por victoria, 1 punto por derrota
-            points: won * 2 + lost * 1,
+            // 2 puntos por victoria, 1 por derrota (excepto NP: 0)
+            points,
           }
         })
 

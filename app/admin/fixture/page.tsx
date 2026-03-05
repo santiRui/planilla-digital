@@ -32,7 +32,8 @@ export default function FixturePage() {
   const [selectedTournament, setSelectedTournament] = useState<string>("")
   const [selectedStage, setSelectedStage] = useState<TournamentPhase | "all">("all")
   const [selectedStageRound, setSelectedStageRound] = useState<number | "all">("all")
-  const [zonesCount, setZonesCount] = useState<number>(1)
+  const [zonesCountInput, setZonesCountInput] = useState<string>("1")
+  const [wheelsCountInput, setWheelsCountInput] = useState<string>("1")
   const [closedGroups, setClosedGroups] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -190,6 +191,29 @@ export default function FixturePage() {
     return m.seriesGameNumber ?? 1
   }
 
+  const wheelsCountForZone = (zoneCode: string | null) => {
+    const z = zoneCode ?? ""
+
+    const zoneTeams = zoneCode
+      ? teams.filter((t) =>
+          matches.some(
+            (m) =>
+              m.phase === "fase_regular" &&
+              m.zoneCode === zoneCode &&
+              (m.homeTeamId === t.id || m.awayTeamId === t.id),
+          ),
+        )
+      : teams
+
+    const baseRounds = zoneTeams.length % 2 === 0 ? Math.max(1, zoneTeams.length - 1) : Math.max(1, zoneTeams.length)
+    const maxRound = matches
+      .filter((m) => m.phase === "fase_regular" && (m.zoneCode ?? "") === z)
+      .reduce((max, m) => Math.max(max, m.round), 0)
+
+    if (maxRound <= 0) return 1
+    return Math.max(1, Math.ceil(maxRound / baseRounds))
+  }
+
   const zoneLabel = (zone?: string | null) => {
     if (!zone) return ""
     return `Zona ${zone}`
@@ -318,6 +342,46 @@ export default function FixturePage() {
     }
   }
 
+  const handleUpdateFixture = async () => {
+    if (!selectedTournament) return
+
+    const wheelsCount = Number.parseInt(wheelsCountInput, 10)
+    if (!wheelsCountInput.trim() || !Number.isFinite(wheelsCount) || wheelsCount < 1 || wheelsCount > 6) {
+      setError("Faltan datos: completá las ruedas (mínimo 1, máximo 6).")
+      return
+    }
+
+    setSubmitting(true)
+    setError(null)
+    try {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData.session?.access_token
+      if (!token) {
+        setError("Tenés que iniciar sesión para actualizar el fixture.")
+        return
+      }
+
+      const res = await fetch("/api/admin/fixture/update", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ tournamentId: selectedTournament, wheelsCount }),
+      })
+
+      const json = (await res.json().catch(() => null)) as any
+      if (!res.ok) {
+        setError(json?.error ?? "No se pudo actualizar el fixture")
+        return
+      }
+
+      setMatches((json.matches ?? []).map(mapMatchFromDb) as MatchRow[])
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   const formatGameClock = (seconds?: number | null) => {
     if (typeof seconds !== "number") return "--:--"
     const s = Math.max(0, Math.floor(seconds))
@@ -332,6 +396,18 @@ export default function FixturePage() {
 
   const handleGenerateFixture = async () => {
     if (!selectedTournament) return
+
+    const zonesCount = Number.parseInt(zonesCountInput, 10)
+    const wheelsCount = Number.parseInt(wheelsCountInput, 10)
+    if (!zonesCountInput.trim() || !Number.isFinite(zonesCount) || zonesCount < 1) {
+      setError("Faltan datos: completá la cantidad de zonas (mínimo 1).")
+      return
+    }
+    if (!wheelsCountInput.trim() || !Number.isFinite(wheelsCount) || wheelsCount < 1 || wheelsCount > 6) {
+      setError("Faltan datos: completá las ruedas (mínimo 1, máximo 6).")
+      return
+    }
+
     setSubmitting(true)
     setError(null)
     try {
@@ -348,7 +424,7 @@ export default function FixturePage() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ tournamentId: selectedTournament, zonesCount }),
+        body: JSON.stringify({ tournamentId: selectedTournament, zonesCount, wheelsCount }),
       })
 
       const json = (await res.json().catch(() => null)) as any
@@ -451,17 +527,66 @@ export default function FixturePage() {
                   type="number"
                   min={1}
                   step={1}
-                  value={zonesCount}
+                  value={zonesCountInput}
                   onChange={(e) => {
-                    const n = Number(e.target.value)
-                    setZonesCount(Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1)
+                    setZonesCountInput(e.target.value)
                   }}
                 />
+              </div>
+              <div className="space-y-2">
+                <div className="text-sm font-medium">Ruedas (rondas)</div>
+                <Input
+                  type="number"
+                  min={1}
+                  max={6}
+                  step={1}
+                  value={wheelsCountInput}
+                  onChange={(e) => {
+                    setWheelsCountInput(e.target.value)
+                  }}
+                />
+                <p className="text-xs text-muted-foreground">1 = ida, 2 = ida y vuelta (local/visitante alternado).</p>
               </div>
               <AlertDialogFooter>
                 <AlertDialogCancel disabled={submitting}>Cancelar</AlertDialogCancel>
                 <AlertDialogAction onClick={handleGenerateFixture} disabled={submitting}>
                   {submitting ? "Generando..." : "Generar"}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="outline" disabled={submitting || teams.length < 2 || matches.length === 0}>
+                {submitting ? "Actualizando..." : "Actualizar Fixture"}
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Actualizar Fixture (sin borrar resultados)</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Esto mantiene los partidos ya jugados/en juego y recalcula solo las fechas futuras para incluir equipos nuevos.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <div className="space-y-2">
+                <div className="text-sm font-medium">Ruedas (rondas)</div>
+                <Input
+                  type="number"
+                  min={1}
+                  max={6}
+                  step={1}
+                  value={wheelsCountInput}
+                  onChange={(e) => {
+                    setWheelsCountInput(e.target.value)
+                  }}
+                />
+                <p className="text-xs text-muted-foreground">Se respeta lo jugado y se generan los cruces faltantes.</p>
+              </div>
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={submitting}>Cancelar</AlertDialogCancel>
+                <AlertDialogAction onClick={handleUpdateFixture} disabled={submitting}>
+                  {submitting ? "Actualizando..." : "Actualizar"}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
@@ -508,6 +633,8 @@ export default function FixturePage() {
                 ? `${group.zoneCode ? `Fecha ${group.stageRound} - ${zoneLabel(group.zoneCode)}` : `Fecha ${group.stageRound}`}`
                 : `${stageLabel(group.phase)} - Fecha ${group.stageRound}`
             const byeTeamId = group.phase === "fase_regular" ? getByeTeamIdForRound(group.stageRound, group.zoneCode) : null
+            const wheelsLabel =
+              group.phase === "fase_regular" ? ` · ${wheelsCountForZone(group.zoneCode)} rueda${wheelsCountForZone(group.zoneCode) === 1 ? "" : "s"}` : ""
 
             return (
             <Collapsible key={key} open={isOpen} onOpenChange={() => toggleGroup(key)}>
@@ -520,6 +647,7 @@ export default function FixturePage() {
                         <CardDescription>
                           {group.matches.length} partidos
                           {byeTeamId ? " · 1 libre" : ""}
+                          {wheelsLabel}
                         </CardDescription>
                       </div>
                       {isOpen ? (

@@ -54,8 +54,7 @@ function computePlayerScoring(params: {
 
   const seasons = params.labasSeasons || 0
   let labasAdj = 0
-  if (seasons === 1) labasAdj = -10
-  else if (seasons >= 2) labasAdj = -20
+  if (seasons >= 2) labasAdj = -10
 
   return base + ageAdj + labasAdj
 }
