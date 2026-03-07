@@ -288,7 +288,7 @@ export default function MesaPage() {
     }
 
     // Si todavía no empezó, vamos al flujo normal de pre-planilla
-    router.push(`/mesa/planilla/${match.id}/pre`)
+    router.push(`/mesa/planilla/${match.id}/pre?forcePre=1`)
   }
 
   const finishedMatches = useMemo(() => {
@@ -590,7 +590,7 @@ export default function MesaPage() {
                 }
                 const id = resumeMatch.id
                 setResumeMatch(null)
-                router.push(`/mesa/planilla/${id}/pre`)
+                router.push(`/mesa/planilla/${id}/pre?forcePre=1`)
               }}
             >
               Empezar acta nueva

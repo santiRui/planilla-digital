@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState, type ChangeEvent } from "react"
-import { useParams, useRouter } from "next/navigation"
+import { useParams, useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import {
@@ -80,6 +80,7 @@ const defaultState = (): PrePlanillaState => ({
 export default function PrePlanillaPage() {
   const params = useParams()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const matchId = params.id as string
 
   const supabase = useMemo(() => createSupabaseBrowserClient(), [])
@@ -338,7 +339,17 @@ export default function PrePlanillaPage() {
   useEffect(() => {
     if (!match) return
 
+    const forcePre = searchParams.get("forcePre") === "1"
+
     if (!profileChecked) return
+
+    if (match.status === "finalizado") {
+      router.replace("/mesa")
+      return
+    }
+
+    // Si venimos desde el flujo de Mesa (ej: "Cargar/Empezar acta nueva"), permitir pre-planilla sin importar rol.
+    if (forcePre) return
 
     // Regla: la pre-planilla solo puede ser usada por oficiales de mesa asignados a ESTE partido (o admin).
     // Si el usuario está asignado como árbitro en este partido, nunca puede entrar.
@@ -355,11 +366,7 @@ export default function PrePlanillaPage() {
         return
       }
     }
-
-    if (match.status === "finalizado") {
-      router.replace("/mesa")
-    }
-  }, [assignmentChecked, assignmentRole, match, matchId, profileChecked, profileRole, router])
+  }, [assignmentChecked, assignmentRole, match, matchId, profileChecked, profileRole, router, searchParams])
 
   const teamForSide = (side: Side) => (side === "home" ? homeTeam : awayTeam)
   const playersForSide = (side: Side) => (side === "home" ? homePlayers : awayPlayers)
