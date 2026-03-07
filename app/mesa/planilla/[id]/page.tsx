@@ -184,20 +184,24 @@ export default function PlanillaPage() {
         return
       }
 
-      const { data: assignment, error: assignmentError } = await supabase
+      const { data: assignments, error: assignmentError } = await supabase
         .from("match_official_assignments")
         .select("role")
         .eq("match_id", matchId)
         .eq("user_id", user.id)
-        .maybeSingle()
+ 
 
       if (assignmentError) {
         setAssignmentRole(null)
         return
       }
 
-      const raw = assignment as any
-      const role = (raw?.role as "arbitro" | "oficial_mesa" | null) ?? null
+      const rows = (assignments ?? []) as any[]
+      const roles = rows
+        .map((r) => r?.role)
+        .filter((r) => r === "arbitro" || r === "oficial_mesa") as ("arbitro" | "oficial_mesa")[]
+
+      const role = roles.includes("arbitro") ? "arbitro" : roles.includes("oficial_mesa") ? "oficial_mesa" : null
       setAssignmentRole(role)
     }
 
