@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { useEffect, useState } from "react"
+import { Suspense, useEffect, useState } from "react"
 import { useRouter, usePathname, useSearchParams } from "next/navigation"
 import type { UserRole } from "@/lib/types"
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser"
@@ -18,6 +18,14 @@ function roleHome(role: UserRole) {
 }
 
 export function RequireRole({ role, children }: Props) {
+  return (
+    <Suspense fallback={null}>
+      <RequireRoleInner role={role}>{children}</RequireRoleInner>
+    </Suspense>
+  )
+}
+
+function RequireRoleInner({ role, children }: Props) {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
