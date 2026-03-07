@@ -248,7 +248,7 @@ export default function ArbitrosPage() {
     setMatches((prev) => prev.map((m) => (m.id === matchId ? { ...m, status: "en_juego" } : m)))
     
     // Redirigir a la pre planilla del partido
-    router.push(`/mesa/planilla/${matchId}/pre`)
+    router.push(`/mesa/planilla/${matchId}/pre?forcePre=1`)
   }
 
   return (

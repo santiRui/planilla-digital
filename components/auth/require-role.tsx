@@ -2,7 +2,7 @@
 
 import type React from "react"
 import { useEffect, useState } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, usePathname, useSearchParams } from "next/navigation"
 import type { UserRole } from "@/lib/types"
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser"
 
@@ -19,6 +19,8 @@ function roleHome(role: UserRole) {
 
 export function RequireRole({ role, children }: Props) {
   const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
   const [allowed, setAllowed] = useState(false)
 
   useEffect(() => {
@@ -33,23 +35,35 @@ export function RequireRole({ role, children }: Props) {
         return
       }
 
+      // Bypass: permitir acceso a pre-planilla desde flujos que agregan forcePre=1
+      // (ej: "Empezar acta nueva" / "Cargar nueva planilla").
+      if (role === "oficial_mesa") {
+        const forcePre = searchParams.get("forcePre") === "1"
+        const isPrePlanillaPath = pathname.startsWith("/mesa/planilla/") && pathname.endsWith("/pre")
+        if (forcePre && isPrePlanillaPath) {
+          setAllowed(true)
+          return
+        }
+      }
+
       const { data: profile, error } = await supabase
         .from("profiles")
         .select("role")
         .eq("id", session.user.id)
         .maybeSingle()
 
-      if (error || !profile?.role) {
+      const rawProfile = profile as any
+      if (error || !rawProfile?.role) {
         router.replace("/login")
         return
       }
 
       // Permitir que cuentas con rol 'arbitro' accedan también a vistas que requieren 'oficial_mesa'
       // (caso de usuarios que cumplen ambos roles con la misma cuenta).
-      if (profile.role !== role) {
-        const isArbitroUsingMesa = role === "oficial_mesa" && profile.role === "arbitro"
+      if (rawProfile.role !== role) {
+        const isArbitroUsingMesa = role === "oficial_mesa" && rawProfile.role === "arbitro"
         if (!isArbitroUsingMesa) {
-          router.replace(roleHome(profile.role))
+          router.replace(roleHome(rawProfile.role))
           return
         }
       }
@@ -58,7 +72,7 @@ export function RequireRole({ role, children }: Props) {
     }
 
     run()
-  }, [role, router])
+  }, [pathname, role, router, searchParams])
 
   if (!allowed) return null
 
