@@ -125,6 +125,9 @@ export default function PlanillaPage() {
 
   const supabase = useMemo(() => createSupabaseBrowserClient(), [])
 
+  const [assignmentRole, setAssignmentRole] = useState<"arbitro" | "oficial_mesa" | null>(null)
+  const [accessError, setAccessError] = useState<string | null>(null)
+
   const { matches, teams, players, updateMatch, addMatchEvent, removeLastMatchEvent, matchEvents } = useAppStore()
 
   const storeMatch = matches.find((m) => m.id === matchId)
@@ -171,6 +174,43 @@ export default function PlanillaPage() {
 
   // Cargar datos del staff de la base de datos
   const [staffData, setStaffData] = useState<Record<string, any>>({})
+
+  useEffect(() => {
+    const run = async () => {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const user = sessionData.session?.user
+      if (!user) {
+        setAssignmentRole(null)
+        return
+      }
+
+      const { data: assignment, error: assignmentError } = await supabase
+        .from("match_official_assignments")
+        .select("role")
+        .eq("match_id", matchId)
+        .eq("user_id", user.id)
+        .maybeSingle()
+
+      if (assignmentError) {
+        setAssignmentRole(null)
+        return
+      }
+
+      const raw = assignment as any
+      const role = (raw?.role as "arbitro" | "oficial_mesa" | null) ?? null
+      setAssignmentRole(role)
+    }
+
+    run()
+  }, [supabase, matchId])
+
+  useEffect(() => {
+    // Bloquear acceso a la planilla digital si el usuario está asignado como árbitro en ESTE partido.
+    if (assignmentRole === "arbitro") {
+      setAccessError("No tenés permisos: tu rol en este partido es de Árbitro.")
+      router.replace("/mesa")
+    }
+  }, [assignmentRole, router])
 
   useEffect(() => {
     const run = async () => {

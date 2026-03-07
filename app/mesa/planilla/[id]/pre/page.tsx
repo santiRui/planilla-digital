@@ -85,6 +85,7 @@ export default function PrePlanillaPage() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), [])
 
   const [profileRole, setProfileRole] = useState<"admin" | "arbitro" | "oficial_mesa" | null>(null)
+  const [assignmentRole, setAssignmentRole] = useState<"arbitro" | "oficial_mesa" | null>(null)
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -295,6 +296,21 @@ export default function PrePlanillaPage() {
         return
       }
 
+      const { data: assignment, error: assignmentError } = await supabase
+        .from("match_official_assignments")
+        .select("role")
+        .eq("match_id", matchId)
+        .eq("user_id", user.id)
+        .maybeSingle()
+
+      if (assignmentError) {
+        setAssignmentRole(null)
+      } else {
+        const raw = assignment as any
+        const role = (raw?.role as "arbitro" | "oficial_mesa" | null) ?? null
+        setAssignmentRole(role)
+      }
+
       const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).maybeSingle()
       const rawProfile = profile as any
       const role = rawProfile?.role ?? null
@@ -306,18 +322,30 @@ export default function PrePlanillaPage() {
     }
 
     run()
-  }, [supabase])
+  }, [supabase, matchId])
 
   useEffect(() => {
     if (!match) return
-    if (match.status === "en_juego" && profileRole === "arbitro") {
-      router.replace(`/mesa/planilla/${matchId}`)
-      return
+
+    // Regla: la pre-planilla solo puede ser usada por oficiales de mesa asignados a ESTE partido (o admin).
+    // Si el usuario está asignado como árbitro en este partido, nunca puede entrar.
+    if (profileRole !== "admin") {
+      if (assignmentRole === "arbitro") {
+        setError("No tenés permisos: tu rol en este partido es de Árbitro.")
+        router.replace("/mesa")
+        return
+      }
+      if (assignmentRole !== "oficial_mesa") {
+        setError("No tenés permisos para acceder a la pre-planilla de este partido.")
+        router.replace("/mesa")
+        return
+      }
     }
+
     if (match.status === "finalizado") {
       router.replace("/mesa")
     }
-  }, [match, matchId, profileRole, router])
+  }, [assignmentRole, match, matchId, profileRole, router])
 
   const teamForSide = (side: Side) => (side === "home" ? homeTeam : awayTeam)
   const playersForSide = (side: Side) => (side === "home" ? homePlayers : awayPlayers)
