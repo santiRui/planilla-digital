@@ -500,8 +500,6 @@ export default function PrePlanillaPage() {
         }
       }
 
-      if (cur.selectedPlayerIds.length >= 12) return prev
-
       const player = activePlayers.find((p: Player) => p.id === playerId)
       if (!player) return prev
       const jersey = getJersey(player, cur)
@@ -526,7 +524,6 @@ export default function PrePlanillaPage() {
   const canSelectPlayer = (player: Player) => {
     const selected = activeState.selectedPlayerIds.includes(player.id)
     if (selected) return true
-    if (activeState.selectedPlayerIds.length >= 12) return false
 
     const jersey = getJersey(player, activeState)
     const selectedIds = new Set(activeState.selectedPlayerIds)
@@ -811,7 +808,7 @@ export default function PrePlanillaPage() {
             <CardContent className="p-3">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-sm font-medium">Jugadores</div>
-                <div className="text-xs text-muted-foreground">{activeState.selectedPlayerIds.length}/12</div>
+                <div className="text-xs text-muted-foreground">{activeState.selectedPlayerIds.length}</div>
               </div>
 
               <div className="space-y-2">
