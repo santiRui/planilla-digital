@@ -317,7 +317,7 @@ export default function PrePlanillaPage() {
           .map((r) => r?.role)
           .filter((r) => r === "arbitro" || r === "oficial_mesa") as ("arbitro" | "oficial_mesa")[]
 
-        const role = roles.includes("arbitro") ? "arbitro" : roles.includes("oficial_mesa") ? "oficial_mesa" : null
+        const role = roles.includes("oficial_mesa") ? "oficial_mesa" : roles.includes("arbitro") ? "arbitro" : null
         setAssignmentRole(role)
       }
       setAssignmentChecked(true)
@@ -468,10 +468,23 @@ export default function PrePlanillaPage() {
     }))
 
     try {
-      await (supabase as any)
-        .from("players")
-        .update({ jersey_number: next })
-        .eq("id", jerseyDialogPlayer.id)
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData.session?.access_token
+      if (!token) throw new Error("No autorizado")
+
+      const res = await fetch(`/api/mesa/matches/${matchId}/jerseys`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ playerId: jerseyDialogPlayer.id, jerseyNumber: next }),
+      })
+
+      if (!res.ok) {
+        const json = (await res.json().catch(() => null)) as any
+        throw new Error(json?.error ?? "No se pudo guardar el dorsal")
+      }
     } catch {
       // Si falla la persistencia en BD, mantenemos el cambio local
     }
@@ -591,7 +604,9 @@ export default function PrePlanillaPage() {
     )
   }
 
-  if ((match?.status === "en_juego" && profileRole === "arbitro") || match?.status === "finalizado") {
+  const forcePre = searchParams.get("forcePre") === "1"
+
+  if (((match?.status === "en_juego" && assignmentRole === "arbitro") && !forcePre) || match?.status === "finalizado") {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <p className="text-muted-foreground">Redirigiendo...</p>

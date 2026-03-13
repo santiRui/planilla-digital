@@ -60,12 +60,13 @@ export default function LoginPage() {
         .eq("id", data.user.id)
         .maybeSingle()
 
-      if (profileError || !profile?.role) {
+      const rawProfile = profile as any
+      if (profileError || !rawProfile?.role) {
         setError("No se pudo obtener el rol del usuario")
         return
       }
 
-      router.replace(roleHome(profile.role as UserRole))
+      router.replace(roleHome(rawProfile.role as UserRole))
     } finally {
       setLoading(false)
     }
@@ -100,6 +101,11 @@ export default function LoginPage() {
                 Olvidé mi contraseña
               </Link>
             </div>
+
+            <Button type="button" variant="ghost" className="w-full" onClick={() => router.push("/")}
+            >
+              Volver al inicio
+            </Button>
           </form>
         </CardContent>
       </Card>

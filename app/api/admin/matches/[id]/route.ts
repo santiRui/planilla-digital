@@ -47,7 +47,7 @@ function toScheduledAt(scheduledDate?: string | null, scheduledTime?: string | n
   const t = (scheduledTime?.trim() || "00:00").slice(0, 5)
   // Guardamos la fecha y hora tal cual se ingresan (hora local del torneo),
   // sin convertir a UTC, para evitar desfasajes al mostrarla luego.
-  return `${d}T${t}:00`
+  return `${d}T${t}:00-03:00`
 }
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -90,7 +90,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     }
 
     if (parsed.data.scheduledDate && parsed.data.scheduledTime) {
-      const candidate = new Date(`${parsed.data.scheduledDate}T${parsed.data.scheduledTime}:00`)
+      const candidate = new Date(`${parsed.data.scheduledDate}T${parsed.data.scheduledTime}:00-03:00`)
       const now = new Date()
       if (!Number.isNaN(candidate.getTime()) && candidate.getTime() < now.getTime()) {
         return NextResponse.json(
@@ -135,7 +135,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       parsed.data.scheduledTime &&
       (!parsed.data.status || parsed.data.status === "suspendido")
     ) {
-      const candidate = new Date(`${parsed.data.scheduledDate}T${parsed.data.scheduledTime}:00`)
+      const candidate = new Date(`${parsed.data.scheduledDate}T${parsed.data.scheduledTime}:00-03:00`)
       const now = new Date()
       if (!Number.isNaN(candidate.getTime()) && candidate.getTime() >= now.getTime()) {
         nextStatus = "programado"

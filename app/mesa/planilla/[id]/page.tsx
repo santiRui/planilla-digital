@@ -116,6 +116,8 @@ type PersistedMatchState = {
   flipSides?: boolean
   pendingEventIds: string[]
   pendingDeleteEventIds: string[]
+  // Segundos acumulados de juego por jugador (solo cuando está en cancha y el reloj corre)
+  playerSeconds?: Record<string, number>
 }
 
 export default function PlanillaPage() {
@@ -127,6 +129,17 @@ export default function PlanillaPage() {
 
   const [assignmentRole, setAssignmentRole] = useState<"arbitro" | "oficial_mesa" | null>(null)
   const [accessError, setAccessError] = useState<string | null>(null)
+
+  const newEventId = () => {
+    try {
+      if (typeof crypto !== "undefined" && typeof (crypto as any).randomUUID === "function") {
+        return (crypto as any).randomUUID() as string
+      }
+    } catch {
+      // ignore
+    }
+    return `ev-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  }
 
   const { matches, teams, players, updateMatch, addMatchEvent, removeLastMatchEvent, matchEvents } = useAppStore()
 
@@ -201,7 +214,7 @@ export default function PlanillaPage() {
         .map((r) => r?.role)
         .filter((r) => r === "arbitro" || r === "oficial_mesa") as ("arbitro" | "oficial_mesa")[]
 
-      const role = roles.includes("arbitro") ? "arbitro" : roles.includes("oficial_mesa") ? "oficial_mesa" : null
+      const role = roles.includes("oficial_mesa") ? "oficial_mesa" : roles.includes("arbitro") ? "arbitro" : null
       setAssignmentRole(role)
     }
 
@@ -434,6 +447,17 @@ export default function PlanillaPage() {
       return []
     }
   })
+  const [playerSeconds, setPlayerSeconds] = useState<Record<string, number>>(() => {
+    if (typeof window === "undefined") return {}
+    try {
+      const raw = window.localStorage.getItem(`planilla-state:${matchId}`)
+      if (!raw) return {}
+      const data = JSON.parse(raw) as Partial<PersistedMatchState>
+      return data.playerSeconds ?? {}
+    } catch {
+      return {}
+    }
+  })
   const [isOnline, setIsOnline] = useState(true)
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("synced")
   const [showEndDialog, setShowEndDialog] = useState(false)
@@ -653,6 +677,9 @@ export default function PlanillaPage() {
       setLocalEvents(restoredEvents)
       setPendingEventIds(data.pendingEventIds ?? [])
       setPendingDeleteEventIds(data.pendingDeleteEventIds ?? [])
+      if (data.playerSeconds) {
+        setPlayerSeconds(data.playerSeconds)
+      }
 
       // Recalcular marcador a partir del historial por si los campos de score no son fiables.
       // Para evitar asignar todo al visitante cuando todavía no se conocen los equipos,
@@ -759,6 +786,7 @@ export default function PlanillaPage() {
       flipSides,
       pendingEventIds,
       pendingDeleteEventIds,
+      playerSeconds,
     }
 
     try {
@@ -835,7 +863,7 @@ export default function PlanillaPage() {
 
     const interval = setInterval(() => {
       void retryPending()
-    }, 10000)
+    }, 2000)
 
     return () => clearInterval(interval)
   }, [isOnline, pendingEventIds, localEvents, sendEventToServer])
@@ -1024,10 +1052,23 @@ export default function PlanillaPage() {
     if (isRunning) {
       interval = setInterval(() => {
         setGameTime((prev) => Math.max(0, prev - 1))
+        // Sumar 1 segundo a todas las jugadoras que están en cancha mientras el reloj corre
+        setPlayerSeconds((prev) => {
+          const next: Record<string, number> = { ...prev }
+          const addSecondFor = (ids: string[]) => {
+            for (const id of ids) {
+              if (!id) continue
+              next[id] = (next[id] ?? 0) + 1
+            }
+          }
+          addSecondFor(onCourtPlayers.home)
+          addSecondFor(onCourtPlayers.away)
+          return next
+        })
       }, 1000)
     }
     return () => clearInterval(interval)
-  }, [isRunning])
+  }, [isRunning, onCourtPlayers.home, onCourtPlayers.away])
 
   useEffect(() => {
     if (!isRunning) return
@@ -1261,32 +1302,66 @@ export default function PlanillaPage() {
   // Estadísticas por jugador derivadas de los eventos locales
   const getPlayerStats = useCallback(
     (playerId: string) => {
-      const playerEvents = localEvents.filter(
-        (e) => e.playerId === playerId || e.victimPlayerId === playerId,
-      )
+      // Deduplicar eventos idénticos (pueden existir por reintentos offline/polling).
+      // Clave: tipo + actor/víctima + periodo + tiempo + puntos/tiro.
+      const seen = new Set<string>()
+      const deduped = localEvents.filter((e) => {
+        const key = `${e.type}|${e.teamId ?? ""}|${e.playerId ?? ""}|${e.victimPlayerId ?? ""}|${e.period}|${e.gameTime}|${e.points ?? ""}|${e.shotType ?? ""}|${String(e.made ?? "")}`
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+      })
 
-      let totalSeconds = 0
-      const periods = new Set(playerEvents.map((e) => e.period))
+      const playerEvents = deduped.filter((e) => e.playerId === playerId || e.victimPlayerId === playerId)
 
-      for (const periodValue of periods) {
-        const periodEvents = playerEvents.filter((e) => e.period === periodValue)
-        if (!periodEvents.length) continue
+      // Minutos jugados basados en el contador en vivo
+      let totalSeconds = playerSeconds[playerId] ?? 0
 
-        const timesInSeconds = periodEvents
-          .map((e) => {
-            const [mm, ss] = e.gameTime.split(":").map((v) => Number(v))
-            if (!Number.isFinite(mm) || !Number.isFinite(ss)) return null
-            return mm * 60 + ss
-          })
-          .filter((v): v is number => v !== null)
+      // Fallback para partidos antiguos sin contador en vivo: usar la lógica basada en sustituciones
+      if (!totalSeconds && playerEvents.length > 0) {
+        const periods = new Set(playerEvents.map((e) => e.period))
+        const PERIOD_SECONDS = 10 * 60
 
-        if (!timesInSeconds.length) continue
+        for (const periodValue of periods) {
+          const periodEvents = playerEvents.filter((e) => e.period === periodValue)
+          if (!periodEvents.length) continue
 
-        const maxRemaining = Math.max(...timesInSeconds)
-        const minRemaining = Math.min(...timesInSeconds)
+          const subsIn = deduped.filter(
+            (e) => e.period === periodValue && e.playerId === playerId && e.type === "substitution_in",
+          )
+          const subsOut = deduped.filter(
+            (e) => e.period === periodValue && e.playerId === playerId && e.type === "substitution_out",
+          )
 
-        if (Number.isFinite(maxRemaining) && Number.isFinite(minRemaining) && maxRemaining >= minRemaining) {
-          totalSeconds += maxRemaining - minRemaining
+          if (subsIn.length === 0 && subsOut.length === 0) {
+            const wasInStartingFive =
+              periodValue === 1
+                ? onCourtPlayers.home.includes(playerId) || onCourtPlayers.away.includes(playerId)
+                : false
+
+            if (wasInStartingFive) {
+              totalSeconds += PERIOD_SECONDS
+            }
+            continue
+          }
+
+          const timesInSeconds = periodEvents
+            .map((e) => {
+              const [mm, ss] = e.gameTime.split(":").map((v) => Number(v))
+              if (!Number.isFinite(mm) || !Number.isFinite(ss)) return null
+              return mm * 60 + ss
+            })
+            .filter((v): v is number => v !== null)
+
+          if (!timesInSeconds.length) continue
+
+          const maxRemaining = Math.max(...timesInSeconds)
+          const minRemaining = Math.min(...timesInSeconds)
+
+          if (Number.isFinite(maxRemaining) && Number.isFinite(minRemaining) && maxRemaining >= minRemaining) {
+            const delta = maxRemaining - minRemaining
+            totalSeconds += Math.min(delta, PERIOD_SECONDS)
+          }
         }
       }
 
@@ -1314,7 +1389,7 @@ export default function PlanillaPage() {
 
       let rating = 0
 
-      for (const e of localEvents) {
+      for (const e of deduped) {
         const isActor = e.playerId === playerId
         const isVictim = e.victimPlayerId === playerId
 
@@ -1323,10 +1398,7 @@ export default function PlanillaPage() {
         if (isActor) {
           // Anotaciones: la valoración suma 1 por cada punto anotado
           // (por eso un jugador con 10 pts parte de Val = 10).
-          if (e.type === "points" && e.points) {
-            points += e.points
-            rating += e.points
-          } else if (e.type === "shot" && e.shotType) {
+          if (e.type === "shot" && e.shotType) {
             if (e.shotType === 2) {
               t2Att += 1
               if (e.made) {
@@ -1418,23 +1490,29 @@ export default function PlanillaPage() {
         rating,
       }
     },
-    [localEvents],
+    [localEvents, onCourtPlayers.home, onCourtPlayers.away, playerSeconds],
   )
 
   // Jugadores visibles en paneles (solo los en cancha si hay definición)
   const visibleHomePlayers = useMemo(
     () =>
       onCourtPlayers.home.length
-        ? homePlayers.filter((p) => onCourtPlayers.home.includes(p.id))
-        : homePlayers,
+        ? homePlayers
+            .filter((p) => onCourtPlayers.home.includes(p.id))
+            .slice()
+            .sort((a, b) => (a.jerseyNumber ?? 0) - (b.jerseyNumber ?? 0))
+        : homePlayers.slice().sort((a, b) => (a.jerseyNumber ?? 0) - (b.jerseyNumber ?? 0)),
     [homePlayers, onCourtPlayers.home],
   )
 
   const visibleAwayPlayers = useMemo(
     () =>
       onCourtPlayers.away.length
-        ? awayPlayers.filter((p) => onCourtPlayers.away.includes(p.id))
-        : awayPlayers,
+        ? awayPlayers
+            .filter((p) => onCourtPlayers.away.includes(p.id))
+            .slice()
+            .sort((a, b) => (a.jerseyNumber ?? 0) - (b.jerseyNumber ?? 0))
+        : awayPlayers.slice().sort((a, b) => (a.jerseyNumber ?? 0) - (b.jerseyNumber ?? 0)),
     [awayPlayers, onCourtPlayers.away],
   )
 
@@ -1499,7 +1577,7 @@ export default function PlanillaPage() {
       }
 
       const event: MatchEvent = {
-        id: `ev-${Date.now()}`,
+        id: newEventId(),
         matchId,
         // Para tiempos muertos no hay jugador asociado; usamos el teamId como identificador neutro.
         playerId: teamId,
@@ -1584,7 +1662,7 @@ export default function PlanillaPage() {
         typeof victimPlayerId === "string" ? (teamSide === "home" ? awayTeam.id : homeTeam.id) : undefined
 
       const event: MatchEvent = {
-        id: `ev-${Date.now()}`,
+        id: newEventId(),
         matchId,
         playerId,
         teamId: teamSide === "home" ? homeTeam.id : awayTeam.id,
@@ -2041,7 +2119,7 @@ export default function PlanillaPage() {
 
     const shotType = getShotTypeByPosition(x, y, playerTeam.teamSide)
     const event: MatchEvent = {
-      id: `ev-${Date.now()}`,
+      id: newEventId(),
       matchId,
       playerId: selectedPlayerId,
       teamId: playerTeam.teamId,
@@ -2119,7 +2197,7 @@ export default function PlanillaPage() {
     const { playerId, teamId, teamSide, total, current } = pendingFreeThrow
 
     const event: MatchEvent = {
-      id: `ev-${Date.now()}`,
+      id: newEventId(),
       matchId,
       playerId,
       teamId,
@@ -2174,7 +2252,7 @@ export default function PlanillaPage() {
     if (playerTeam.teamId !== pendingAssistTeamId) return
 
     const event: MatchEvent = {
-      id: `ev-${Date.now()}`,
+      id: newEventId(),
       matchId,
       playerId,
       teamId: playerTeam.teamId,
@@ -2216,7 +2294,7 @@ export default function PlanillaPage() {
 
     const reboundType: MatchEvent["reboundType"] = playerTeam.teamId === pendingReboundTeamId ? "offensive" : "defensive"
     const event: MatchEvent = {
-      id: `ev-${Date.now()}`,
+      id: newEventId(),
       matchId,
       playerId,
       teamId: playerTeam.teamId,
@@ -2256,7 +2334,7 @@ export default function PlanillaPage() {
     }
 
     const baseEvent: MatchEvent = {
-      id: `ev-${Date.now()}`,
+      id: newEventId(),
       matchId,
       playerId: pendingTurnover.loserId,
       teamId: loserTeam.teamId,
@@ -2410,7 +2488,7 @@ export default function PlanillaPage() {
                 const targetTeam = getPlayerTeam(player.id)
                 if (blockerTeam) {
                   const event: MatchEvent = {
-                    id: `ev-${Date.now()}`,
+                    id: newEventId(),
                     matchId,
                     playerId: pendingBlock.blockerId,
                     teamId: blockerTeam.teamId,
@@ -4184,7 +4262,10 @@ export default function PlanillaPage() {
               Tocá los jugadores para ponerlos o sacarlos de la cancha. Máximo 5 en cancha.
             </p>
             <div className="flex flex-wrap gap-2">
-              {(subsDialogTeamSide === "home" ? homePlayers : awayPlayers).map((player) => {
+              {(subsDialogTeamSide === "home" ? homePlayers : awayPlayers)
+                .slice()
+                .sort((a, b) => (a.jerseyNumber ?? 0) - (b.jerseyNumber ?? 0))
+                .map((player) => {
                 const isDisqualified = isEntityDisqualified(player.id)
                 const selected = subsSelection.includes(player.id) && !isDisqualified
 

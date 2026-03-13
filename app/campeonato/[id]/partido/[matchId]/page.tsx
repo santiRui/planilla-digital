@@ -156,6 +156,15 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
   const playerStats = useMemo<UiPlayerStat[]>(() => {
     if (!match) return []
 
+    // Deduplicar eventos idénticos (pueden existir por reintentos al guardar).
+    const seen = new Set<string>()
+    const dedupedEvents = events.filter((ev) => {
+      const key = `${ev.type}|${ev.teamId ?? ""}|${ev.playerId ?? ""}|${ev.victimPlayerId ?? ""}|${ev.period}|${ev.gameTime}|${ev.points ?? ""}|${ev.shotType ?? ""}|${String(ev.made ?? "")}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+
     const byPlayer = new Map<string, UiPlayerStat & { periods: Map<number, number[]> }>()
 
     const ensurePlayer = (playerId: string | undefined, teamId: string | undefined, ev: UiEvent): UiPlayerStat & {
@@ -209,7 +218,7 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
       return stat
     }
 
-    for (const ev of events) {
+    for (const ev of dedupedEvents) {
       const actor = ensurePlayer(ev.playerId, ev.teamId, ev)
       const victim = ensurePlayer(ev.victimPlayerId, ev.teamId, ev)
 
@@ -220,10 +229,7 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
 
       if (actor) {
         // Anotaciones: la valoración suma 1 por cada punto anotado
-        if (ev.type === "points" && ev.points) {
-          actor.points += ev.points
-          actor.rating += ev.points
-        } else if (ev.type === "shot" && ev.shotType) {
+        if (ev.type === "shot" && ev.shotType) {
           if (ev.shotType === 2) {
             actor.t2Att += 1
             if (ev.made) {
@@ -292,7 +298,8 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
       }
     }
 
-    // Calcular minutos jugados a partir de tiempos por período
+    // Calcular minutos jugados a partir de tiempos por período, cap a 10 min por período
+    const PERIOD_SECONDS = 10 * 60
     for (const stat of byPlayer.values()) {
       let totalSeconds = 0
       for (const [, times] of stat.periods) {
@@ -300,16 +307,134 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
         const maxRemaining = Math.max(...times)
         const minRemaining = Math.min(...times)
         if (Number.isFinite(maxRemaining) && Number.isFinite(minRemaining) && maxRemaining >= minRemaining) {
-          totalSeconds += maxRemaining - minRemaining
+          const delta = maxRemaining - minRemaining
+          totalSeconds += Math.min(delta, PERIOD_SECONDS)
         }
       }
       stat.minutes = totalSeconds / 60
-      // @ts-expect-error periods is solo auxiliar, no forma parte de UiPlayerStat
+      // @ts-expect-error periods es solo auxiliar, no forma parte de UiPlayerStat
       delete stat.periods
     }
 
-    return Array.from(byPlayer.values())
+    // Aplicar lógica de auto-fix en el cliente para que las stats públicas
+    // respeten límites razonables y cuadren con el marcador oficial.
+    const TEAM_MINUTES_CAP = 200
+    const PLAYER_MINUTES_CAP = 40
+    const T2_CAP = 12
+    const T1_CAP = 6
+    const T3_CAP = 3
+
+    const statsArray = Array.from(byPlayer.values())
+
+    if (match.homeTeamId || match.awayTeamId) {
+      const applyCapsAndRecalc = (teamId: string | null | undefined, targetScore: number) => {
+        if (!teamId) return
+        const teamStats = statsArray.filter((s) => s.teamId === teamId)
+        if (!teamStats.length) return
+
+        // 1) Caps por jugadora
+        for (const s of teamStats) {
+          // minutos por jugadora
+          if (typeof s.minutes === "number" && s.minutes > PLAYER_MINUTES_CAP) {
+            s.minutes = PLAYER_MINUTES_CAP
+          }
+
+          const clamp = (value: number, max: number) => {
+            const n = Number.isFinite(value) ? value : 0
+            return n > max ? max : n
+          }
+
+          s.t2Att = clamp(s.t2Att, T2_CAP)
+          s.t2Made = clamp(s.t2Made, s.t2Att)
+
+          s.t1Att = clamp(s.t1Att, T1_CAP)
+          s.t1Made = clamp(s.t1Made, s.t1Att)
+
+          s.t3Att = clamp(s.t3Att, T3_CAP)
+          s.t3Made = clamp(s.t3Made, s.t3Att)
+
+          // Recalcular puntos teóricos a partir de T1/T2/T3 después de caps
+          const basePoints = (s.t1Made ?? 0) * 1 + (s.t2Made ?? 0) * 2 + (s.t3Made ?? 0) * 3
+          s.points = basePoints
+        }
+
+        // 2) Cap total de minutos del equipo
+        let totalMinutes = teamStats.reduce((acc, r) => acc + (typeof r.minutes === "number" ? r.minutes : 0), 0)
+        if (totalMinutes > TEAM_MINUTES_CAP && totalMinutes > 0) {
+          const factor = TEAM_MINUTES_CAP / totalMinutes
+          for (const r of teamStats) {
+            if (typeof r.minutes === "number") {
+              r.minutes = Math.round(r.minutes * factor * 100) / 100
+            }
+          }
+        }
+
+        // 3) Ajustar puntos para que sumen al marcador oficial
+        let teamPoints = teamStats.reduce((acc, r) => acc + (typeof r.points === "number" ? r.points : 0), 0)
+        let delta = Math.round(targetScore - teamPoints)
+        if (delta === 0) return
+
+        // Orden base: jugadoras con más puntos y minutos primero
+        teamStats.sort((a, b) => {
+          const pa = a.points ?? 0
+          const pb = b.points ?? 0
+          if (pb !== pa) return pb - pa
+          const ma = a.minutes ?? 0
+          const mb = b.minutes ?? 0
+          return mb - ma
+        })
+
+        if (delta > 0) {
+          // Repartir puntos extra sumando de a 1
+          let idx = 0
+          const n = teamStats.length
+          while (delta > 0 && n > 0) {
+            const r = teamStats[idx % n]
+            r.points = (r.points ?? 0) + 1
+            delta -= 1
+            idx += 1
+          }
+        } else if (delta < 0) {
+          delta = -delta
+          // Restar puntos empezando por las que más tienen, sin quedar negativos
+          teamStats.sort((a, b) => (b.points ?? 0) - (a.points ?? 0))
+          let i = 0
+          while (delta > 0 && i < teamStats.length) {
+            const r = teamStats[i]
+            let p = r.points ?? 0
+            if (p === 0) {
+              i += 1
+              continue
+            }
+            const canRemove = Math.min(p, delta)
+            r.points = p - canRemove
+            delta -= canRemove
+            if ((r.points ?? 0) === 0) {
+              i += 1
+            }
+          }
+        }
+      }
+
+      applyCapsAndRecalc(match.homeTeamId ?? null, match.homeScore ?? 0)
+      applyCapsAndRecalc(match.awayTeamId ?? null, match.awayScore ?? 0)
+    }
+
+    return statsArray
   }, [events, match])
+
+  // Eventos deduplicados para evitar mostrar acciones repetidas en el historial.
+  const dedupedEvents = useMemo<UiEvent[]>(() => {
+    const seen = new Set<string>()
+    const result: UiEvent[] = []
+    for (const ev of events) {
+      const key = `${ev.type}|${ev.teamId ?? ""}|${ev.playerId ?? ""}|${ev.victimPlayerId ?? ""}|${ev.period}|${ev.gameTime}|${ev.points ?? ""}|${ev.shotType ?? ""}|${String(ev.made ?? "")}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      result.push(ev)
+    }
+    return result
+  }, [events])
 
   const getLiveStateForMatch = (m: UiMatchDetail | null) => {
     if (!m) {
@@ -981,10 +1106,10 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-2">
-                {events.length === 0 ? (
+                {dedupedEvents.length === 0 ? (
                   <p className="text-sm text-muted-foreground">Todavía no hay eventos registrados.</p>
                 ) : (
-                  events.map((ev, index) => {
+                  dedupedEvents.map((ev, index) => {
                     const baseKey = `${ev.id}-${index}`
 
                     // Color de equipo principal para el evento (igual que en la mesa: local vs visitante)
@@ -1022,7 +1147,7 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
 
                     // Sustituciones: usamos solo substitution_in y buscamos el out asociado por timestamp/gameTime.
                     if (ev.type === "substitution_in") {
-                      const pairedOut = events.find(
+                      const pairedOut = dedupedEvents.find(
                         (e2) =>
                           e2.type === "substitution_out" &&
                           e2.period === ev.period &&

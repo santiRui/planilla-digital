@@ -26,6 +26,7 @@ export default function MesaPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [profileName, setProfileName] = useState<string>("Oficial de Mesa")
+  const [canSwitchToArbitros, setCanSwitchToArbitros] = useState(false)
   const [matches, setMatches] = useState<MatchRow[]>([])
   const [teams, setTeams] = useState<TeamRow[]>([])
   const [tournaments, setTournaments] = useState<TournamentRow[]>([])
@@ -179,6 +180,28 @@ export default function MesaPage() {
     }
   }, [supabase])
 
+  useEffect(() => {
+    const run = async () => {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const user = sessionData.session?.user
+      if (!user) {
+        setCanSwitchToArbitros(false)
+        return
+      }
+
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("is_referee, is_table_official")
+        .eq("id", user.id)
+        .maybeSingle()
+
+      const raw = profile as any
+      setCanSwitchToArbitros(Boolean(raw?.is_referee) && Boolean(raw?.is_table_official))
+    }
+
+    run()
+  }, [supabase])
+
   const getTeamName = (id: string) => teams.find((t) => t.id === id)?.name || "TBD"
   const getTeamLogo = (id: string) => teams.find((t) => t.id === id)?.logoUrl || ""
   const getTournamentName = (id: string) => tournaments.find((t) => t.id === id)?.name || "Torneo"
@@ -328,6 +351,11 @@ export default function MesaPage() {
               {isOnline ? <Wifi className="h-4 w-4" /> : <WifiOff className="h-4 w-4" />}
               {isOnline ? "Online" : "Offline"}
             </div>
+            {canSwitchToArbitros && (
+              <Button variant="outline" onClick={() => router.push("/arbitros")}>
+                Ir a Árbitros
+              </Button>
+            )}
             <LogoutButton />
           </div>
         </div>
@@ -700,13 +728,20 @@ type VenueRow = { id: string; name: string }
 type CourtRow = { id: string; name: string }
 
 function mapMatchFromDb(row: any): MatchRow {
-  const scheduledAt = row.scheduled_at ? new Date(row.scheduled_at) : undefined
   const rawScheduled: string | null = row.scheduled_at ?? null
-  let scheduledTime: string | undefined
-  if (typeof rawScheduled === "string") {
-    const match = rawScheduled.match(/T(\d{2}:\d{2})/)
-    if (match) scheduledTime = match[1]
-  }
+  const scheduledAt = rawScheduled
+    ? new Date(
+        /Z$/i.test(rawScheduled) || /[+-]\d{2}:\d{2}$/.test(rawScheduled) ? rawScheduled : `${rawScheduled}-03:00`,
+      )
+    : undefined
+  const scheduledTime = scheduledAt
+    ? new Intl.DateTimeFormat("es-AR", {
+        timeZone: "America/Argentina/Salta",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).format(scheduledAt)
+    : undefined
   return {
     id: row.id,
     tournamentId: row.tournament_id,

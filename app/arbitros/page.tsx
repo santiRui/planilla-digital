@@ -19,6 +19,7 @@ export default function ArbitrosPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [profileName, setProfileName] = useState<string>("Árbitro")
+  const [canSwitchToMesa, setCanSwitchToMesa] = useState(false)
   const [matches, setMatches] = useState<MatchRow[]>([])
   const [teams, setTeams] = useState<TeamRow[]>([])
   const [tournaments, setTournaments] = useState<TournamentRow[]>([])
@@ -96,6 +97,28 @@ export default function ArbitrosPage() {
       setCourts((courtsRes.data ?? []).map((c: any) => ({ id: c.id, name: c.name })) as CourtRow[])
 
       setLoading(false)
+    }
+
+    run()
+  }, [supabase])
+
+  useEffect(() => {
+    const run = async () => {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const user = sessionData.session?.user
+      if (!user) {
+        setCanSwitchToMesa(false)
+        return
+      }
+
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("is_referee, is_table_official")
+        .eq("id", user.id)
+        .maybeSingle()
+
+      const raw = profile as any
+      setCanSwitchToMesa(Boolean(raw?.is_referee) && Boolean(raw?.is_table_official))
     }
 
     run()
@@ -246,9 +269,6 @@ export default function ArbitrosPage() {
     }
 
     setMatches((prev) => prev.map((m) => (m.id === matchId ? { ...m, status: "en_juego" } : m)))
-    
-    // Redirigir a la pre planilla del partido
-    router.push(`/mesa/planilla/${matchId}/pre?forcePre=1`)
   }
 
   return (
@@ -267,7 +287,14 @@ export default function ArbitrosPage() {
               </p>
             </div>
           </div>
-          <LogoutButton />
+          <div className="flex items-center gap-2">
+            {canSwitchToMesa && (
+              <Button variant="outline" onClick={() => router.push("/mesa")}> 
+                Ir a Mesa
+              </Button>
+            )}
+            <LogoutButton />
+          </div>
         </div>
       </header>
 
@@ -632,13 +659,20 @@ type VenueRow = { id: string; name: string }
 type CourtRow = { id: string; name: string }
 
 function mapMatchFromDb(row: any): MatchRow {
-  const scheduledAt = row.scheduled_at ? new Date(row.scheduled_at) : undefined
   const rawScheduled: string | null = row.scheduled_at ?? null
-  let scheduledTime: string | undefined
-  if (typeof rawScheduled === "string") {
-    const match = rawScheduled.match(/T(\d{2}:\d{2})/)
-    if (match) scheduledTime = match[1]
-  }
+  const scheduledAt = rawScheduled
+    ? new Date(
+        /Z$/i.test(rawScheduled) || /[+-]\d{2}:\d{2}$/.test(rawScheduled) ? rawScheduled : `${rawScheduled}-03:00`,
+      )
+    : undefined
+  const scheduledTime = scheduledAt
+    ? new Intl.DateTimeFormat("es-AR", {
+        timeZone: "America/Argentina/Salta",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).format(scheduledAt)
+    : undefined
   return {
     id: row.id,
     tournamentId: row.tournament_id,

@@ -15,6 +15,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 
 export default function JornadaPage() {
   const [tournaments, setTournaments] = useState<Tournament[]>([])
+  const [teams, setTeams] = useState<Team[]>([])
   const [venues, setVenues] = useState<Venue[]>([])
   const [courts, setCourts] = useState<Court[]>([])
   const [matches, setMatches] = useState<MatchRow[]>([])
@@ -92,9 +93,35 @@ export default function JornadaPage() {
       const json = (await res.json().catch(() => null)) as any
       if (!res.ok) {
         setMatches([])
+        setTeams([])
         setError(json?.error ?? "No se pudieron cargar los partidos")
       } else {
-        setMatches((json.matches ?? []).map(mapMatchFromDb) as MatchRow[])
+        const rawMatches = (json.matches ?? []) as any[]
+        setMatches(rawMatches.map(mapMatchFromDb) as MatchRow[])
+
+        const matchTeamIds = Array.from(
+          new Set(
+            rawMatches
+              .flatMap((m) => [m?.home_team_id, m?.away_team_id])
+              .filter(Boolean)
+              .map((id) => String(id)),
+          ),
+        ) as string[]
+
+        if (matchTeamIds.length > 0) {
+          const { data: matchTeams, error: matchTeamsError } = await supabase
+            .from("teams")
+            .select("id, name")
+            .in("id", matchTeamIds)
+
+          if (matchTeamsError) {
+            setError((prev) => prev ?? matchTeamsError.message)
+          } else {
+            setTeams((matchTeams ?? []).map((t: any) => ({ id: t.id, name: t.name })) as Team[])
+          }
+        } else {
+          setTeams([])
+        }
       }
 
       setLoading(false)
@@ -108,7 +135,12 @@ export default function JornadaPage() {
       if (selectedVenue && m.venueId !== selectedVenue) return false
       if (!selectedDate) return false
       if (!m.scheduledDate) return false
-      const dateStr = new Date(m.scheduledDate).toISOString().split("T")[0]
+      const dateStr = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Argentina/Salta",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date(m.scheduledDate))
       return dateStr === selectedDate
     })
     .sort((a, b) => {
@@ -120,6 +152,7 @@ export default function JornadaPage() {
     })
 
   const getTournamentName = (id: string) => tournaments.find((t) => t.id === id)?.name || "Torneo"
+  const getTeamName = (id: string) => teams.find((t) => t.id === id)?.name || "TBD"
   const getVenueName = (id?: string | null) => venues.find((v) => v.id === id)?.name || "-"
   const getCourtName = (id?: string | null) => courts.find((c) => c.id === id)?.name || "-"
 
@@ -325,7 +358,7 @@ export default function JornadaPage() {
                     <TableCell className="whitespace-nowrap">{formatDuration(match.startedAt, match.finishedAt)}</TableCell>
                     <TableCell>
                       <div className="font-medium">
-                        {match.homeTeamName} vs {match.awayTeamName}
+                        {getTeamName(match.homeTeamId)} vs {getTeamName(match.awayTeamId)}
                       </div>
                       {match.status === "finalizado" && (
                         <div className="text-sm text-muted-foreground">
@@ -390,7 +423,7 @@ export default function JornadaPage() {
             <DialogDescription>
               {statusDialogMatch && (
                 <>
-                  {statusDialogMatch.homeTeamName} vs {statusDialogMatch.awayTeamName} - Fecha {statusDialogMatch.round}
+                  {getTeamName(statusDialogMatch.homeTeamId)} vs {getTeamName(statusDialogMatch.awayTeamId)} - Fecha {statusDialogMatch.round}
                 </>
               )}
             </DialogDescription>
@@ -462,13 +495,16 @@ type Court = {
   name: string
 }
 
+type Team = {
+  id: string
+  name: string
+}
+
 type MatchRow = {
   id: string
   tournamentId: string
   homeTeamId: string
-  homeTeamName: string
   awayTeamId: string
-  awayTeamName: string
   round: number
   phase: string
   status: "programado" | "en_juego" | "finalizado" | "suspendido" | "demorado"
@@ -487,13 +523,20 @@ type MatchRow = {
 }
 
 function mapMatchFromDb(row: any): MatchRow {
-  const scheduledAt = row.scheduled_at ? new Date(row.scheduled_at) : undefined
   const rawScheduled: string | null = row.scheduled_at ?? null
-  let scheduledTime: string | undefined
-  if (typeof rawScheduled === "string") {
-    const match = rawScheduled.match(/T(\d{2}:\d{2})/)
-    if (match) scheduledTime = match[1]
-  }
+  const scheduledAt = rawScheduled
+    ? new Date(
+        /Z$/i.test(rawScheduled) || /[+-]\d{2}:\d{2}$/.test(rawScheduled) ? rawScheduled : `${rawScheduled}-03:00`,
+      )
+    : undefined
+  const scheduledTime = scheduledAt
+    ? new Intl.DateTimeFormat("es-AR", {
+        timeZone: "America/Argentina/Salta",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).format(scheduledAt)
+    : undefined
 
   const assignments = (row.match_official_assignments ?? []) as Array<{ user_id: string; role: string }>
 
@@ -504,9 +547,7 @@ function mapMatchFromDb(row: any): MatchRow {
     id: row.id,
     tournamentId: row.tournament_id,
     homeTeamId: row.home_team_id,
-    homeTeamName: row.home_team_name ?? "Local",
     awayTeamId: row.away_team_id,
-    awayTeamName: row.away_team_name ?? "Visitante",
     round: row.round,
     phase: row.phase,
     status: row.status,

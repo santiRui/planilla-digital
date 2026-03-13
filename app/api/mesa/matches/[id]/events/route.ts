@@ -37,6 +37,10 @@ const eventSchema = z.object({
   timestamp: z.string().datetime().optional().nullable(),
 })
 
+function isUuid(value: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+
 async function assertMesaEventsRole(accessToken: string, matchId: string) {
   const adminClient = createSupabaseAdminClient()
   const userClient = createSupabaseServerClient(accessToken)
@@ -117,6 +121,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     const occurredAt = ev.timestamp ? new Date(ev.timestamp) : new Date()
 
     const insertRow: any = {
+      // Si el cliente manda un UUID estable, usamos ese id para que el insert sea idempotente.
+      // Para ids legacy (ej: "ev-..."), dejamos que la BD genere el uuid.
+      id: isUuid(ev.id) ? ev.id : undefined,
       match_id: ev.matchId,
       team_id: ev.teamId,
       player_id: ev.playerId,
@@ -136,11 +143,23 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       victim_player_id: ev.victimPlayerId ?? null,
     }
 
-    const { data, error } = await auth.adminClient
-      .from("match_events")
-      .insert(insertRow)
-      .select("id, match_id, team_id, player_id, type, points, period, game_time, occurred_at, created_by, shot_type, made, x, y, rebound_type, foul_type, victim_team_id, victim_player_id")
-      .single()
+    if (insertRow.id === undefined) {
+      delete insertRow.id
+    }
+
+    const { data, error } = insertRow.id
+      ? await (auth.adminClient.from("match_events") as any)
+          .upsert(insertRow, { onConflict: "id" })
+          .select(
+            "id, match_id, team_id, player_id, type, points, period, game_time, occurred_at, created_by, shot_type, made, x, y, rebound_type, foul_type, victim_team_id, victim_player_id",
+          )
+          .single()
+      : await (auth.adminClient.from("match_events") as any)
+          .insert(insertRow)
+          .select(
+            "id, match_id, team_id, player_id, type, points, period, game_time, occurred_at, created_by, shot_type, made, x, y, rebound_type, foul_type, victim_team_id, victim_player_id",
+          )
+          .single()
 
     if (error || !data) {
       return NextResponse.json({ error: error?.message ?? "No se pudo insertar evento" }, { status: 400 })

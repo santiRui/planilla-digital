@@ -179,7 +179,30 @@ export default function ProgramacionPage() {
         setMatches([])
         setError(json?.error ?? "No se pudieron cargar los partidos")
       } else {
-        setMatches((json.matches ?? []).map(mapMatchFromDb) as MatchRow[])
+        const rawMatches = (json.matches ?? []) as any[]
+        setMatches(rawMatches.map(mapMatchFromDb) as MatchRow[])
+
+        const matchTeamIds = Array.from(
+          new Set(
+            rawMatches
+              .flatMap((m) => [m?.home_team_id, m?.away_team_id])
+              .filter(Boolean)
+              .map((id) => String(id)),
+          ),
+        ) as string[]
+
+        if (matchTeamIds.length > 0) {
+          const { data: matchTeams, error: matchTeamsError } = await supabase
+            .from("teams")
+            .select("id, name")
+            .in("id", matchTeamIds)
+
+          if (matchTeamsError) {
+            setError((prev) => prev ?? matchTeamsError.message)
+          } else {
+            setTeams((matchTeams ?? []).map((t: any) => ({ id: t.id, name: t.name })) as Team[])
+          }
+        }
       }
 
       setLoading(false)
@@ -235,8 +258,17 @@ export default function ProgramacionPage() {
     const refereeSet = new Set(nextReferees.filter(Boolean))
     const cleanedTableOfficials = nextTableOfficials.map((id) => (id && refereeSet.has(id) ? "" : id))
 
+    const scheduledDateValue = match.scheduledDate
+      ? new Intl.DateTimeFormat("en-CA", {
+          timeZone: "America/Argentina/Salta",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        }).format(new Date(match.scheduledDate))
+      : ""
+
     setFormData({
-      scheduledDate: match.scheduledDate ? new Date(match.scheduledDate).toISOString().split("T")[0] : "",
+      scheduledDate: scheduledDateValue,
       scheduledTime: match.scheduledTime || "",
       venueId: match.venueId || "",
       courtId: "",
@@ -252,7 +284,7 @@ export default function ProgramacionPage() {
     setError(null)
     try {
       if (formData.scheduledDate && formData.scheduledTime) {
-        const candidate = new Date(`${formData.scheduledDate}T${formData.scheduledTime}:00`)
+        const candidate = new Date(`${formData.scheduledDate}T${formData.scheduledTime}:00-03:00`)
         const now = new Date()
         if (!Number.isNaN(candidate.getTime()) && candidate.getTime() < now.getTime()) {
           setError("No podés programar un partido en una fecha u horario pasado.")
@@ -787,13 +819,20 @@ function mapOfficialFromDb(row: any): Official {
 }
 
 function mapMatchFromDb(row: any): MatchRow {
-  const scheduledAt = row.scheduled_at ? new Date(row.scheduled_at) : undefined
   const rawScheduled: string | null = row.scheduled_at ?? null
-  let scheduledTime: string | undefined
-  if (typeof rawScheduled === "string") {
-    const match = rawScheduled.match(/T(\d{2}:\d{2})/)
-    if (match) scheduledTime = match[1]
-  }
+  const scheduledAt = rawScheduled
+    ? new Date(
+        /Z$/i.test(rawScheduled) || /[+-]\d{2}:\d{2}$/.test(rawScheduled) ? rawScheduled : `${rawScheduled}-03:00`,
+      )
+    : undefined
+  const scheduledTime = scheduledAt
+    ? new Intl.DateTimeFormat("es-AR", {
+        timeZone: "America/Argentina/Salta",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).format(scheduledAt)
+    : undefined
   const assignments = (row.match_official_assignments ?? []) as Array<{ user_id: string; role: string }>
 
   const refereeIds = assignments.filter((a) => a.role === "arbitro").map((a) => a.user_id)

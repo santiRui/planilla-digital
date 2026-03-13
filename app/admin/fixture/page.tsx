@@ -857,13 +857,20 @@ type MatchRow = {
 }
 
 function mapMatchFromDb(row: any): MatchRow {
-  const scheduledAt = row.scheduled_at ? new Date(row.scheduled_at) : undefined
   const rawScheduled: string | null = row.scheduled_at ?? null
-  let scheduledTime: string | undefined
-  if (typeof rawScheduled === "string") {
-    const match = rawScheduled.match(/T(\d{2}:\d{2})/)
-    if (match) scheduledTime = match[1]
-  }
+  const scheduledAt = rawScheduled
+    ? new Date(
+        /Z$/i.test(rawScheduled) || /[+-]\d{2}:\d{2}$/.test(rawScheduled) ? rawScheduled : `${rawScheduled}-03:00`,
+      )
+    : undefined
+  const scheduledTime = scheduledAt
+    ? new Intl.DateTimeFormat("es-AR", {
+        timeZone: "America/Argentina/Salta",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).format(scheduledAt)
+    : undefined
   return {
     id: row.id,
     tournamentId: row.tournament_id,

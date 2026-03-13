@@ -56,7 +56,7 @@ function RequireRoleInner({ role, children }: Props) {
 
       const { data: profile, error } = await supabase
         .from("profiles")
-        .select("role")
+        .select("role, is_referee, is_table_official")
         .eq("id", session.user.id)
         .maybeSingle()
 
@@ -69,8 +69,11 @@ function RequireRoleInner({ role, children }: Props) {
       // Permitir que cuentas con rol 'arbitro' accedan también a vistas que requieren 'oficial_mesa'
       // (caso de usuarios que cumplen ambos roles con la misma cuenta).
       if (rawProfile.role !== role) {
+        const isDualRole = Boolean(rawProfile.is_referee) && Boolean(rawProfile.is_table_official)
         const isArbitroUsingMesa = role === "oficial_mesa" && rawProfile.role === "arbitro"
-        if (!isArbitroUsingMesa) {
+        const isMesaUsingArbitro = role === "arbitro" && rawProfile.role === "oficial_mesa"
+
+        if (!(isDualRole && (isArbitroUsingMesa || isMesaUsingArbitro))) {
           router.replace(roleHome(rawProfile.role))
           return
         }
