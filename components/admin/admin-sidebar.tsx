@@ -29,6 +29,7 @@ const navigation = [
   { name: "Fixture", href: "/admin/fixture", icon: Calendar },
   { name: "Programación", href: "/admin/programacion", icon: MapPin },
   { name: "Jornada", href: "/admin/jornada", icon: Calendar },
+  { name: "Goleadores", href: "/admin/goleadores", icon: Trophy },
   { name: "Canchas", href: "/admin/canchas", icon: MapPin },
   { name: "Fases", href: "/admin/fases", icon: Layers },
   { name: "Personal", href: "/admin/personal", icon: UserCircle },

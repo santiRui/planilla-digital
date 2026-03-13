@@ -29,7 +29,7 @@ const bodySchema = z.object({
   stats: z.array(playerStatSchema),
 })
 
-async function assertMesaRole(accessToken: string, matchId: string) {
+async function assertAuthenticated(accessToken: string) {
   const adminClient = createSupabaseAdminClient()
   const userClient = createSupabaseServerClient(accessToken)
 
@@ -38,48 +38,9 @@ async function assertMesaRole(accessToken: string, matchId: string) {
     return { ok: false as const, status: 401, error: "No autorizado" }
   }
 
-  const callerId = userData.user.id
-
-  const { data: callerProfile, error: callerProfileError } = await adminClient
-    .from("profiles")
-    .select("role")
-    .eq("id", callerId)
-    .maybeSingle()
-
-  if (callerProfileError) {
-    return { ok: false as const, status: 400, error: callerProfileError.message }
-  }
-
-  const role = (callerProfile?.role as string | undefined) ?? ""
-  if (role !== "admin" && role !== "arbitro" && role !== "oficial_mesa") {
-    return { ok: false as const, status: 403, error: "Prohibido" }
-  }
-
-  // Para guardar stats exigimos al menos rol de oficial de mesa o admin
-  if (role === "arbitro") {
-    return { ok: false as const, status: 403, error: "Prohibido" }
-  }
-
-  // Verificamos que esté asignado al partido como oficial de mesa si no es admin
-  if (role === "oficial_mesa") {
-    const { data: assignment, error: assignmentError } = await adminClient
-      .from("match_official_assignments")
-      .select("id")
-      .eq("match_id", matchId)
-      .eq("user_id", callerId)
-      .eq("role", "oficial_mesa")
-      .maybeSingle()
-
-    if (assignmentError) {
-      return { ok: false as const, status: 400, error: assignmentError.message }
-    }
-
-    if (!assignment) {
-      return { ok: false as const, status: 403, error: "Prohibido" }
-    }
-  }
-
-  return { ok: true as const, adminClient, callerId, role }
+  // No imponemos restricciones por rol: cualquier usuario autenticado puede
+  // persistir las estadísticas calculadas por la planilla digital.
+  return { ok: true as const, adminClient }
 }
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -94,7 +55,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       return NextResponse.json({ error: "No autorizado" }, { status: 401 })
     }
 
-    const auth = await assertMesaRole(accessToken, matchId)
+    const auth = await assertAuthenticated(accessToken)
     if (!auth.ok) {
       return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
@@ -134,7 +95,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     }
 
     const { error } = await auth.adminClient
-      .from("match_player_stats")
+      .from("match_player_stats_planilla")
       .upsert(rows, { onConflict: "match_id,player_id" })
 
     if (error) {

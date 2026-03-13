@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
+import Link from "next/link"
 import { Breadcrumbs } from "@/components/breadcrumbs"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -361,9 +362,12 @@ export default function JornadaPage() {
                         {getTeamName(match.homeTeamId)} vs {getTeamName(match.awayTeamId)}
                       </div>
                       {match.status === "finalizado" && (
-                        <div className="text-sm text-muted-foreground">
+                        <Link
+                          href={`/campeonato/${match.tournamentId}/partido/${match.id}`}
+                          className="text-sm text-muted-foreground underline underline-offset-2 cursor-pointer"
+                        >
                           Resultado: {match.homeScore ?? 0} - {match.awayScore ?? 0}
-                        </div>
+                        </Link>
                       )}
                     </TableCell>
                     <TableCell>

@@ -258,17 +258,22 @@ export default function TournamentFixturePage({ params }: { params: Promise<{ id
                                 </div>
                               </div>
 
-                              {/* Score */}
+                              {/* Score: al hacer clic abre la vista pública del partido (historial + estadísticas) */}
                               <div className="px-4 text-center min-w-[80px]">
-                                {match.status === "finalizado" || match.status === "en_curso" ? (
-                                  <div className="flex items-center justify-center gap-2">
-                                    <span className="text-2xl font-bold">{match.homeScore ?? 0}</span>
-                                    <span className="text-muted-foreground">-</span>
-                                    <span className="text-2xl font-bold">{match.awayScore ?? 0}</span>
-                                  </div>
-                                ) : (
-                                  <span className="text-lg font-medium text-muted-foreground">vs</span>
-                                )}
+                                <Link
+                                  href={`/campeonato/${id}/partido/${match.id}`}
+                                  className="inline-flex items-center justify-center gap-2 hover:underline underline-offset-4"
+                               >
+                                  {match.status === "finalizado" || match.status === "en_curso" ? (
+                                    <>
+                                      <span className="text-2xl font-bold">{match.homeScore ?? 0}</span>
+                                      <span className="text-muted-foreground">-</span>
+                                      <span className="text-2xl font-bold">{match.awayScore ?? 0}</span>
+                                    </>
+                                  ) : (
+                                    <span className="text-lg font-medium text-muted-foreground">vs</span>
+                                  )}
+                                </Link>
                               </div>
 
                               {/* Away Team */}

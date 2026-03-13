@@ -150,278 +150,15 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
   const [events, setEvents] = useState<UiEvent[]>([])
   const [homePlayers, setHomePlayers] = useState<UiPlayer[]>([])
   const [awayPlayers, setAwayPlayers] = useState<UiPlayer[]>([])
+  const [storedStats, setStoredStats] = useState<UiPlayerStat[] | null>(null)
   const [activeTab, setActiveTab] = useState<"historial" | "estadisticas">("historial")
 
-  // Estadísticas derivadas en vivo a partir de los eventos públicos
   const playerStats = useMemo<UiPlayerStat[]>(() => {
-    if (!match) return []
-
-    // Deduplicar eventos idénticos (pueden existir por reintentos al guardar).
-    const seen = new Set<string>()
-    const dedupedEvents = events.filter((ev) => {
-      const key = `${ev.type}|${ev.teamId ?? ""}|${ev.playerId ?? ""}|${ev.victimPlayerId ?? ""}|${ev.period}|${ev.gameTime}|${ev.points ?? ""}|${ev.shotType ?? ""}|${String(ev.made ?? "")}`
-      if (seen.has(key)) return false
-      seen.add(key)
-      return true
-    })
-
-    const byPlayer = new Map<string, UiPlayerStat & { periods: Map<number, number[]> }>()
-
-    const ensurePlayer = (playerId: string | undefined, teamId: string | undefined, ev: UiEvent): UiPlayerStat & {
-      periods: Map<number, number[]>
-    } | null => {
-      if (!playerId || !teamId) return null
-
-      if (!byPlayer.has(playerId)) {
-        const periods = new Map<number, number[]>()
-        const base: UiPlayerStat & { periods: Map<number, number[]> } = {
-          playerId,
-          teamId,
-          jerseyNumber: ev.jerseyNumber ?? null,
-          playerName:
-            ev.playerName ??
-            ev.victimPlayerName ??
-            "Jugador",
-          minutes: 0,
-          points: 0,
-          t1Made: 0,
-          t1Att: 0,
-          t2Made: 0,
-          t2Att: 0,
-          t3Made: 0,
-          t3Att: 0,
-          rebounds: 0,
-          assists: 0,
-          steals: 0,
-          turnovers: 0,
-          blocksCommitted: 0,
-          blocksReceived: 0,
-          foulsCommitted: 0,
-          foulsReceived: 0,
-          rating: 0,
-          periods,
-        }
-        byPlayer.set(playerId, base)
-      }
-
-      const stat = byPlayer.get(playerId)!
-      // Acumular tiempos para estimar minutos jugados
-      if (ev.gameTime && typeof ev.period === "number") {
-        const [mm, ss] = ev.gameTime.split(":").map((v) => Number(v))
-        if (Number.isFinite(mm) && Number.isFinite(ss)) {
-          const total = mm * 60 + ss
-          const arr = stat.periods.get(ev.period) ?? []
-          arr.push(total)
-          stat.periods.set(ev.period, arr)
-        }
-      }
-      return stat
-    }
-
-    for (const ev of dedupedEvents) {
-      const actor = ensurePlayer(ev.playerId, ev.teamId, ev)
-      const victim = ensurePlayer(ev.victimPlayerId, ev.teamId, ev)
-
-      const isActor = !!actor
-      const isVictim = !!victim
-
-      if (!isActor && !isVictim) continue
-
-      if (actor) {
-        // Anotaciones: la valoración suma 1 por cada punto anotado
-        if (ev.type === "shot" && ev.shotType) {
-          if (ev.shotType === 2) {
-            actor.t2Att += 1
-            if (ev.made) {
-              actor.t2Made += 1
-              actor.points += 2
-              actor.rating += 2
-            } else {
-              actor.rating -= 1
-            }
-          } else if (ev.shotType === 3) {
-            actor.t3Att += 1
-            if (ev.made) {
-              actor.t3Made += 1
-              actor.points += 3
-              actor.rating += 3
-            } else {
-              actor.rating -= 1
-            }
-          }
-        } else if (ev.type === "free_throw") {
-          actor.t1Att += 1
-          if (ev.made) {
-            actor.t1Made += 1
-            actor.points += 1
-            actor.rating += 1
-          } else {
-            actor.rating -= 1
-          }
-        }
-
-        if (ev.type === "rebound") {
-          actor.rebounds += 1
-          actor.rating += 1
-        }
-        if (ev.type === "assist") {
-          actor.assists += 1
-          actor.rating += 1
-        }
-        if (ev.type === "steal") {
-          actor.steals += 1
-          actor.rating += 1
-        }
-        if (ev.type === "turnover") {
-          actor.turnovers += 1
-          actor.rating -= 1
-        }
-        if (ev.type === "block") {
-          actor.blocksCommitted += 1
-          actor.rating += 1
-        }
-        if (ev.type === "foul") {
-          actor.foulsCommitted += 1
-          actor.rating -= 1
-        }
-      }
-
-      if (victim) {
-        if (ev.type === "block") {
-          victim.blocksReceived += 1
-          victim.rating -= 1
-        }
-        if (ev.type === "foul") {
-          victim.foulsReceived += 1
-          victim.rating += 1
-        }
-      }
-    }
-
-    // Calcular minutos jugados a partir de tiempos por período, cap a 10 min por período
-    const PERIOD_SECONDS = 10 * 60
-    for (const stat of byPlayer.values()) {
-      let totalSeconds = 0
-      for (const [, times] of stat.periods) {
-        if (!times.length) continue
-        const maxRemaining = Math.max(...times)
-        const minRemaining = Math.min(...times)
-        if (Number.isFinite(maxRemaining) && Number.isFinite(minRemaining) && maxRemaining >= minRemaining) {
-          const delta = maxRemaining - minRemaining
-          totalSeconds += Math.min(delta, PERIOD_SECONDS)
-        }
-      }
-      stat.minutes = totalSeconds / 60
-      // @ts-expect-error periods es solo auxiliar, no forma parte de UiPlayerStat
-      delete stat.periods
-    }
-
-    // Aplicar lógica de auto-fix en el cliente para que las stats públicas
-    // respeten límites razonables y cuadren con el marcador oficial.
-    const TEAM_MINUTES_CAP = 200
-    const PLAYER_MINUTES_CAP = 40
-    const T2_CAP = 12
-    const T1_CAP = 6
-    const T3_CAP = 3
-
-    const statsArray = Array.from(byPlayer.values())
-
-    if (match.homeTeamId || match.awayTeamId) {
-      const applyCapsAndRecalc = (teamId: string | null | undefined, targetScore: number) => {
-        if (!teamId) return
-        const teamStats = statsArray.filter((s) => s.teamId === teamId)
-        if (!teamStats.length) return
-
-        // 1) Caps por jugadora
-        for (const s of teamStats) {
-          // minutos por jugadora
-          if (typeof s.minutes === "number" && s.minutes > PLAYER_MINUTES_CAP) {
-            s.minutes = PLAYER_MINUTES_CAP
-          }
-
-          const clamp = (value: number, max: number) => {
-            const n = Number.isFinite(value) ? value : 0
-            return n > max ? max : n
-          }
-
-          s.t2Att = clamp(s.t2Att, T2_CAP)
-          s.t2Made = clamp(s.t2Made, s.t2Att)
-
-          s.t1Att = clamp(s.t1Att, T1_CAP)
-          s.t1Made = clamp(s.t1Made, s.t1Att)
-
-          s.t3Att = clamp(s.t3Att, T3_CAP)
-          s.t3Made = clamp(s.t3Made, s.t3Att)
-
-          // Recalcular puntos teóricos a partir de T1/T2/T3 después de caps
-          const basePoints = (s.t1Made ?? 0) * 1 + (s.t2Made ?? 0) * 2 + (s.t3Made ?? 0) * 3
-          s.points = basePoints
-        }
-
-        // 2) Cap total de minutos del equipo
-        let totalMinutes = teamStats.reduce((acc, r) => acc + (typeof r.minutes === "number" ? r.minutes : 0), 0)
-        if (totalMinutes > TEAM_MINUTES_CAP && totalMinutes > 0) {
-          const factor = TEAM_MINUTES_CAP / totalMinutes
-          for (const r of teamStats) {
-            if (typeof r.minutes === "number") {
-              r.minutes = Math.round(r.minutes * factor * 100) / 100
-            }
-          }
-        }
-
-        // 3) Ajustar puntos para que sumen al marcador oficial
-        let teamPoints = teamStats.reduce((acc, r) => acc + (typeof r.points === "number" ? r.points : 0), 0)
-        let delta = Math.round(targetScore - teamPoints)
-        if (delta === 0) return
-
-        // Orden base: jugadoras con más puntos y minutos primero
-        teamStats.sort((a, b) => {
-          const pa = a.points ?? 0
-          const pb = b.points ?? 0
-          if (pb !== pa) return pb - pa
-          const ma = a.minutes ?? 0
-          const mb = b.minutes ?? 0
-          return mb - ma
-        })
-
-        if (delta > 0) {
-          // Repartir puntos extra sumando de a 1
-          let idx = 0
-          const n = teamStats.length
-          while (delta > 0 && n > 0) {
-            const r = teamStats[idx % n]
-            r.points = (r.points ?? 0) + 1
-            delta -= 1
-            idx += 1
-          }
-        } else if (delta < 0) {
-          delta = -delta
-          // Restar puntos empezando por las que más tienen, sin quedar negativos
-          teamStats.sort((a, b) => (b.points ?? 0) - (a.points ?? 0))
-          let i = 0
-          while (delta > 0 && i < teamStats.length) {
-            const r = teamStats[i]
-            let p = r.points ?? 0
-            if (p === 0) {
-              i += 1
-              continue
-            }
-            const canRemove = Math.min(p, delta)
-            r.points = p - canRemove
-            delta -= canRemove
-            if ((r.points ?? 0) === 0) {
-              i += 1
-            }
-          }
-        }
-      }
-
-      applyCapsAndRecalc(match.homeTeamId ?? null, match.homeScore ?? 0)
-      applyCapsAndRecalc(match.awayTeamId ?? null, match.awayScore ?? 0)
-    }
-
-    return statsArray
-  }, [events, match])
+    // Sólo mostramos estadísticas cuando el partido está finalizado
+    if (!match || match.status !== "finalizado") return []
+    if (storedStats && storedStats.length > 0) return storedStats
+    return []
+  }, [match, storedStats])
 
   // Eventos deduplicados para evitar mostrar acciones repetidas en el historial.
   const dedupedEvents = useMemo<UiEvent[]>(() => {
@@ -519,7 +256,7 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
       let awayTeamPrimaryColor: string | null = null
 
       if (teamIds.length > 0) {
-        const [{ data: teamRows }, { data: playerRows }] = await Promise.all([
+        const [teamsRes, playersRes, statsRes] = await Promise.all([
           supabase
             .from("teams")
             .select("id, name, logo_url, primary_color")
@@ -528,12 +265,18 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
             .from("players")
             .select("id, team_id, first_name, last_name, jersey_number")
             .in("team_id", teamIds),
+          supabase
+            .from("match_player_stats_planilla")
+            .select(
+              "player_id, team_id, minutes, points, t1_made, t1_att, t2_made, t2_att, t3_made, t3_att, rebounds, assists, steals, turnovers, blocks_committed, blocks_received, fouls_committed, fouls_received, rating, players(first_name, last_name, jersey_number)",
+            )
+            .eq("match_id", matchId),
         ])
 
         type TeamUiInfo = { name: string; logoUrl: string | null; primaryColor: string | null }
 
         const teamMap: Record<string, TeamUiInfo> = Object.fromEntries(
-          (teamRows ?? []).map((t: any) => [
+          (teamsRes.data ?? []).map((t: any) => [
             t.id,
             {
               name: t.name as string,
@@ -558,7 +301,7 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
           awayTeamPrimaryColor = awayTeam.primaryColor
         }
 
-        const allPlayers: UiPlayer[] = (playerRows ?? []).map((p: any) => ({
+        const allPlayers: UiPlayer[] = (playersRes.data ?? []).map((p: any) => ({
           id: p.id as string,
           teamId: p.team_id as string,
           firstName: p.first_name as string,
@@ -568,6 +311,40 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
 
         setHomePlayers(allPlayers.filter((p) => p.teamId === mRow.home_team_id))
         setAwayPlayers(allPlayers.filter((p) => p.teamId === mRow.away_team_id))
+
+        // Cargar estadísticas guardadas desde la planilla (match_player_stats)
+        if (!statsRes.error && Array.isArray(statsRes.data)) {
+          const statsFromDb: UiPlayerStat[] = (statsRes.data as any[]).map((row: any) => ({
+            playerId: row.player_id as string,
+            teamId: row.team_id as string,
+            jerseyNumber: row.players?.jersey_number ?? null,
+            playerName:
+              row.players?.last_name && row.players?.first_name
+                ? `${row.players.last_name}, ${row.players.first_name}`
+                : "Jugador",
+            minutes: typeof row.minutes === "number" ? row.minutes : 0,
+            points: row.points ?? 0,
+            t1Made: row.t1_made ?? 0,
+            t1Att: row.t1_att ?? 0,
+            t2Made: row.t2_made ?? 0,
+            t2Att: row.t2_att ?? 0,
+            t3Made: row.t3_made ?? 0,
+            t3Att: row.t3_att ?? 0,
+            rebounds: row.rebounds ?? 0,
+            assists: row.assists ?? 0,
+            steals: row.steals ?? 0,
+            turnovers: row.turnovers ?? 0,
+            blocksCommitted: row.blocks_committed ?? 0,
+            blocksReceived: row.blocks_received ?? 0,
+            foulsCommitted: row.fouls_committed ?? 0,
+            foulsReceived: row.fouls_received ?? 0,
+            rating: row.rating ?? 0,
+          }))
+
+          if (statsFromDb.length > 0) {
+            setStoredStats(statsFromDb)
+          }
+        }
       }
 
       const scheduledAt = mRow.scheduled_at ? new Date(mRow.scheduled_at) : undefined

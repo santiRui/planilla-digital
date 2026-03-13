@@ -89,8 +89,6 @@ export async function POST(req: NextRequest) {
           byTeam[r.team_id].push(r)
         }
 
-        const TEAM_MINUTES_CAP = 200
-        const PLAYER_MINUTES_CAP = 40
         const T2_CAP = 12
         const T1_CAP = 6
         const T3_CAP = 3
@@ -99,13 +97,8 @@ export async function POST(req: NextRequest) {
           const teamRows = byTeam[teamId] ?? []
           if (!teamRows.length) return
 
-          // 1) Caps por jugadora
+          // 1) Caps por jugadora (sólo en intentos de tiro, no tocamos minutos)
           for (const r of teamRows) {
-            // minutos por jugadora
-            if (typeof r.minutes === "number" && r.minutes > PLAYER_MINUTES_CAP) {
-              r.minutes = PLAYER_MINUTES_CAP
-            }
-
             const clamp = (value: any, max: number) => {
               const n = typeof value === "number" ? value : 0
               return n > max ? max : n
@@ -126,21 +119,7 @@ export async function POST(req: NextRequest) {
             r.points = basePoints
           }
 
-          // 2) Cap total de minutos del equipo
-          let totalMinutes = teamRows.reduce(
-            (acc, r) => acc + (typeof r.minutes === "number" ? r.minutes : 0),
-            0,
-          )
-          if (totalMinutes > TEAM_MINUTES_CAP && totalMinutes > 0) {
-            const factor = TEAM_MINUTES_CAP / totalMinutes
-            for (const r of teamRows) {
-              if (typeof r.minutes === "number") {
-                r.minutes = Math.round(r.minutes * factor * 100) / 100
-              }
-            }
-          }
-
-          // 3) Ajustar puntos para que sumen al marcador oficial
+          // 2) Ajustar puntos para que sumen al marcador oficial
           let teamPoints = teamRows.reduce(
             (acc, r) => acc + (typeof r.points === "number" ? r.points : 0),
             0,

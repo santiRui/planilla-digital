@@ -581,6 +581,35 @@ export default function PrePlanillaPage() {
     return new Set(jerseys).size === jerseys.length
   }
 
+  const toggleSelectAllPlayers = () => {
+    if (!activeTeam) return
+
+    setState((prev: PrePlanillaState) => {
+      const cur = prev[activeSide]
+      const enabledPlayers = activePlayers.filter((p: Player) => {
+        // reutilizamos la misma lógica que canSelectPlayer para ver si el jugador puede marcarse
+        const maxReached = cur.selectedPlayerIds.length >= 12
+        const alreadySelected = cur.selectedPlayerIds.includes(p.id)
+        if (alreadySelected) return true
+        if (maxReached) return false
+        return true
+      })
+
+      const allIds = enabledPlayers.map((p) => p.id)
+      const allSelected = allIds.every((id) => cur.selectedPlayerIds.includes(id))
+
+      const nextSelected = allSelected ? cur.selectedPlayerIds.filter((id) => !allIds.includes(id)) : Array.from(new Set([...cur.selectedPlayerIds, ...allIds]))
+
+      return {
+        ...prev,
+        [activeSide]: {
+          ...cur,
+          selectedPlayerIds: nextSelected,
+        },
+      }
+    })
+  }
+
   const canContinueStarters = () => {
     if (activeState.starters.length < 3) return false
     if (!activeState.captainId) return false
@@ -823,7 +852,16 @@ export default function PrePlanillaPage() {
             <CardContent className="p-3">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-sm font-medium">Jugadores</div>
-                <div className="text-xs text-muted-foreground">{activeState.selectedPlayerIds.length}</div>
+                <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                  <div className="flex items-center gap-1">
+                    <Checkbox
+                      checked={activePlayers.length > 0 && activeState.selectedPlayerIds.length >= activePlayers.length}
+                      onCheckedChange={toggleSelectAllPlayers}
+                    />
+                    <span>Todos</span>
+                  </div>
+                  <span>{activeState.selectedPlayerIds.length}</span>
+                </div>
               </div>
 
               <div className="space-y-2">

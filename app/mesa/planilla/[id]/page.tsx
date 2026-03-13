@@ -995,9 +995,11 @@ export default function PlanillaPage() {
     setAwayScore(match.awayScore ?? 0)
   }, [match?.homeScore, match?.awayScore, match?.id, restoredFromStorage])
 
-  // Sincronizar estado vivo (score, período, tiempo) en Supabase vía API protegida
+  // Sincronizar estado vivo (score, período, tiempo) en Supabase vía API protegida,
+  // pero con frecuencia limitada para no saturar la BD.
   useEffect(() => {
     if (!matchId) return
+    if (match?.status !== "en_juego") return
 
     const timeout = setTimeout(async () => {
       try {
@@ -1021,10 +1023,10 @@ export default function PlanillaPage() {
       } catch {
         // Si falla, mantenemos el estado local y se puede reintentar más tarde
       }
-    }, 500)
+    }, 5000) // enviar como máximo cada 5 segundos
 
     return () => clearTimeout(timeout)
-  }, [supabase, matchId, homeScore, awayScore, period, gameTime])
+  }, [supabase, matchId, match?.status, homeScore, awayScore, period, gameTime])
 
   // Online status
   useEffect(() => {
@@ -2407,34 +2409,6 @@ export default function PlanillaPage() {
 
     const baseBgColor = teamSide === "home" ? `${homeColor}14` : `${awayColor}14`
 
-    const longPressTimeoutRef = useRef<number | null>(null)
-    const longPressTriggeredRef = useRef(false)
-
-    const clearLongPress = () => {
-      if (longPressTimeoutRef.current !== null) {
-        window.clearTimeout(longPressTimeoutRef.current)
-        longPressTimeoutRef.current = null
-      }
-    }
-
-    const startLongPress = () => {
-      if (isDisqualified) return
-      // Solo tiene sentido sustituir si el jugador está actualmente en cancha
-      const currentOnCourt = onCourtPlayers[teamSide]
-      if (!currentOnCourt.includes(player.id)) return
-
-      clearLongPress()
-      longPressTriggeredRef.current = false
-
-      longPressTimeoutRef.current = window.setTimeout(() => {
-        const remaining = onCourtPlayers[teamSide].filter((id) => id !== player.id)
-        setSubsDialogTeamSide(teamSide)
-        setSubsSelection(remaining)
-        setShowSubsDialog(true)
-        longPressTriggeredRef.current = true
-      }, 1000)
-    }
-
     return (
       <div
         className={`rounded-lg border p-2 ${isSelected ? "border-primary" : ""} ${isDisqualified ? "border-red-500 bg-red-50" : ""}`}
@@ -2444,18 +2418,7 @@ export default function PlanillaPage() {
           type="button"
           className="w-full"
           disabled={isDisqualified}
-          onMouseDown={startLongPress}
-          onMouseUp={clearLongPress}
-          onMouseLeave={clearLongPress}
-          onTouchStart={startLongPress}
-          onTouchEnd={clearLongPress}
           onClick={() => {
-            // Si se disparó el long-press, ignoramos el click de soltar
-            if (longPressTriggeredRef.current) {
-              longPressTriggeredRef.current = false
-              return
-            }
-            clearLongPress()
             if (pendingFreeThrow) {
               return
             }
@@ -3239,7 +3202,7 @@ export default function PlanillaPage() {
 
                           const teamColor = isHome ? homeColor : awayColor
 
-                          return (
+                            return (
                             <Fragment key={e.id}>
                               {/* Sustitución entra (última acción) */}
                               <div className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
@@ -3767,7 +3730,10 @@ export default function PlanillaPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {homePlayers.map((player, index) => {
+                        {homePlayers
+                          .slice()
+                          .sort((a, b) => (a.jerseyNumber ?? 0) - (b.jerseyNumber ?? 0))
+                          .map((player, index) => {
                           const {
                             minutes,
                             points,
@@ -3816,8 +3782,78 @@ export default function PlanillaPage() {
                               <td className="px-2 py-1 text-right">{foulsReceived}</td>
                               <td className="px-2 py-1 text-right font-semibold">{rating}</td>
                             </tr>
+                            )
+                          })}
+
+                        {/* Fila de totales equipo local */}
+                        {homePlayers.length > 0 && (() => {
+                          let totalMinutes = 0
+                          let totalPoints = 0
+                          let totalT1Made = 0
+                          let totalT1Att = 0
+                          let totalT2Made = 0
+                          let totalT2Att = 0
+                          let totalT3Made = 0
+                          let totalT3Att = 0
+                          let totalReb = 0
+                          let totalAst = 0
+                          let totalStl = 0
+                          let totalTo = 0
+                          let totalBlkC = 0
+                          let totalBlkR = 0
+                          let totalFc = 0
+                          let totalFr = 0
+                          let totalVal = 0
+
+                          for (const p of homePlayers) {
+                            const s = getPlayerStats(p.id)
+                            totalMinutes += s.minutes
+                            totalPoints += s.points
+                            totalT1Made += s.t1Made
+                            totalT1Att += s.t1Att
+                            totalT2Made += s.t2Made
+                            totalT2Att += s.t2Att
+                            totalT3Made += s.t3Made
+                            totalT3Att += s.t3Att
+                            totalReb += s.rebounds
+                            totalAst += s.assists
+                            totalStl += s.steals
+                            totalTo += s.turnovers
+                            totalBlkC += s.blocksCommitted
+                            totalBlkR += s.blocksReceived
+                            totalFc += s.foulsCommitted
+                            totalFr += s.foulsReceived
+                            totalVal += s.rating
+                          }
+
+                          const totalMinutesDisplay = `${Math.floor(totalMinutes)
+                            .toString()
+                            .padStart(2, "0")}:${Math.floor((totalMinutes % 1) * 60)
+                            .toString()
+                            .padStart(2, "0")}`
+
+                          return (
+                            <tr className="border-t bg-muted/60 font-semibold">
+                              <td className="px-2 py-1 text-left" colSpan={2}>
+                                Total
+                              </td>
+                              <td className="px-2 py-1 text-right">{totalMinutesDisplay}</td>
+                              <td className="px-2 py-1 text-right">{totalPoints}</td>
+                              <td className="px-2 py-1 text-right">{totalT1Made}/{totalT1Att}</td>
+                              <td className="px-2 py-1 text-right">{totalT2Made}/{totalT2Att}</td>
+                              <td className="px-2 py-1 text-right">{totalT3Made}/{totalT3Att}</td>
+                              <td className="px-2 py-1 text-right">{totalReb}</td>
+                              <td className="px-2 py-1 text-right">{totalAst}</td>
+                              <td className="px-2 py-1 text-right">{totalStl}</td>
+                              <td className="px-2 py-1 text-right">{totalTo}</td>
+                              <td className="px-2 py-1 text-right">{totalBlkC}</td>
+                              <td className="px-2 py-1 text-right">{totalBlkR}</td>
+                              <td className="px-2 py-1 text-right">{totalFc}</td>
+                              <td className="px-2 py-1 text-right">{totalFr}</td>
+                              <td className="px-2 py-1 text-right">{totalVal}</td>
+                            </tr>
                           )
-                        })}
+                        })()}
                       </tbody>
                     </table>
                   </div>
@@ -3851,7 +3887,10 @@ export default function PlanillaPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {awayPlayers.map((player, index) => {
+                        {awayPlayers
+                          .slice()
+                          .sort((a, b) => (a.jerseyNumber ?? 0) - (b.jerseyNumber ?? 0))
+                          .map((player, index) => {
                           const {
                             minutes,
                             points,
@@ -3901,6 +3940,76 @@ export default function PlanillaPage() {
                             </tr>
                           )
                         })}
+
+                        {/* Fila de totales equipo visitante */}
+                        {awayPlayers.length > 0 && (() => {
+                          let totalMinutes = 0
+                          let totalPoints = 0
+                          let totalT1Made = 0
+                          let totalT1Att = 0
+                          let totalT2Made = 0
+                          let totalT2Att = 0
+                          let totalT3Made = 0
+                          let totalT3Att = 0
+                          let totalReb = 0
+                          let totalAst = 0
+                          let totalStl = 0
+                          let totalTo = 0
+                          let totalBlkC = 0
+                          let totalBlkR = 0
+                          let totalFc = 0
+                          let totalFr = 0
+                          let totalVal = 0
+
+                          for (const p of awayPlayers) {
+                            const s = getPlayerStats(p.id)
+                            totalMinutes += s.minutes
+                            totalPoints += s.points
+                            totalT1Made += s.t1Made
+                            totalT1Att += s.t1Att
+                            totalT2Made += s.t2Made
+                            totalT2Att += s.t2Att
+                            totalT3Made += s.t3Made
+                            totalT3Att += s.t3Att
+                            totalReb += s.rebounds
+                            totalAst += s.assists
+                            totalStl += s.steals
+                            totalTo += s.turnovers
+                            totalBlkC += s.blocksCommitted
+                            totalBlkR += s.blocksReceived
+                            totalFc += s.foulsCommitted
+                            totalFr += s.foulsReceived
+                            totalVal += s.rating
+                          }
+
+                          const totalMinutesDisplay = `${Math.floor(totalMinutes)
+                            .toString()
+                            .padStart(2, "0")}:${Math.floor((totalMinutes % 1) * 60)
+                            .toString()
+                            .padStart(2, "0")}`
+
+                          return (
+                            <tr className="border-t bg-muted/60 font-semibold">
+                              <td className="px-2 py-1 text-left" colSpan={2}>
+                                Total
+                              </td>
+                              <td className="px-2 py-1 text-right">{totalMinutesDisplay}</td>
+                              <td className="px-2 py-1 text-right">{totalPoints}</td>
+                              <td className="px-2 py-1 text-right">{totalT1Made}/{totalT1Att}</td>
+                              <td className="px-2 py-1 text-right">{totalT2Made}/{totalT2Att}</td>
+                              <td className="px-2 py-1 text-right">{totalT3Made}/{totalT3Att}</td>
+                              <td className="px-2 py-1 text-right">{totalReb}</td>
+                              <td className="px-2 py-1 text-right">{totalAst}</td>
+                              <td className="px-2 py-1 text-right">{totalStl}</td>
+                              <td className="px-2 py-1 text-right">{totalTo}</td>
+                              <td className="px-2 py-1 text-right">{totalBlkC}</td>
+                              <td className="px-2 py-1 text-right">{totalBlkR}</td>
+                              <td className="px-2 py-1 text-right">{totalFc}</td>
+                              <td className="px-2 py-1 text-right">{totalFr}</td>
+                              <td className="px-2 py-1 text-right">{totalVal}</td>
+                            </tr>
+                          )
+                        })()}
                       </tbody>
                     </table>
                   </div>
@@ -4319,6 +4428,14 @@ export default function PlanillaPage() {
               }}
             >
               Cancelar
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setSubsSelection([])
+              }}
+            >
+              Limpiar
             </Button>
             <Button
               onClick={() => {

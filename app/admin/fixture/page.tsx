@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
+import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -692,26 +693,31 @@ export default function FixturePage() {
                             </div>
 
                             <div className="flex items-center gap-2">
-                              {match.status === "finalizado" ? (
-                                <div className="flex items-center gap-2 text-2xl font-bold">
-                                  <span>{match.homeScore ?? 0}</span>
-                                  <span className="text-muted-foreground">-</span>
-                                  <span>{match.awayScore ?? 0}</span>
-                                </div>
-                              ) : match.status === "en_juego" ? (
-                                (() => {
-                                  const live = getLiveStateForMatch(match)
-                                  return (
-                                    <div className="flex items-center gap-2 text-2xl font-bold text-[var(--color-live)]">
-                                      <span>{live.homeScore}</span>
-                                      <span className="text-muted-foreground">-</span>
-                                      <span>{live.awayScore}</span>
-                                    </div>
-                                  )
-                                })()
-                              ) : (
-                                <span className="text-lg text-muted-foreground">vs</span>
-                              )}
+                              <Link
+                                href={`/campeonato/${selectedTournament}/partido/${match.id}`}
+                                className="inline-flex items-center gap-2 hover:underline underline-offset-4"
+                              >
+                                {match.status === "finalizado" ? (
+                                  <div className="flex items-center gap-2 text-2xl font-bold">
+                                    <span>{match.homeScore ?? 0}</span>
+                                    <span className="text-muted-foreground">-</span>
+                                    <span>{match.awayScore ?? 0}</span>
+                                  </div>
+                                ) : match.status === "en_juego" ? (
+                                  (() => {
+                                    const live = getLiveStateForMatch(match)
+                                    return (
+                                      <div className="flex items-center gap-2 text-2xl font-bold text-[var(--color-live)]">
+                                        <span>{live.homeScore}</span>
+                                        <span className="text-muted-foreground">-</span>
+                                        <span>{live.awayScore}</span>
+                                      </div>
+                                    )
+                                  })()
+                                ) : (
+                                  <span className="text-lg text-muted-foreground">vs</span>
+                                )}
+                              </Link>
                             </div>
 
                             <div className="flex items-center gap-3 flex-1 justify-end">
