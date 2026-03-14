@@ -21,7 +21,6 @@ export default function JornadaPage() {
   const [courts, setCourts] = useState<Court[]>([])
   const [matches, setMatches] = useState<MatchRow[]>([])
 
-  const [selectedTournament, setSelectedTournament] = useState<string>("")
   const [selectedVenue, setSelectedVenue] = useState<string>("")
   const [selectedDate, setSelectedDate] = useState<string>("") // YYYY-MM-DD
 
@@ -67,19 +66,15 @@ export default function JornadaPage() {
       setVenues((venuesRes.data ?? []).map((v: any) => ({ id: v.id, name: v.name })) as Venue[])
       setCourts((courtsRes.data ?? []).map((c: any) => ({ id: c.id, venueId: c.venue_id, name: c.name })) as Court[])
 
-      const initialTournamentId = nextTournaments[0]?.id
-      setSelectedTournament((prev) => prev || initialTournamentId || "")
-
       setLoading(false)
     }
 
     run()
   }, [supabase])
 
-  // Load matches for selected tournament
+  // Load all matches (no need to select tournament)
   useEffect(() => {
     const run = async () => {
-      if (!selectedTournament) return
       const { data: sessionData } = await supabase.auth.getSession()
       const token = sessionData.session?.access_token
       if (!token) return
@@ -87,7 +82,7 @@ export default function JornadaPage() {
       setLoading(true)
       setError(null)
 
-      const res = await fetch(`/api/admin/matches?tournamentId=${encodeURIComponent(selectedTournament)}`, {
+      const res = await fetch("/api/admin/matches", {
         headers: { Authorization: `Bearer ${token}` },
       })
 
@@ -129,7 +124,7 @@ export default function JornadaPage() {
     }
 
     run()
-  }, [selectedTournament, supabase])
+  }, [supabase])
 
   const jornadaMatches = matches
     .filter((m) => {
@@ -152,7 +147,7 @@ export default function JornadaPage() {
       return a.createdAt.getTime() - b.createdAt.getTime()
     })
 
-  const getTournamentName = (id: string) => tournaments.find((t) => t.id === id)?.name || "Torneo"
+  const getTournamentName = (id: string) => tournaments.find((t: Tournament) => t.id === id)?.name || "Torneo"
   const getTeamName = (id: string) => teams.find((t) => t.id === id)?.name || "TBD"
   const getVenueName = (id?: string | null) => venues.find((v) => v.id === id)?.name || "-"
   const getCourtName = (id?: string | null) => courts.find((c) => c.id === id)?.name || "-"

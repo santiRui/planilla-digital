@@ -287,6 +287,7 @@ type LeaderRow = {
   assists: number
   rebounds: number
   steals: number
+  blocks: number
   jerseyNumber: number | null
   firstName: string
   lastName: string
