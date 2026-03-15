@@ -12,6 +12,10 @@ export default function AdminStatsToolsPage() {
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [accessToken, setAccessToken] = useState<string | null>(null)
+  const [fakeMatchId, setFakeMatchId] = useState("")
+  const [fakeHomeScore, setFakeHomeScore] = useState("")
+  const [fakeAwayScore, setFakeAwayScore] = useState("")
+  const [fakeClearExisting, setFakeClearExisting] = useState(true)
 
   useEffect(() => {
     const supabase = createSupabaseBrowserClient()
@@ -42,6 +46,55 @@ export default function AdminStatsToolsPage() {
 
       if (!res.ok) {
         setError(typeof data.error === "string" ? data.error : "Error al ejecutar la operación")
+        return
+      }
+
+      setMessage(JSON.stringify(data, null, 2))
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Error desconocido"
+      setError(msg)
+    } finally {
+      setLoading("none")
+    }
+  }
+
+  async function callFakeStats() {
+    try {
+      setLoading("autofix")
+      setMessage(null)
+      setError(null)
+
+      if (!accessToken) {
+        setError("No hay sesión válida. Volvé a iniciar sesión como administrador.")
+        return
+      }
+
+      if (!fakeMatchId.trim()) {
+        setError("Tenés que ingresar el ID del partido.")
+        return
+      }
+
+      const home = Number(fakeHomeScore || "0")
+      const away = Number(fakeAwayScore || "0")
+
+      const res = await fetch("/api/admin/matches/fake-stats", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          matchId: fakeMatchId.trim(),
+          homeScore: Number.isFinite(home) ? home : 0,
+          awayScore: Number.isFinite(away) ? away : 0,
+          clearExisting: fakeClearExisting,
+        }),
+      })
+
+      const data = await res.json().catch(() => ({}))
+
+      if (!res.ok) {
+        setError(typeof data.error === "string" ? data.error : "Error al generar estadísticas ficticias")
         return
       }
 
@@ -117,6 +170,67 @@ export default function AdminStatsToolsPage() {
               onClick={() => callEndpoint("/api/admin/matches/auto-fix-stats", "autofix")}
             >
               {loading === "autofix" ? "Aplicando auto-fix..." : "Auto-fix estadísticas"}
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Generar estadísticas ficticias para un partido</CardTitle>
+            <CardDescription>
+              Útil como último recurso cuando se perdió la planilla de un partido. Genera minutos y puntos razonables por
+              jugadora a partir de un resultado final. Usar solo en casos excepcionales.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="space-y-2">
+              <label className="text-sm font-medium" htmlFor="fake-match-id">
+                ID del partido (matchId)
+              </label>
+              <input
+                id="fake-match-id"
+                className="border rounded px-2 py-1 text-sm w-full"
+                value={fakeMatchId}
+                onChange={(e) => setFakeMatchId(e.target.value)}
+                placeholder="UUID del partido"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label className="text-sm font-medium" htmlFor="fake-home-score">
+                  Puntos local
+                </label>
+                <input
+                  id="fake-home-score"
+                  type="number"
+                  className="border rounded px-2 py-1 text-sm w-full"
+                  value={fakeHomeScore}
+                  onChange={(e) => setFakeHomeScore(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-sm font-medium" htmlFor="fake-away-score">
+                  Puntos visitante
+                </label>
+                <input
+                  id="fake-away-score"
+                  type="number"
+                  className="border rounded px-2 py-1 text-sm w-full"
+                  value={fakeAwayScore}
+                  onChange={(e) => setFakeAwayScore(e.target.value)}
+                />
+              </div>
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={fakeClearExisting}
+                onChange={(e) => setFakeClearExisting(e.target.checked)}
+              />
+              Borrar estadísticas existentes de este partido antes de generar
+            </label>
+            <Button variant="destructive" disabled={loading !== "none"} onClick={callFakeStats}>
+              {loading === "autofix" ? "Generando..." : "Generar estadísticas ficticias"}
             </Button>
           </CardContent>
         </Card>
