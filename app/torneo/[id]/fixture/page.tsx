@@ -19,7 +19,8 @@ export default function TournamentFixturePage({ params }: { params: Promise<{ id
   const [expandedRounds, setExpandedRounds] = useState<Set<number>>(new Set([1, 2]))
 
   const tournament = tournaments.find((t) => t.id === id)
-  const tournamentCategories = categories.filter((c) => c.tournamentId === id)
+  // Tipado defensivo: algunas definiciones de categoría pueden no exponer tournamentId en TS
+  const tournamentCategories = (categories as any[]).filter((c: any) => c.tournamentId === id)
 
   const filteredMatches = matches.filter((m) => {
     const matchCategory = tournamentCategories.find((c) => c.id === m.categoryId)
@@ -94,14 +95,14 @@ export default function TournamentFixturePage({ params }: { params: Promise<{ id
   const getVenueById = (venueId: string) => venues.find((v) => v.id === venueId)
   const getCourtById = (courtId: string) => courts.find((c) => c.id === courtId)
 
-  const statusStyles = {
+  const statusStyles: Record<string, string> = {
     programado: "bg-blue-500/10 text-blue-600 border-blue-500/20",
     en_curso: "bg-[var(--color-live)]/10 text-[var(--color-live)] border-[var(--color-live)]/20",
     finalizado: "bg-gray-500/10 text-gray-600 border-gray-500/20",
     suspendido: "bg-red-500/10 text-red-600 border-red-500/20",
   }
 
-  const statusLabels = {
+  const statusLabels: Record<string, string> = {
     programado: "Programado",
     en_curso: "En Curso",
     finalizado: "Finalizado",
@@ -264,7 +265,7 @@ export default function TournamentFixturePage({ params }: { params: Promise<{ id
                                     href={`/campeonato/${id}/partido/${match.id}`}
                                     className="inline-flex items-center justify-center gap-2 hover:underline underline-offset-4"
                                   >
-                                    {match.status === "finalizado" || match.status === "en_curso" ? (
+                                    {match.status === "finalizado" || match.status === "en_juego" ? (
                                       <>
                                         <span className="text-2xl font-bold">{match.homeScore ?? 0}</span>
                                         <span className="text-muted-foreground">-</span>
@@ -330,57 +331,6 @@ export default function TournamentFixturePage({ params }: { params: Promise<{ id
                       </div>
                     )}
                   </Card>
-                                    <>
-                                      <span className="text-2xl font-bold">{match.homeScore ?? 0}</span>
-                                      <span className="text-muted-foreground">-</span>
-                                      <span className="text-2xl font-bold">{match.awayScore ?? 0}</span>
-                                    </>
-                                  ) : (
-                                    <span className="text-lg font-medium text-muted-foreground">vs</span>
-                                  )}
-                                </Link>
-                              </div>
-
-                              {/* Away Team */}
-                              <div className="flex-1">
-                                <div className="flex items-center gap-3">
-                                  <div
-                                    className="h-10 w-10 rounded-full flex items-center justify-center text-white font-bold text-sm"
-                                    style={{ backgroundColor: awayTeam?.primaryColor || "#171717" }}
-                                  >
-                                    {awayTeam?.name.substring(0, 2).toUpperCase() || "??"}
-                                  </div>
-                                  <div>
-                                    <p className="font-semibold">{awayTeam?.name || "Por definir"}</p>
-                                    <p className="text-xs text-muted-foreground">{awayTeam?.clubName}</p>
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-
-                            {/* Match Details */}
-                            {(match.scheduledDate || match.scheduledTime || venue) && (
-                              <div className="flex flex-wrap items-center justify-center gap-4 mt-3 text-xs text-muted-foreground">
-                                {(match.scheduledDate || match.scheduledTime) && (
-                                  <div className="flex items-center gap-1">
-                                    <Clock className="h-3 w-3" />
-                                    <span>
-                                      {match.scheduledDate
-                                        ? match.scheduledDate.toLocaleDateString("es-AR", {
-                                            weekday: "short",
-                                            day: "numeric",
-                                            month: "short",
-                                          })
-                                        : ""}
-                                      {match.scheduledTime
-                                        ? `${match.scheduledDate ? " · " : ""}${match.scheduledTime}`
-                                        : ""}
-                                    </span>
-                                  </div>
-                                )}
-                                {venue && (
-                                  <div className="flex items-center gap-1">
-                </Card>
                 )
               })}
           </div>
