@@ -178,93 +178,158 @@ export default function TournamentFixturePage({ params }: { params: Promise<{ id
 
                 return (
                   <Card key={round} className="overflow-hidden">
-                  <button
-                    onClick={() => toggleRound(Number(round))}
-                    className="w-full flex items-center justify-between p-4 hover:bg-muted/50 transition-colors"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary font-bold">
-                        {round}
+                    <button
+                      onClick={() => toggleRound(Number(round))}
+                      className="w-full flex items-center justify-between p-4 hover:bg-muted/50 transition-colors"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary font-bold">
+                          {round}
+                        </div>
+                        <div className="text-left">
+                          <h3 className="font-semibold">Fecha {round}</h3>
+                          <p className="text-sm text-muted-foreground">
+                            {roundMatches.length} partidos
+                            {byeCount > 0 ? ` · ${byeCount} libre${byeCount === 1 ? "" : "s"}` : ""}
+                          </p>
+                        </div>
                       </div>
-                      <div className="text-left">
-                        <h3 className="font-semibold">Fecha {round}</h3>
-                        <p className="text-sm text-muted-foreground">
-                          {roundMatches.length} partidos
-                          {byeCount > 0 ? ` · ${byeCount} libre${byeCount === 1 ? "" : "s"}` : ""}
-                        </p>
-                      </div>
-                    </div>
-                    {expandedRounds.has(Number(round)) ? (
-                      <ChevronUp className="h-5 w-5 text-muted-foreground" />
-                    ) : (
-                      <ChevronDown className="h-5 w-5 text-muted-foreground" />
-                    )}
-                  </button>
+                      {expandedRounds.has(Number(round)) ? (
+                        <ChevronUp className="h-5 w-5 text-muted-foreground" />
+                      ) : (
+                        <ChevronDown className="h-5 w-5 text-muted-foreground" />
+                      )}
+                    </button>
 
-                  {expandedRounds.has(Number(round)) && (
-                    <div className="border-t divide-y">
-                      {(() => {
-                        if (byeTeams.length === 0) return null
-                        return (
-                          <div className="p-4 bg-muted/30">
-                            <p className="text-sm font-medium">Libre</p>
-                            <div className="mt-1 space-y-1">
-                              {byeTeams.map((b) => {
-                                const team = getTeamById(b.teamId)
-                                const category = tournamentCategories.find((c) => c.id === b.categoryId)
-                                return (
-                                  <p key={`${b.categoryId}-${b.teamId}`} className="text-sm text-muted-foreground">
-                                    {team?.name || "Por definir"}
-                                    {selectedCategory === "all" && category ? ` · ${category.name}` : ""}
-                                  </p>
-                                )
-                              })}
+                    {expandedRounds.has(Number(round)) && (
+                      <div className="border-t divide-y">
+                        {(() => {
+                          if (byeTeams.length === 0) return null
+                          return (
+                            <div className="p-4 bg-muted/30">
+                              <p className="text-sm font-medium">Libre</p>
+                              <div className="mt-1 space-y-1">
+                                {byeTeams.map((b) => {
+                                  const team = getTeamById(b.teamId)
+                                  const category = tournamentCategories.find((c) => c.id === b.categoryId)
+                                  return (
+                                    <p key={`${b.categoryId}-${b.teamId}`} className="text-sm text-muted-foreground">
+                                      {team?.name || "Por definir"}
+                                      {selectedCategory === "all" && category ? ` · ${category.name}` : ""}
+                                    </p>
+                                  )
+                                })}
+                              </div>
                             </div>
-                          </div>
-                        )
-                      })()}
-                      {roundMatches.map((match) => {
-                        const homeTeam = getTeamById(match.homeTeamId)
-                        const awayTeam = getTeamById(match.awayTeamId)
-                        const venue = match.venueId ? getVenueById(match.venueId) : null
-                        const court = match.courtId ? getCourtById(match.courtId) : null
-                        const category = tournamentCategories.find((c) => c.id === match.categoryId)
+                          )
+                        })()}
+                        {roundMatches.map((match) => {
+                          const homeTeam = getTeamById(match.homeTeamId)
+                          const awayTeam = getTeamById(match.awayTeamId)
+                          const venue = match.venueId ? getVenueById(match.venueId) : null
+                          const court = match.courtId ? getCourtById(match.courtId) : null
+                          const category = tournamentCategories.find((c) => c.id === match.categoryId)
 
-                        return (
-                          <div key={match.id} className="p-4">
-                            <div className="flex items-center justify-between mb-3">
-                              <Badge variant="outline" className="text-xs">
-                                {category?.name}
-                              </Badge>
-                              <Badge variant="outline" className={cn("text-xs", statusStyles[match.status])}>
-                                {statusLabels[match.status]}
-                              </Badge>
-                            </div>
+                          return (
+                            <div key={match.id} className="p-4">
+                              <div className="flex items-center justify-between mb-3">
+                                <Badge variant="outline" className="text-xs">
+                                  {category?.name}
+                                </Badge>
+                                <Badge variant="outline" className={cn("text-xs", statusStyles[match.status])}>
+                                  {statusLabels[match.status as keyof typeof statusLabels]}
+                                </Badge>
+                              </div>
 
-                            <div className="flex items-center justify-center gap-4 py-2">
-                              {/* Home Team */}
-                              <div className="flex-1 text-right">
-                                <div className="flex items-center justify-end gap-3">
-                                  <div>
-                                    <p className="font-semibold">{homeTeam?.name || "Por definir"}</p>
-                                    <p className="text-xs text-muted-foreground">{homeTeam?.clubName}</p>
+                              <div className="flex items-center justify-center gap-4 py-2">
+                                {/* Home Team */}
+                                <div className="flex-1 text-right">
+                                  <div className="flex items-center justify-end gap-3">
+                                    <div>
+                                      <p className="font-semibold">{homeTeam?.name || "Por definir"}</p>
+                                      <p className="text-xs text-muted-foreground">{(homeTeam as any)?.clubName}</p>
+                                    </div>
+                                    <div
+                                      className="h-10 w-10 rounded-full flex items-center justify-center text-white font-bold text-sm"
+                                      style={{ backgroundColor: homeTeam?.primaryColor || "#6366f1" }}
+                                    >
+                                      {homeTeam?.name.substring(0, 2).toUpperCase() || "??"}
+                                    </div>
                                   </div>
-                                  <div
-                                    className="h-10 w-10 rounded-full flex items-center justify-center text-white font-bold text-sm"
-                                    style={{ backgroundColor: homeTeam?.primaryColor || "#6366f1" }}
+                                </div>
+
+                                {/* Score: al hacer clic abre la vista pública del partido (historial + estadísticas) */}
+                                <div className="px-4 text-center min-w-[80px]">
+                                  <Link
+                                    href={`/campeonato/${id}/partido/${match.id}`}
+                                    className="inline-flex items-center justify-center gap-2 hover:underline underline-offset-4"
                                   >
-                                    {homeTeam?.name.substring(0, 2).toUpperCase() || "??"}
+                                    {match.status === "finalizado" || match.status === "en_curso" ? (
+                                      <>
+                                        <span className="text-2xl font-bold">{match.homeScore ?? 0}</span>
+                                        <span className="text-muted-foreground">-</span>
+                                        <span className="text-2xl font-bold">{match.awayScore ?? 0}</span>
+                                      </>
+                                    ) : (
+                                      <span className="text-lg font-medium text-muted-foreground">vs</span>
+                                    )}
+                                  </Link>
+                                </div>
+
+                                {/* Away Team */}
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-3">
+                                    <div
+                                      className="h-10 w-10 rounded-full flex items-center justify-center text-white font-bold text-sm"
+                                      style={{ backgroundColor: awayTeam?.primaryColor || "#171717" }}
+                                    >
+                                      {awayTeam?.name.substring(0, 2).toUpperCase() || "??"}
+                                    </div>
+                                    <div>
+                                      <p className="font-semibold">{awayTeam?.name || "Por definir"}</p>
+                                      <p className="text-xs text-muted-foreground">{(awayTeam as any)?.clubName}</p>
+                                    </div>
                                   </div>
                                 </div>
                               </div>
 
-                              {/* Score: al hacer clic abre la vista pública del partido (historial + estadísticas) */}
-                              <div className="px-4 text-center min-w-[80px]">
-                                <Link
-                                  href={`/campeonato/${id}/partido/${match.id}`}
-                                  className="inline-flex items-center justify-center gap-2 hover:underline underline-offset-4"
-                               >
-                                  {match.status === "finalizado" || match.status === "en_curso" ? (
+                              {/* Match Details */}
+                              {(match.scheduledDate || match.scheduledTime || venue) && (
+                                <div className="flex flex-wrap items-center justify-center gap-4 mt-3 text-xs text-muted-foreground">
+                                  {(match.scheduledDate || match.scheduledTime) && (
+                                    <div className="flex items-center gap-1">
+                                      <Clock className="h-3 w-3" />
+                                      <span>
+                                        {match.scheduledDate
+                                          ? match.scheduledDate.toLocaleDateString("es-AR", {
+                                              weekday: "short",
+                                              day: "numeric",
+                                              month: "short",
+                                            })
+                                          : ""}
+                                        {match.scheduledTime
+                                          ? `${match.scheduledDate ? " · " : ""}${match.scheduledTime}`
+                                          : ""}
+                                      </span>
+                                    </div>
+                                  )}
+                                  {venue && (
+                                    <div className="flex items-center gap-1">
+                                      <MapPin className="h-3 w-3" />
+                                      <span>
+                                        {venue.name}
+                                        {court ? ` - ${court.name}` : ""}
+                                      </span>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </Card>
                                     <>
                                       <span className="text-2xl font-bold">{match.homeScore ?? 0}</span>
                                       <span className="text-muted-foreground">-</span>
@@ -315,20 +380,6 @@ export default function TournamentFixturePage({ params }: { params: Promise<{ id
                                 )}
                                 {venue && (
                                   <div className="flex items-center gap-1">
-                                    <MapPin className="h-3 w-3" />
-                                    <span>
-                                      {venue.name}
-                                      {court ? ` - ${court.name}` : ""}
-                                    </span>
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
                 </Card>
                 )
               })}

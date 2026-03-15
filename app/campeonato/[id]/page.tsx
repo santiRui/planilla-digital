@@ -202,7 +202,7 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
       setChampionship(baseChamp)
 
       // Cargar partidos del torneo
-      const { data: matchRows, error: mError } = await supabase
+      const { data: matchRowsRaw, error: mError } = await supabase
         .from("matches")
         .select(
           "id, round, status, scheduled_at, home_score, away_score, live_home_score, live_away_score, live_period, live_game_time, home_team_id, away_team_id, phase, zone_code, created_at",
@@ -218,7 +218,52 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
         return
       }
 
-      console.log("[ChampionshipPage] matchRows", matchRows)
+      console.log("[ChampionshipPage] matchRows", matchRowsRaw)
+
+      let matchRows = matchRowsRaw ?? []
+
+      // Para partidos finalizados, recalculamos el score a partir de las
+      // estadísticas de la planilla (match_player_stats_planilla), para que
+      // siempre coincida con los puntos sumados por jugador.
+      const finishedMatchIds = matchRows
+        .filter((m: any) => m?.status === "finalizado" && m?.id)
+        .map((m: any) => String(m.id))
+
+      if (finishedMatchIds.length > 0) {
+        const { data: statsRows, error: statsError } = await supabase
+          .from("match_player_stats_planilla")
+          .select("match_id, team_id, points")
+          .in("match_id", finishedMatchIds)
+
+        if (!statsError && Array.isArray(statsRows)) {
+          const totalsByMatch: Record<string, Record<string, number>> = {}
+
+          for (const row of statsRows as any[]) {
+            const matchId = String(row.match_id)
+            const teamId = String(row.team_id)
+            const pts = typeof row.points === "number" ? row.points : 0
+            if (!totalsByMatch[matchId]) totalsByMatch[matchId] = {}
+            totalsByMatch[matchId][teamId] = (totalsByMatch[matchId][teamId] ?? 0) + pts
+          }
+
+          matchRows = matchRows.map((m: any) => {
+            const matchId = String(m.id)
+            const totalsForMatch = totalsByMatch[matchId]
+            if (m.status !== "finalizado" || !totalsForMatch) return m
+
+            const homePts = totalsForMatch[String(m.home_team_id)]
+            const awayPts = totalsForMatch[String(m.away_team_id)]
+
+            if (typeof homePts !== "number" && typeof awayPts !== "number") return m
+
+            return {
+              ...m,
+              home_score: typeof homePts === "number" ? homePts : m.home_score,
+              away_score: typeof awayPts === "number" ? awayPts : m.away_score,
+            }
+          })
+        }
+      }
 
       const teamIds = Array.from(
         new Set(

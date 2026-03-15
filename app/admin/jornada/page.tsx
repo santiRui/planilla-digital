@@ -93,7 +93,53 @@ export default function JornadaPage() {
         setError(json?.error ?? "No se pudieron cargar los partidos")
       } else {
         const rawMatches = (json.matches ?? []) as any[]
-        setMatches(rawMatches.map(mapMatchFromDb) as MatchRow[])
+
+        // Para partidos finalizados, recalculamos el score a partir de las
+        // estadísticas de la planilla (match_player_stats_planilla), para que
+        // siempre coincida con los puntos sumados por jugador.
+        const finishedMatchIds = rawMatches
+          .filter((m) => m?.status === "finalizado" && m?.id)
+          .map((m) => String(m.id))
+
+        let matchesWithPlanillaScores = rawMatches
+
+        if (finishedMatchIds.length > 0) {
+          const { data: statsRows, error: statsError } = await supabase
+            .from("match_player_stats_planilla")
+            .select("match_id, team_id, points")
+            .in("match_id", finishedMatchIds)
+
+          if (!statsError && Array.isArray(statsRows)) {
+            const totalsByMatch: Record<string, Record<string, number>> = {}
+
+            for (const row of statsRows as any[]) {
+              const matchId = String(row.match_id)
+              const teamId = String(row.team_id)
+              const pts = typeof row.points === "number" ? row.points : 0
+              if (!totalsByMatch[matchId]) totalsByMatch[matchId] = {}
+              totalsByMatch[matchId][teamId] = (totalsByMatch[matchId][teamId] ?? 0) + pts
+            }
+
+            matchesWithPlanillaScores = rawMatches.map((m) => {
+              const matchId = String(m.id)
+              const totalsForMatch = totalsByMatch[matchId]
+              if (m.status !== "finalizado" || !totalsForMatch) return m
+
+              const homePts = totalsForMatch[String(m.home_team_id)]
+              const awayPts = totalsForMatch[String(m.away_team_id)]
+
+              if (typeof homePts !== "number" && typeof awayPts !== "number") return m
+
+              return {
+                ...m,
+                home_score: typeof homePts === "number" ? homePts : m.home_score,
+                away_score: typeof awayPts === "number" ? awayPts : m.away_score,
+              }
+            })
+          }
+        }
+
+        setMatches(matchesWithPlanillaScores.map(mapMatchFromDb) as MatchRow[])
 
         const matchTeamIds = Array.from(
           new Set(
