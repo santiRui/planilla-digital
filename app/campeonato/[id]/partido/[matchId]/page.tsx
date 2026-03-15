@@ -705,6 +705,15 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
     return acc
   }, [awayPlayers, statsByPlayerId])
 
+  // Para partidos finalizados con estadísticas cargadas desde la planilla,
+  // el marcador de cabecera debe reflejar exactamente los puntos sumados
+  // de esas estadísticas, no el score persistido en matches (que podría
+  // haber quedado desactualizado).
+  const headerHomeScore =
+    match?.status === "finalizado" && playerStats.length > 0 ? homeTotals.points : live.homeScore
+  const headerAwayScore =
+    match?.status === "finalizado" && playerStats.length > 0 ? awayTotals.points : live.awayScore
+
   // Sincronizar pestaña activa desde localStorage solo en el cliente para evitar
   // desajustes entre el HTML del servidor y el primer render del cliente.
   useEffect(() => {
@@ -794,7 +803,7 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
                   </div>
                 </div>
                 <div className="text-3xl sm:text-4xl font-bold tabular-nums">
-                  {live.homeScore}
+                  {headerHomeScore}
                 </div>
               </div>
 
@@ -831,7 +840,7 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
                   </div>
                 </div>
                 <div className="text-3xl sm:text-4xl font-bold tabular-nums">
-                  {live.awayScore}
+                  {headerAwayScore}
                 </div>
                 </div>
               </div>
