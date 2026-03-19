@@ -52,8 +52,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     // 4. Deduplicate events (same logic as frontend)
     const seen = new Set<string>()
-    const dedupedEvents = (events || []).filter((e: any) => {
-      const key = `${e.type}|${e.team_id ?? ""}|${e.player_id ?? ""}|${e.victim_player_id ?? ""}|${e.period}|${e.game_time}|${e.points ?? ""}|${e.shot_type ?? ""}|${String(e.made ?? "")}`
+    const dedupedEvents = (events ?? []).filter((e) => {
+      // Dedupe solo por id de evento para no colapsar intentos distintos de una serie de libres.
+      const key = String(e.id)
       if (seen.has(key)) return false
       seen.add(key)
       return true
@@ -130,13 +131,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
               }
             }
           } else if (e.type === "free_throw") {
-            t1Att += 1
+            // Algunos eventos de libre representan varios lanzamientos (por ejemplo 2/2),
+            // usando points = 2 y made = true. Ajustamos intentos en consecuencia.
+            const freePoints = typeof e.points === "number" && e.points > 0 ? e.points : 1
+            t1Att += freePoints
             if (e.made) {
-              t1Made += 1
-              points += 1
-              rating += 1
+              t1Made += freePoints
+              points += freePoints
+              rating += freePoints
             } else {
-              rating -= 1
+              rating -= freePoints
             }
           } else if (e.type === "rebound") {
             rebounds += 1

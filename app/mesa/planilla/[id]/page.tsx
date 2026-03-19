@@ -1308,7 +1308,9 @@ export default function PlanillaPage() {
       // Clave: tipo + actor/víctima + periodo + tiempo + puntos/tiro.
       const seen = new Set<string>()
       const deduped = localEvents.filter((e) => {
-        const key = `${e.type}|${e.teamId ?? ""}|${e.playerId ?? ""}|${e.victimPlayerId ?? ""}|${e.period}|${e.gameTime}|${e.points ?? ""}|${e.shotType ?? ""}|${String(e.made ?? "")}`
+        // Dedupe por id de evento, así series de libres con varios intentos
+        // en el mismo instante no se colapsan entre sí.
+        const key = e.id
         if (seen.has(key)) return false
         seen.add(key)
         return true
@@ -1423,14 +1425,17 @@ export default function PlanillaPage() {
               }
             }
           } else if (e.type === "free_throw") {
-            t1Att += 1
+            // Algunos eventos de libres representan una serie completa (por ejemplo, 2/2),
+            // usando e.points = 2 y made = true. En esos casos contamos varios intentos.
+            const freePoints = typeof e.points === "number" && e.points > 0 ? e.points : 1
+            t1Att += freePoints
             if (e.made) {
-              t1Made += 1
-              points += 1
-              rating += 1
+              t1Made += freePoints
+              points += freePoints
+              rating += freePoints
             } else {
-              // tiro libre fallado
-              rating -= 1
+              // Todos los libres fallados en esta serie
+              rating -= freePoints
             }
           }
 
@@ -1533,10 +1538,9 @@ export default function PlanillaPage() {
   const rightAllPlayers = rightTeamSide === "home" ? homePlayers : awayPlayers
 
   const getFreeThrowCountForFoul = (foul: MatchEvent): 1 | 2 | 3 => {
-    const type = foul.foulType
-    if (type === "technical") return 1
-    if (type === "unsportsmanlike") return 2
-    // Personal: permitimos hasta 3 intentos; la cantidad efectiva será la que el operador marque
+    // Simplificamos: siempre permitimos hasta 3 tiros libres en el diálogo.
+    // La cantidad efectiva quedará determinada por lo que el operador marque
+    // (aciertos/fallos en cada uno de los 3 intentos posibles).
     return 3
   }
 
@@ -2571,11 +2575,11 @@ export default function PlanillaPage() {
                   setFreeThrowTotal(count)
                 } else {
                   setSelectedFreeThrowFoulId(null)
-                  setFreeThrowTotal(2)
+                  setFreeThrowTotal(3)
                 }
               } else {
                 setSelectedFreeThrowFoulId(null)
-                setFreeThrowTotal(2)
+                setFreeThrowTotal(3)
               }
               setFreeThrowDialogPlayer({
                 id: player.id,
