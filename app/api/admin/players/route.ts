@@ -90,6 +90,55 @@ async function assertAdmin(accessToken: string) {
   return { ok: true as const, adminClient }
 }
 
+async function findPlayerConflictByDniAndCategory(params: {
+  adminClient: ReturnType<typeof createSupabaseAdminClient>
+  teamId: string
+  dni: string
+}) {
+  const { adminClient, teamId, dni } = params
+
+  const { data: teamCats, error: teamCatsError } = await adminClient
+    .from("team_categories")
+    .select("category_id")
+    .eq("team_id", teamId)
+
+  if (teamCatsError) {
+    return { error: teamCatsError.message }
+  }
+
+  const categoryIds = (teamCats ?? []).map((c: any) => c.category_id as string).filter(Boolean)
+  if (categoryIds.length === 0) {
+    return { conflict: false as const }
+  }
+
+  const { data: links, error: linksError } = await adminClient
+    .from("team_categories")
+    .select("team_id")
+    .in("category_id", categoryIds)
+
+  if (linksError) {
+    return { error: linksError.message }
+  }
+
+  const teamIds = Array.from(new Set((links ?? []).map((r: any) => r.team_id as string | null).filter(Boolean))) as string[]
+  if (teamIds.length === 0) {
+    return { conflict: false as const }
+  }
+
+  const { data: playersWithSameDni, error: playersError } = await adminClient
+    .from("players")
+    .select("id, team_id, dni")
+    .eq("dni", dni)
+    .in("team_id", teamIds)
+
+  if (playersError) {
+    return { error: playersError.message }
+  }
+
+  const conflictExists = (playersWithSameDni ?? []).length > 0
+  return { conflict: conflictExists }
+}
+
 export async function GET(req: Request) {
   try {
     const authHeader = req.headers.get("authorization")
@@ -155,6 +204,23 @@ export async function POST(req: Request) {
       federatedCategory: federatedCategory ?? null,
       labasSeasons,
     })
+
+    const conflictCheck = await findPlayerConflictByDniAndCategory({
+      adminClient: auth.adminClient,
+      teamId,
+      dni,
+    })
+
+    if (conflictCheck.error) {
+      return NextResponse.json({ error: conflictCheck.error }, { status: 400 })
+    }
+
+    if (conflictCheck.conflict) {
+      return NextResponse.json(
+        { error: "Ya existe una jugadora con ese DNI registrada en esta categoría." },
+        { status: 400 },
+      )
+    }
 
     const { data: player, error } = await auth.adminClient
       .from("players")
