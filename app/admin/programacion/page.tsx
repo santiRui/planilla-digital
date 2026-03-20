@@ -28,6 +28,9 @@ export default function ProgramacionPage() {
   const [officials, setOfficials] = useState<Official[]>([])
   const [matches, setMatches] = useState<MatchRow[]>([])
 
+  const [homeTeamFilter, setHomeTeamFilter] = useState("")
+  const [awayTeamFilter, setAwayTeamFilter] = useState("")
+
   const [selectedTournament, setSelectedTournament] = useState<string>("")
   const [editingMatch, setEditingMatch] = useState<MatchRow | null>(null)
   const [isOpen, setIsOpen] = useState(false)
@@ -218,6 +221,22 @@ export default function ProgramacionPage() {
   const getTeamName = (id: string) => teams.find((t) => t.id === id)?.name || "TBD"
   const getVenueName = (id?: string) => venues.find((v) => v.id === id)?.name || "-"
   const getOfficialName = (id: string) => officials.find((o) => o.id === id)?.fullName || "-"
+
+  const filteredMatches = useMemo(() => {
+    const homeFilter = homeTeamFilter.trim().toLowerCase()
+    const awayFilter = awayTeamFilter.trim().toLowerCase()
+
+    if (!homeFilter && !awayFilter) return categoryMatches
+
+    return categoryMatches.filter((m) => {
+      const homeName = getTeamName(m.homeTeamId).toLowerCase()
+      const awayName = getTeamName(m.awayTeamId).toLowerCase()
+
+      if (homeFilter && !homeName.includes(homeFilter)) return false
+      if (awayFilter && !awayName.includes(awayFilter)) return false
+      return true
+    })
+  }, [categoryMatches, homeTeamFilter, awayTeamFilter, teams])
 
   const referees = officials.filter((o) => o.isReferee)
   const tableOfficialsList = officials.filter((o) => o.isTableOfficial)
@@ -432,6 +451,26 @@ export default function ProgramacionPage() {
       ) : (
         <Card>
           <CardContent className="p-0">
+            <div className="p-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+              <div className="grid gap-2 w-full sm:w-1/2">
+                <Label htmlFor="home-team-filter">Equipo local</Label>
+                <Input
+                  id="home-team-filter"
+                  placeholder="Filtrar por equipo local"
+                  value={homeTeamFilter}
+                  onChange={(e) => setHomeTeamFilter(e.target.value)}
+                />
+              </div>
+              <div className="grid gap-2 w-full sm:w-1/2">
+                <Label htmlFor="away-team-filter">Equipo visitante</Label>
+                <Input
+                  id="away-team-filter"
+                  placeholder="Filtrar por equipo visitante"
+                  value={awayTeamFilter}
+                  onChange={(e) => setAwayTeamFilter(e.target.value)}
+                />
+              </div>
+            </div>
             <Table>
               <TableHeader>
                 <TableRow>
@@ -445,8 +484,15 @@ export default function ProgramacionPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {categoryMatches.map((match) => (
-                  <TableRow key={match.id}>
+                {filteredMatches.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="text-center text-muted-foreground py-6">
+                      No hay partidos que coincidan con los filtros aplicados.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  filteredMatches.map((match) => (
+                    <TableRow key={match.id}>
                     <TableCell className="font-medium">Fecha {match.round}</TableCell>
                     <TableCell>
                       <div className="font-medium">
@@ -523,7 +569,8 @@ export default function ProgramacionPage() {
                       )}
                     </TableCell>
                   </TableRow>
-                ))}
+                  ))
+                )}
               </TableBody>
             </Table>
           </CardContent>
