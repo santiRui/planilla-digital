@@ -32,6 +32,7 @@ const navigation = [
   { name: "Goleadores", href: "/admin/goleadores", icon: Trophy },
   { name: "Canchas", href: "/admin/canchas", icon: MapPin },
   { name: "Fases", href: "/admin/fases", icon: Layers },
+  { name: "Contabilidad", href: "/admin/tesoreria", icon: ClipboardList },
   { name: "Personal", href: "/admin/personal", icon: UserCircle },
   { name: "Configuración", href: "/admin/configuracion", icon: Settings },
 ]
