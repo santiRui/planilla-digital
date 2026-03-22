@@ -146,10 +146,10 @@ export default function JugadoresPage() {
       }
 
       const jerseyNumber = Number.parseInt(jerseyNumberInput, 10)
-      if (!jerseyNumberInput.trim() || !Number.isFinite(jerseyNumber) || jerseyNumber < 0 || jerseyNumber > 99) {
+      if (!jerseyNumberInput.trim() || !Number.isFinite(jerseyNumber) || jerseyNumber < 0) {
         setFormError({
           title: "Faltan datos",
-          description: "Completá el número de camiseta (0 a 99).",
+          description: "Completá el número de camiseta (0 o mayor).",
         })
         return
       }
@@ -418,12 +418,11 @@ export default function JugadoresPage() {
                       id="jerseyNumber"
                       type="number"
                       min="0"
-                      max="99"
                       value={jerseyNumberInput}
                       onChange={(e) => {
                         setJerseyNumberInput(e.target.value)
                         const n = Number.parseInt(e.target.value, 10)
-                        if (Number.isFinite(n) && n >= 0 && n <= 99) {
+                        if (Number.isFinite(n) && n >= 0) {
                           setFormData((prev) => ({ ...prev, jerseyNumber: n }))
                         }
                       }}

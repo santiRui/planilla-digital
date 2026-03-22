@@ -9,7 +9,7 @@ const createPlayerSchema = z.object({
   lastName: z.string().min(1),
   dni: z.string().min(1),
   birthDate: z.string().min(1), // YYYY-MM-DD
-  jerseyNumber: z.number().int().min(0).max(99),
+  jerseyNumber: z.number().int().min(0),
   heightCm: z.number().int().min(0).optional().nullable(),
   isFederated: z.boolean().optional().default(true),
   federatedCategory: z.enum(["mayores", "intermedia"]).optional().nullable(),
