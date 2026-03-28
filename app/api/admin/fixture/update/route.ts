@@ -236,15 +236,18 @@ export async function POST(req: Request) {
 
       const zoneMatches = regularMatches.filter((m) => (m.zone_code ?? fallbackZone) === zoneCode)
 
-      const lockedMaxRound = zoneMatches
-        .filter((m) => m.status !== "programado")
+      // Solo preservamos un par de fechas ya jugadas (finalizadas) por zona.
+      const rawLockedMaxRound = zoneMatches
+        .filter((m) => m.status === "finalizado")
         .reduce((max, m) => Math.max(max, m.round ?? 0), 0)
 
+      const lockedMaxRound = Math.min(rawLockedMaxRound, 2)
       const nextRound = Math.max(1, lockedMaxRound + 1)
 
-      // Preserve everything before nextRound; delete only future scheduled matches.
+      // Eliminamos TODO lo que esté después de las fechas preservadas,
+      // incluso si tiene score, para poder rearmar el fixture completo.
       const toDeleteIds = zoneMatches
-        .filter((m) => m.status === "programado" && (m.round ?? 0) >= nextRound)
+        .filter((m) => (m.round ?? 0) > lockedMaxRound)
         .map((m) => m.id)
 
       if (toDeleteIds.length > 0) {
@@ -254,7 +257,7 @@ export async function POST(req: Request) {
         }
       }
 
-      const preserved = zoneMatches.filter((m) => (m.round ?? 0) < nextRound)
+      const preserved = zoneMatches.filter((m) => (m.round ?? 0) <= lockedMaxRound)
       const preservedKeys = new Set<string>()
       for (const m of preserved) {
         preservedKeys.add(pairingKey(m.home_team_id, m.away_team_id))
