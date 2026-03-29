@@ -94,7 +94,10 @@ export default function TesoreriaPage() {
         }
 
         const rawMatches = (matchesJson.matches ?? []) as any[]
-        const finalized = rawMatches.filter((m) => m.status === "finalizado" && m.finished_at)
+        // Contabilizamos todos los partidos con estado "finalizado" como jugados,
+        // aunque finished_at pueda estar en null. finishedAt se usa solo para mostrar
+        // fecha/hora si está disponible.
+        const finalized = rawMatches.filter((m) => m.status === "finalizado")
 
         const matchRows: MatchRow[] = finalized.map((m) => ({
           id: String(m.id),
