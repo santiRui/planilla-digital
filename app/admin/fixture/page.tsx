@@ -389,12 +389,27 @@ export default function FixturePage() {
       let matchesWithPlanillaScores = rawMatches
 
       if (finishedMatchIds.length > 0) {
-        const { data: statsRows, error: statsError } = await supabase
+        let statsRows: any[] = []
+
+        const { data: rowsPlanilla, error: statsPlanillaError } = await supabase
           .from("match_player_stats_planilla")
           .select("match_id, team_id, points")
           .in("match_id", finishedMatchIds)
 
-        if (!statsError && Array.isArray(statsRows)) {
+        if (!statsPlanillaError && Array.isArray(rowsPlanilla) && rowsPlanilla.length > 0) {
+          statsRows = rowsPlanilla as any[]
+        } else {
+          const { data: rowsLegacy, error: statsLegacyError } = await supabase
+            .from("match_player_stats")
+            .select("match_id, team_id, points")
+            .in("match_id", finishedMatchIds)
+
+          if (!statsLegacyError && Array.isArray(rowsLegacy) && rowsLegacy.length > 0) {
+            statsRows = rowsLegacy as any[]
+          }
+        }
+
+        if (Array.isArray(statsRows) && statsRows.length > 0) {
           const totalsByMatch: Record<string, Record<string, number>> = {}
 
           for (const row of statsRows as any[]) {

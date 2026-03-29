@@ -78,15 +78,39 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
     ) as string[]
 
     // 2) Stats de jugadores para esos partidos
-    const { data: statsRows, error: statsError } = await admin
+    // Primero intentamos usar la tabla nueva de planilla. Si no hay datos
+    // (por ejemplo, partidos antiguos con estadísticas ficticias creadas en
+    // la tabla vieja), hacemos fallback a match_player_stats.
+    let statsRows: any[] = []
+
+    const { data: rowsPlanilla, error: statsPlanillaError } = await admin
       .from("match_player_stats_planilla")
       .select(
         "match_id, team_id, player_id, minutes, points, t1_made, t1_att, t2_made, t2_att, t3_made, t3_att, rebounds, assists, steals, blocks_committed",
       )
       .in("match_id", matchIds)
 
-    if (statsError) {
-      return NextResponse.json({ error: statsError.message }, { status: 400 })
+    if (statsPlanillaError) {
+      return NextResponse.json({ error: statsPlanillaError.message }, { status: 400 })
+    }
+
+    if (rowsPlanilla && rowsPlanilla.length > 0) {
+      statsRows = rowsPlanilla as any[]
+    } else {
+      const { data: rowsLegacy, error: statsLegacyError } = await admin
+        .from("match_player_stats")
+        .select(
+          "match_id, team_id, player_id, minutes, points, t1_made, t1_att, t2_made, t2_att, t3_made, t3_att, rebounds, assists, steals, blocks_committed",
+        )
+        .in("match_id", matchIds)
+
+      if (statsLegacyError) {
+        return NextResponse.json({ error: statsLegacyError.message }, { status: 400 })
+      }
+
+      if (rowsLegacy && rowsLegacy.length > 0) {
+        statsRows = rowsLegacy as any[]
+      }
     }
 
     if (!statsRows || statsRows.length === 0) {

@@ -256,7 +256,7 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
       let awayTeamPrimaryColor: string | null = null
 
       if (teamIds.length > 0) {
-        const [teamsRes, playersRes, statsRes] = await Promise.all([
+        const [teamsRes, playersRes, statsResPlanilla] = await Promise.all([
           supabase
             .from("teams")
             .select("id, name, logo_url, primary_color")
@@ -312,9 +312,30 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
         setHomePlayers(allPlayers.filter((p) => p.teamId === mRow.home_team_id))
         setAwayPlayers(allPlayers.filter((p) => p.teamId === mRow.away_team_id))
 
-        // Cargar estadísticas guardadas desde la planilla (match_player_stats)
-        if (!statsRes.error && Array.isArray(statsRes.data)) {
-          const statsFromDb: UiPlayerStat[] = (statsRes.data as any[]).map((row: any) => ({
+        // Cargar estadísticas guardadas desde la planilla.
+        // 1) Intentar leer de la tabla nueva match_player_stats_planilla.
+        // 2) Si no hay datos, hacer fallback a la tabla vieja match_player_stats
+        //    para soportar partidos antiguos con estadísticas ficticias.
+
+        let statsRows: any[] = []
+
+        if (!statsResPlanilla.error && Array.isArray(statsResPlanilla.data) && statsResPlanilla.data.length > 0) {
+          statsRows = statsResPlanilla.data as any[]
+        } else {
+          const legacyStatsRes = await supabase
+            .from("match_player_stats")
+            .select(
+              "player_id, team_id, minutes, points, t1_made, t1_att, t2_made, t2_att, t3_made, t3_att, rebounds, assists, steals, turnovers, blocks_committed, blocks_received, fouls_committed, fouls_received, rating, players(first_name, last_name, jersey_number)",
+            )
+            .eq("match_id", matchId)
+
+          if (!legacyStatsRes.error && Array.isArray(legacyStatsRes.data)) {
+            statsRows = legacyStatsRes.data as any[]
+          }
+        }
+
+        if (statsRows.length > 0) {
+          const statsFromDb: UiPlayerStat[] = statsRows.map((row: any) => ({
             playerId: row.player_id as string,
             teamId: row.team_id as string,
             jerseyNumber: row.players?.jersey_number ?? null,

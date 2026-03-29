@@ -94,12 +94,35 @@ export async function GET(req: Request) {
     let matchesWithPlanillaScores = matches
 
     if (finishedMatchIds.length > 0) {
-      const { data: statsRows, error: statsError } = await auth.adminClient
+      let statsRows: any[] = []
+
+      const { data: rowsPlanilla, error: statsPlanillaError } = await auth.adminClient
         .from("match_player_stats_planilla")
         .select("match_id, team_id, points")
         .in("match_id", finishedMatchIds)
 
-      if (!statsError && Array.isArray(statsRows)) {
+      if (statsPlanillaError) {
+        return NextResponse.json({ error: statsPlanillaError.message }, { status: 400 })
+      }
+
+      if (rowsPlanilla && rowsPlanilla.length > 0) {
+        statsRows = rowsPlanilla as any[]
+      } else {
+        const { data: rowsLegacy, error: statsLegacyError } = await auth.adminClient
+          .from("match_player_stats")
+          .select("match_id, team_id, points")
+          .in("match_id", finishedMatchIds)
+
+        if (statsLegacyError) {
+          return NextResponse.json({ error: statsLegacyError.message }, { status: 400 })
+        }
+
+        if (rowsLegacy && rowsLegacy.length > 0) {
+          statsRows = rowsLegacy as any[]
+        }
+      }
+
+      if (Array.isArray(statsRows) && statsRows.length > 0) {
         const totalsByMatch: Record<string, Record<string, number>> = {}
 
         for (const row of statsRows as any[]) {

@@ -231,25 +231,37 @@ export async function POST(req: Request) {
     const zones = Array.from(new Set(uniqueTeamIds.map((id) => teamToZone.get(id) ?? fallbackZone)))
 
     for (const zoneCode of zones) {
-      const zoneTeamIds = uniqueTeamIds.filter((id) => (teamToZone.get(id) ?? fallbackZone) === zoneCode)
-      if (zoneTeamIds.length < 2) continue
-
       const zoneMatches = regularMatches.filter((m) => (m.zone_code ?? fallbackZone) === zoneCode)
 
-      // Solo preservamos un par de fechas ya jugadas (finalizadas) por zona.
-      const rawLockedMaxRound = zoneMatches
-        .filter((m) => m.status === "finalizado")
-        .reduce((max, m) => Math.max(max, m.round ?? 0), 0)
+      // Construimos el conjunto de equipos de la zona a partir de:
+      // - Los equipos declarados en team_categories (uniqueTeamIds) con esa zona.
+      // - Cualquier equipo que ya aparezca en partidos de esa zona.
+      const zoneTeamIdSet = new Set<string>()
+      for (const id of uniqueTeamIds) {
+        const cleanId = id ? String(id) : ""
+        if (!cleanId) continue
+        if ((teamToZone.get(cleanId) ?? fallbackZone) === zoneCode) {
+          zoneTeamIdSet.add(cleanId)
+        }
+      }
+      for (const m of zoneMatches) {
+        const homeId = m.home_team_id ? String(m.home_team_id) : ""
+        const awayId = m.away_team_id ? String(m.away_team_id) : ""
+        if (homeId) zoneTeamIdSet.add(homeId)
+        if (awayId) zoneTeamIdSet.add(awayId)
+      }
 
-      const lockedMaxRound = Math.min(rawLockedMaxRound, 2)
-      const nextRound = Math.max(1, lockedMaxRound + 1)
+      // Nos quedamos solo con IDs válidos (no vacíos)
+      const zoneTeamIds = Array.from(zoneTeamIdSet).filter((id) => !!id)
+      if (zoneTeamIds.length < 2) continue
 
-      // Eliminamos TODO lo que esté después de las fechas preservadas,
-      // incluso si tiene score, para poder rearmar el fixture completo.
-      const toDeleteIds = zoneMatches
-        .filter((m) => (m.round ?? 0) > lockedMaxRound)
-        .map((m) => m.id)
+      // Separar partidos jugados de programados.
+      const played = zoneMatches.filter((m) => m.status !== "programado")
+      const scheduled = zoneMatches.filter((m) => m.status === "programado")
 
+      // Borramos todos los partidos programados de fase regular de esta zona;
+      // vamos a reinsertar según el nuevo fixture.
+      const toDeleteIds = scheduled.map((m) => m.id)
       if (toDeleteIds.length > 0) {
         const { error: deleteError } = await auth.adminClient.from("matches").delete().in("id", toDeleteIds)
         if (deleteError) {
@@ -257,39 +269,82 @@ export async function POST(req: Request) {
         }
       }
 
-      const preserved = zoneMatches.filter((m) => (m.round ?? 0) <= lockedMaxRound)
-      const preservedKeys = new Set<string>()
-      for (const m of preserved) {
-        preservedKeys.add(pairingKey(m.home_team_id, m.away_team_id))
+      // Generamos el round-robin teórico (con wheels) para TODOS los equipos
+      // de la zona.
+      const generated = roundRobinPairsWithWheels(zoneTeamIds, wheelsCount).sort(
+        (a, b) => a.round - b.round,
+      )
+
+      // Agrupamos los partidos jugados por par de equipos (sin importar local/visitante).
+      const playedByPair = new Map<string, MatchLite[]>()
+      for (const m of played) {
+        const key = pairingKey(m.home_team_id, m.away_team_id)
+        const list = playedByPair.get(key) ?? []
+        list.push(m)
+        playedByPair.set(key, list)
       }
 
-      const generated = roundRobinPairsWithWheels(zoneTeamIds, wheelsCount)
+      const updateRows: Array<{ id: string; round: number; zone_code: string }> = []
+      const insertRows: Array<{
+        tournament_id: string
+        home_team_id: string
+        away_team_id: string
+        zone_code: string
+        round: number
+        phase: string
+        status: string
+        scheduled_at: null
+        venue_id: null
+        court_id: null
+      }> = []
 
-      const remaining = generated
-        .filter((p) => !preservedKeys.has(pairingKey(p.homeTeamId, p.awayTeamId)))
-        .sort((a, b) => a.round - b.round)
+      // Para cada partido teórico generado, intentamos reasignar primero un
+      // partido jugado existente (preservando scores y demás datos), y si no
+      // hay, creamos un nuevo partido programado.
+      for (const p of generated) {
+        // Ignoramos emparejamientos inválidos por seguridad.
+        if (!p.homeTeamId || !p.awayTeamId) continue
 
-      if (remaining.length === 0) continue
+        const key = pairingKey(p.homeTeamId, p.awayTeamId)
+        const list = playedByPair.get(key)
 
-      const minRoundRemaining = remaining.reduce((min, m) => Math.min(min, m.round), Infinity)
-      const offset = nextRound - minRoundRemaining
+        if (list && list.length > 0) {
+          const existing = list.shift()!
+          updateRows.push({ id: existing.id, round: p.round, zone_code: zoneCode })
+        } else {
+          insertRows.push({
+            tournament_id: tournamentId,
+            home_team_id: p.homeTeamId,
+            away_team_id: p.awayTeamId,
+            zone_code: zoneCode,
+            round: p.round,
+            phase: "fase_regular",
+            status: "programado",
+            scheduled_at: null,
+            venue_id: null,
+            court_id: null,
+          })
+        }
+      }
 
-      const insertRows = remaining.map((p) => ({
-        tournament_id: tournamentId,
-        home_team_id: p.homeTeamId,
-        away_team_id: p.awayTeamId,
-        zone_code: zoneCode,
-        round: p.round + offset,
-        phase: "fase_regular",
-        status: "programado",
-        scheduled_at: null,
-        venue_id: null,
-        court_id: null,
-      }))
+      if (updateRows.length > 0) {
+        for (const row of updateRows) {
+          const { error: updateError } = await auth.adminClient
+            .from("matches")
+            .update({ round: row.round, zone_code: row.zone_code })
+            .eq("id", row.id)
 
-      const { error: insertError } = await auth.adminClient.from("matches").insert(insertRows)
-      if (insertError) {
-        return NextResponse.json({ error: insertError.message }, { status: 400 })
+          if (updateError) {
+            return NextResponse.json({ error: updateError.message }, { status: 400 })
+          }
+        }
+      }
+
+      if (insertRows.length > 0) {
+        const { error: insertError } = await auth.adminClient.from("matches").insert(insertRows)
+        if (insertError) {
+          return NextResponse.json({ error: insertError.message }, { status: 400 })
+        }
       }
     }
 
