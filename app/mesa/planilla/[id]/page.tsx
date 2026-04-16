@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from "rea
 import { useParams, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Textarea } from "@/components/ui/textarea"
 import { useAppStore } from "@/lib/store"
 import {
   ArrowLeft,
@@ -156,6 +158,10 @@ export default function PlanillaPage() {
   const [dbAwayTeam, setDbAwayTeam] = useState<DbTeamRow | null>(null)
   const [dbHomePlayers, setDbHomePlayers] = useState<Player[]>([])
   const [dbAwayPlayers, setDbAwayPlayers] = useState<Player[]>([])
+  const [signedUnderProtest, setSignedUnderProtest] = useState(false)
+  const [observations, setObservations] = useState("")
+  const [captainHomeId, setCaptainHomeId] = useState<string | null>(null)
+  const [captainAwayId, setCaptainAwayId] = useState<string | null>(null)
 
   // Para evitar registrar múltiples veces la hora de inicio desde la mesa en esta sesión
   const [startRegisteredFromMesa, setStartRegisteredFromMesa] = useState(false)
@@ -184,6 +190,18 @@ export default function PlanillaPage() {
       awayStaff: prePlanilla.away.staffIds || [] 
     }
   }
+
+  // Cargar capitán de cada equipo desde la pre planilla, si existe
+  useEffect(() => {
+    const prePlanilla = getPrePlanillaData()
+    if (!prePlanilla) return
+
+    const homeCaptain = prePlanilla.home?.captainId ?? null
+    const awayCaptain = prePlanilla.away?.captainId ?? null
+
+    setCaptainHomeId(typeof homeCaptain === "string" ? homeCaptain : null)
+    setCaptainAwayId(typeof awayCaptain === "string" ? awayCaptain : null)
+  }, [matchId])
 
   // Cargar datos del staff de la base de datos
   const [staffData, setStaffData] = useState<Record<string, any>>({})
@@ -1148,23 +1166,59 @@ export default function PlanillaPage() {
     [localEvents, opponentTeamIdForFreeThrows],
   )
 
-  // Contadores de faltas por equipo en el período actual
+  // Estado para mostrar un aviso modal cuando un equipo entra en infracción (4 faltas de equipo)
+  const [teamFoulAlert, setTeamFoulAlert] = useState<{
+    side: "home" | "away"
+    period: number
+  } | null>(null)
+  // Llevamos un registro de qué combinaciones (equipo, período) ya mostraron el aviso,
+  // para no repetirlo más de una vez por cuarto/prórroga.
+  const shownTeamFoulAlertsRef = useRef<Set<string>>(new Set())
+
+  // Contadores de faltas por equipo para mostrar en el período actual.
+  // - Períodos 1 a 3: se cuentan sólo las faltas de ese período.
+  // - Desde el 4º período en adelante (incluidas todas las prórrogas): se
+  //   acumulan todas las faltas cometidas desde el 4º período en adelante,
+  //   de modo que las faltas de equipo del último cuarto se arrastran a los
+  //   suplementarios.
   const teamFoulsInPeriod = useMemo(() => {
     if (!homeTeam || !awayTeam) return { home: 0, away: 0 }
-    
-    const fouls = localEvents.filter(e => e.type === "foul" && e.period === period)
-    const homeFouls = fouls.filter(e => e.teamId === homeTeam.id).length
-    const awayFouls = fouls.filter(e => e.teamId === awayTeam.id).length
-    return { home: homeFouls, away: awayFouls }
-  }, [localEvents, period, homeTeam?.id, awayTeam?.id, homeTeam, awayTeam])
 
-  // Verificar si equipos están en infracción
+    const fouls = localEvents.filter((e) => {
+      if (e.type !== "foul") return false
+      if (period <= 3) return e.period === period
+      // Desde el 4º cuarto en adelante, contamos todas las faltas desde el período 4
+      return e.period >= 4
+    })
+
+    const homeFouls = fouls.filter((e) => e.teamId === homeTeam.id).length
+    const awayFouls = fouls.filter((e) => e.teamId === awayTeam.id).length
+
+    return { home: homeFouls, away: awayFouls }
+  }, [homeTeam, awayTeam, localEvents, period])
+
+  // Verificar si equipos están en infracción y disparar alerta cuando alcanzan 4 faltas
   useEffect(() => {
     setTeamFoulWarning({
       home: teamFoulsInPeriod.home >= 4,
-      away: teamFoulsInPeriod.away >= 4
+      away: teamFoulsInPeriod.away >= 4,
     })
-  }, [teamFoulsInPeriod])
+
+    const keyHome = `home-${period}`
+    const keyAway = `away-${period}`
+    const shown = shownTeamFoulAlertsRef.current
+
+    // Si aún no mostramos el aviso para ese equipo en este período y ya tiene 4+ faltas, lo disparamos.
+    if (!teamFoulAlert) {
+      if (teamFoulsInPeriod.home >= 4 && !shown.has(keyHome)) {
+        shown.add(keyHome)
+        setTeamFoulAlert({ side: "home", period })
+      } else if (teamFoulsInPeriod.away >= 4 && !shown.has(keyAway)) {
+        shown.add(keyAway)
+        setTeamFoulAlert({ side: "away", period })
+      }
+    }
+  }, [teamFoulsInPeriod, period, teamFoulAlert])
 
   // Contadores de tiempos muertos por equipo
   const teamTimeouts = useMemo(
@@ -1882,7 +1936,12 @@ export default function PlanillaPage() {
   }
 
   const persistMatch = useCallback(
-    async (payload: { status?: "programado" | "en_juego" | "finalizado"; homeScore?: number; awayScore?: number }) => {
+    async (payload: {
+      status?: "programado" | "en_juego" | "finalizado" | "suspendido" | "demorado"
+      homeScore?: number
+      awayScore?: number
+      statusReason?: string
+    }) => {
       const { data: sessionData } = await supabase.auth.getSession()
       const token = sessionData.session?.access_token
       if (!token) {
@@ -1940,6 +1999,17 @@ export default function PlanillaPage() {
 
   // End match
   const endMatch = async () => {
+    const trimmedObservations = observations.trim()
+
+    let statusReason: string | undefined
+    if (signedUnderProtest && trimmedObservations) {
+      statusReason = `protesta: ${trimmedObservations}`
+    } else if (signedUnderProtest) {
+      statusReason = "protesta: sin_detalle"
+    } else if (trimmedObservations) {
+      statusReason = trimmedObservations
+    }
+
     updateMatch(matchId, {
       status: "finalizado",
       homeScore,
@@ -1947,8 +2017,8 @@ export default function PlanillaPage() {
     })
     setSyncStatus("syncing")
 
-    // 1) Persistir resultado del partido en la API existente
-    await persistMatch({ status: "finalizado", homeScore, awayScore })
+    // 1) Persistir resultado del partido en la API existente, incluyendo protesta/observaciones
+    await persistMatch({ status: "finalizado", homeScore, awayScore, statusReason })
 
     // 2) Calcular estadísticas por jugador y enviarlas al backend
     try {
@@ -2410,6 +2480,7 @@ export default function PlanillaPage() {
 
     const isSelected = selectedPlayerId === player.id
     const isDisqualified = disqualifiedPlayers.has(player.id)
+    const isCaptain = teamSide === "home" ? captainHomeId === player.id : captainAwayId === player.id
 
     const baseBgColor = teamSide === "home" ? `${homeColor}14` : `${awayColor}14`
 
@@ -2518,6 +2589,18 @@ export default function PlanillaPage() {
                   {playerPoints} pts | {playerFouls} faltas
                 </p>
               </div>
+            </div>
+            <div className="flex items-center gap-1 ml-2">
+              {player.isFederated && (
+                <span className="rounded-full bg-blue-600 text-xs font-bold text-white px-2 py-1 leading-none">
+                  F
+                </span>
+              )}
+              {isCaptain && (
+                <span className="rounded-full bg-amber-500 text-xs font-bold text-white px-2 py-1 leading-none">
+                  C
+                </span>
+              )}
             </div>
           </div>
         </button>
@@ -2702,12 +2785,20 @@ export default function PlanillaPage() {
     )
   }
 
+  const foulAlertTeamName = teamFoulAlert
+    ? teamFoulAlert.side === "home"
+      ? homeTeam.name
+      : awayTeam.name
+    : ""
+
+  const foulAlertSideLabel = teamFoulAlert ? (teamFoulAlert.side === "home" ? "local" : "visitante") : ""
+
   return (
     <div className="min-h-screen bg-background flex flex-col overflow-hidden">
-      <header className="sticky top-0 z-10 border-b bg-card">
-        <div className="flex items-center justify-between gap-3 p-2">
-          <div className="flex items-center gap-1.5">
-            <Button variant="ghost" size="icon" onClick={() => router.push("/mesa")}>
+      <header className="sticky top-0 z-20 border-b bg-card">
+        <div className="flex items-center justify-between px-3 py-2 gap-2">
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="icon" onClick={() => router.push("/mesa")} aria-label="Volver">
               <ArrowLeft className="h-5 w-5" />
             </Button>
             <div className="hidden sm:flex flex-col items-start gap-0.5">
@@ -4065,16 +4156,22 @@ export default function PlanillaPage() {
       </AlertDialog>
 
       {/* Advertencia: no se puede iniciar reloj mientras se edita en Configuración */}
-      <AlertDialog open={showClockEditorWarning} onOpenChange={setShowClockEditorWarning}>
-        <AlertDialogContent>
+      <AlertDialog open={!!teamFoulAlert} onOpenChange={(open) => !open && setTeamFoulAlert(null)}>
+        <AlertDialogContent className="max-w-[480px]">
           <AlertDialogHeader>
-            <AlertDialogTitle>No se puede iniciar el reloj</AlertDialogTitle>
-            <AlertDialogDescription>
-              Para poner en marcha el reloj primero cerrá la edición del reloj en la pestaña "Configuración".
-            </AlertDialogDescription>
+            <AlertDialogTitle>Equipo en infracción</AlertDialogTitle>
           </AlertDialogHeader>
+          {teamFoulAlert && (
+            <div className="py-4 text-center text-base">
+              <p>
+                El equipo <span className="font-semibold">{foulAlertSideLabel}</span>{" "}<span className="font-semibold">{foulAlertTeamName}</span> entra en infracción
+              </p>
+            </div>
+          )}
           <AlertDialogFooter>
-            <AlertDialogAction onClick={() => setShowClockEditorWarning(false)}>Entendido</AlertDialogAction>
+            <AlertDialogAction className="w-full sm:w-auto" onClick={() => setTeamFoulAlert(null)}>
+              Entendido
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -4088,7 +4185,7 @@ export default function PlanillaPage() {
               ¿Confirmas que deseas finalizar el partido con el marcador actual?
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="my-4">
+          <div className="my-4 space-y-4">
             <div className="flex items-center justify-center gap-8 text-foreground">
               <div className="text-center">
                 <div className="font-semibold">{homeTeam.name}</div>
@@ -4098,6 +4195,31 @@ export default function PlanillaPage() {
               <div className="text-center">
                 <div className="font-semibold">{awayTeam.name}</div>
                 <div className="text-4xl font-bold">{awayScore}</div>
+              </div>
+            </div>
+
+            <div className="space-y-2 border-t pt-3 mt-2">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="signed-under-protest"
+                  checked={signedUnderProtest}
+                  onCheckedChange={(val) => setSignedUnderProtest(val === true)}
+                />
+                <label htmlFor="signed-under-protest" className="text-sm font-medium leading-none cursor-pointer">
+                  Partido firmado bajo protesta
+                </label>
+              </div>
+              <div className="space-y-1">
+                <label htmlFor="match-observations" className="text-xs text-muted-foreground">
+                  Observaciones (lesiones, incidentes, detalles de la protesta, etc.)
+                </label>
+                <Textarea
+                  id="match-observations"
+                  value={observations}
+                  onChange={(e) => setObservations(e.target.value)}
+                  rows={3}
+                  placeholder="Escribí aquí cualquier observación relevante antes de cerrar la planilla"
+                />
               </div>
             </div>
           </div>
@@ -4680,17 +4802,12 @@ export default function PlanillaPage() {
             {/* Paso 3: Seleccionar persona */}
             <div>
               <div className="text-sm font-semibold mb-2">
-                {selectedFoulType === "unsportsmanlike" || selectedFoulType === "disqualifying" || selectedFoulType === "fight" 
-                  ? "Jugadores y Personal Técnico" 
-                  : selectedFoulType === "technical" 
-                    ? "Jugadores y Personal Técnico" 
-                    : "Jugadores"
-                }
+                {/* Para reyerta mostramos solo jugadores; para el resto, jugadores y personal técnico */}
+                {selectedFoulType === "fight" ? "Jugadores" : "Jugadores y Personal Técnico"}
               </div>
-              
-              {/* Mostrar jugadores para tipos de falta que se registran directamente (si los hubiera) */}
-              {selectedFoulType !== "unsportsmanlike" && selectedFoulType !== "disqualifying" ? (
-                // Faltas personales: solo jugadores
+
+              {/* Rama simple: reyerta -> sólo jugadores */}
+              {selectedFoulType === "fight" ? (
                 <div className="space-y-1 max-h-48 overflow-auto">
                   {(selectedFoulTeam === "home" ? homePlayers : awayPlayers).map((player) => (
                     <Button
@@ -4713,12 +4830,14 @@ export default function PlanillaPage() {
                   ))}
                 </div>
               ) : (
-                // Faltas técnicas, antideportivas, descalificantes y por reyerta: jugadores + staff
+                // Faltas técnicas, antideportivas y descalificantes: jugadores + staff (+ banca para técnicas)
                 <div className="space-y-2">
-                  {/* Sección de Jugadores */}
                   <div>
-                    <div className="text-xs font-medium text-muted-foreground mb-1">Jugadores</div>
-                    <div className="space-y-1 max-h-32 overflow-auto">
+                    <div className="text-xs font-medium text-muted-foreground mb-1">
+                      Jugadores y Personal Técnico
+                    </div>
+                    <div className="space-y-1 max-h-56 overflow-auto">
+                      {/* Jugadores */}
                       {(selectedFoulTeam === "home" ? homePlayers : awayPlayers).map((player) => (
                         <Button
                           key={player.id}
@@ -4726,7 +4845,6 @@ export default function PlanillaPage() {
                           size="sm"
                           className="w-full justify-start text-xs"
                           onClick={() => {
-                            // Para antideportiva y descalificante exigimos seleccionar víctima en cancha
                             if (selectedFoulType === "unsportsmanlike" || selectedFoulType === "disqualifying") {
                               const targetTeamSide: "home" | "away" =
                                 selectedFoulTeam === "home" ? "away" : "home"
@@ -4738,7 +4856,6 @@ export default function PlanillaPage() {
                               })
                               setShowOtherFoulDialog(false)
                             } else {
-                              // Técnica y reyerta se registran sin víctima específica
                               addFoul(player.id, selectedFoulTeam, selectedFoulType)
                               setShowOtherFoulDialog(false)
                             }
@@ -4751,33 +4868,20 @@ export default function PlanillaPage() {
                           </div>
                         </Button>
                       ))}
-                    </div>
-                  </div>
-                  
-                  {/* Sección de Personal Técnico (excepto para antideportivas) */}
-                  {selectedFoulType !== "unsportsmanlike" && (
-                    <div>
-                      <div className="text-xs font-medium text-muted-foreground mb-1">Personal Técnico</div>
-                      {(() => {
+
+                      {/* Personal técnico (solo cuando no es antideportiva) */}
+                      {selectedFoulType !== "unsportsmanlike" && (() => {
                         const selectedStaff = getSelectedStaff()
                         const staffIds = selectedFoulTeam === "home" ? selectedStaff.homeStaff : selectedStaff.awayStaff
-                        
-                        if (staffIds.length === 0) {
-                          return (
-                            <p className="text-xs text-muted-foreground">
-                              No hay personal técnico seleccionado en la pre planilla
-                            </p>
-                          )
-                        }
-                        
-                        return staffIds.map((staffId: string) => {
+
+                        const items = staffIds.map((staffId: string) => {
                           const staff = staffData[staffId]
                           if (!staff) return null
-                          
+
                           const isTechnical = staff.role === "tecnico"
                           const staffType = isTechnical ? "tech" : "assist"
                           const staffIdFull = `${staffType}-${selectedFoulTeam === "home" ? homeTeam?.id : awayTeam?.id}`
-                          
+
                           return (
                             <Button
                               key={staff.id}
@@ -4802,37 +4906,40 @@ export default function PlanillaPage() {
                             </Button>
                           )
                         })
-                      })()}
-                    </div>
-                  )}
 
-                  {/* Sección de falta técnica a la banca */}
-                  {(selectedFoulType as any) === "technical" && (
-                    <div>
-                      <div className="text-xs font-medium text-muted-foreground mb-1">Banca</div>
-                      {(() => {
-                        const teamId = selectedFoulTeam === "home" ? homeTeam?.id : awayTeam?.id
-                        if (!teamId) return null
-                        const benchId = `bench-${teamId}`
-                        return (
-                          <Button
-                            variant="outline"
-                            className="w-full justify-start text-xs"
-                            onClick={() => {
-                              addFoul(benchId, selectedFoulTeam, "technical")
-                              setShowOtherFoulDialog(false)
-                            }}
-                            disabled={isEntityDisqualified(benchId)}
-                          >
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs font-medium text-primary">BANCA</span>
-                              <span>Falta técnica a la banca</span>
-                            </div>
-                          </Button>
-                        )
+                        return items.filter(Boolean)
                       })()}
                     </div>
-                  )}
+
+                    {/* Técnico a la banca como una fila más; sólo para faltas técnicas con teamId resuelto */}
+                    {selectedFoulType === "technical" && (() => {
+                      const rawTeamId = selectedFoulTeam === "home"
+                        ? homeTeam?.id || storeMatch?.homeTeamId || dbMatch?.homeTeamId
+                        : awayTeam?.id || storeMatch?.awayTeamId || dbMatch?.awayTeamId
+
+                      const teamId = rawTeamId ? String(rawTeamId) : null
+                      const benchId = teamId ? `bench-${teamId}` : null
+                      const canClick = Boolean(teamId && benchId && !isEntityDisqualified(benchId))
+
+                      return (
+                        <Button
+                          variant="outline"
+                          className="w-full justify-start text-xs mt-1"
+                          onClick={() => {
+                            if (!canClick || !benchId) return
+                            addFoul(benchId, selectedFoulTeam, "technical")
+                            setShowOtherFoulDialog(false)
+                          }}
+                          disabled={!canClick}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="w-6 text-center font-medium">B</span>
+                            <span className="text-xs font-medium text-primary">Técnico a la banca</span>
+                          </div>
+                        </Button>
+                      )
+                    })()}
+                  </div>
                 </div>
               )}
             </div>

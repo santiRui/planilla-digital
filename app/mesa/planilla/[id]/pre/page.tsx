@@ -735,7 +735,31 @@ export default function PrePlanillaPage() {
               <Button
                 size="lg"
                 className="h-16 w-16 rounded-full"
-                onClick={() => router.push(`/mesa/planilla/${matchId}`)}
+                onClick={async () => {
+                  try {
+                    const { data: sessionData } = await supabase.auth.getSession()
+                    const token = sessionData.session?.access_token
+                    if (!token) {
+                      return
+                    }
+
+                    await fetch(`/api/mesa/matches/${matchId}/preplanilla`, {
+                      method: "POST",
+                      headers: {
+                        "content-type": "application/json",
+                        authorization: `Bearer ${token}`,
+                      },
+                      body: JSON.stringify({
+                        homeState: state.home,
+                        awayState: state.away,
+                      }),
+                    })
+                  } catch {
+                    // si falla el guardado remoto, igual continuamos usando el estado local
+                  }
+
+                  router.push(`/mesa/planilla/${matchId}`)
+                }}
               >
                 <Play className="h-6 w-6" />
               </Button>

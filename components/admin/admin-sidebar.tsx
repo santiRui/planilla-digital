@@ -15,6 +15,7 @@ import {
   Layers,
   ChevronLeft,
   Menu,
+  AlertTriangle,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useState } from "react"
@@ -33,6 +34,7 @@ const navigation = [
   { name: "Canchas", href: "/admin/canchas", icon: MapPin },
   { name: "Fases", href: "/admin/fases", icon: Layers },
   { name: "Contabilidad", href: "/admin/tesoreria", icon: ClipboardList },
+  { name: "Observaciones", href: "/admin/observaciones", icon: AlertTriangle },
   { name: "Personal", href: "/admin/personal", icon: UserCircle },
   { name: "Configuración", href: "/admin/configuracion", icon: Settings },
 ]

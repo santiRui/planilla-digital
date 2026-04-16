@@ -322,11 +322,15 @@ export default function TeamStatsPage({ params }: TeamPageProps) {
       })
     }
 
-    // Sumar estadísticas oficiales
+    // Sumar estadísticas oficiales. Solo contamos un partido como jugado
+    // para el jugador si tiene al menos 1 segundo/minuto registrado.
     for (const r of stats) {
       const current = map.get(r.playerId)
       if (!current) continue
-      current.gamesPlayed += 1
+
+      if (r.minutes > 0) {
+        current.gamesPlayed += 1
+      }
       current.minutes += r.minutes
       current.points += r.points
       current.t1Made += r.t1Made

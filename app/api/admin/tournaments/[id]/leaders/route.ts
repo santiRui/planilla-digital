@@ -180,7 +180,10 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
         blocks: 0,
       }
 
-      current.games += 1
+      // Solo contamos el partido como jugado si el jugador tiene minutos > 0.
+      if ((row.minutes ?? 0) > 0) {
+        current.games += 1
+      }
       current.points += row.points ?? 0
       current.t3Made += row.t3_made ?? 0
       current.t3Att += row.t3_att ?? 0

@@ -624,9 +624,35 @@ export default function MesaPage() {
               Empezar acta nueva
             </Button>
             <Button
-              onClick={() => {
+              onClick={async () => {
                 if (!resumeMatch) return
                 const id = resumeMatch.id
+
+                try {
+                  const { data: sessionData } = await supabase.auth.getSession()
+                  const token = sessionData.session?.access_token
+
+                  if (token) {
+                    const res = await fetch(`/api/mesa/matches/${id}/preplanilla`, {
+                      headers: {
+                        authorization: `Bearer ${token}`,
+                      },
+                    })
+
+                    if (res.ok) {
+                      const json = await res.json().catch(() => null)
+                      if (json && json.homeState && json.awayState && typeof window !== "undefined") {
+                        window.localStorage.setItem(
+                          `preplanilla:${id}`,
+                          JSON.stringify({ home: json.homeState, away: json.awayState }),
+                        )
+                      }
+                    }
+                  }
+                } catch {
+                  // si falla, continuamos igualmente a la planilla con el estado local existente
+                }
+
                 setResumeMatch(null)
                 router.push(`/mesa/planilla/${id}`)
               }}
