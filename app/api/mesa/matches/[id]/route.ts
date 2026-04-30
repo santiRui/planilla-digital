@@ -524,6 +524,36 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     const nextHomeScore = parsed.data.homeScore
     const nextAwayScore = parsed.data.awayScore
 
+    // Para partidos finalizados, el resultado oficial (matches.home_score/away_score)
+    // debe coincidir con los puntos sumados por jugador en match_player_stats_planilla.
+    // Si existen estadísticas para el partido, priorizamos esos totales por encima
+    // del score enviado por la mesa (que puede haberse desincronizado).
+    const shouldAlignResultWithPlanillaStats =
+      requestedStatus === "finalizado" ||
+      (existing.status === "finalizado" &&
+        (parsed.data.homeScore !== undefined || parsed.data.awayScore !== undefined || parsed.data.statusReason !== undefined))
+
+    if (shouldAlignResultWithPlanillaStats) {
+      const { data: statsRows, error: statsError } = await auth.adminClient
+        .from("match_player_stats_planilla")
+        .select("team_id, points")
+        .eq("match_id", id)
+
+      if (!statsError && Array.isArray(statsRows) && statsRows.length > 0) {
+        let homePts = 0
+        let awayPts = 0
+        for (const row of statsRows as any[]) {
+          const teamId = String(row.team_id)
+          const pts = typeof row.points === "number" ? row.points : 0
+          if (teamId === String(existing.home_team_id)) homePts += pts
+          if (teamId === String(existing.away_team_id)) awayPts += pts
+        }
+
+        update.home_score = homePts
+        update.away_score = awayPts
+      }
+    }
+
     if (auth.role !== "admin") {
       if (requestedStatus === "en_juego") {
         if (auth.role !== "arbitro") {

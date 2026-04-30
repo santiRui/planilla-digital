@@ -1,6 +1,6 @@
 "use client"
 
-import { use, useCallback, useEffect, useMemo, useState } from "react"
+import { use, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -64,6 +64,8 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
   const [championship, setChampionship] = useState<TournamentRow | null>(null)
   const [teams, setTeams] = useState<UiTeam[]>([])
   const [matches, setMatches] = useState<UiMatch[]>([])
+  const [finalScoresByMatch, setFinalScoresByMatch] = useState<Record<string, { home?: number; away?: number }>>({})
+  const finalScoresByMatchRef = useRef<Record<string, { home?: number; away?: number }>>({})
   const [teamStats, setTeamStats] = useState<
     Array<{
       matchId: string
@@ -96,7 +98,6 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
 
   const getLiveStateForMatch = (match: UiMatch) => {
-    // Si el partido ya está finalizado, usamos siempre el resultado oficial de matches
     if (match.status === "finalizado") {
       return {
         homeScore: match.homeScore ?? 0,
@@ -114,8 +115,8 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
       typeof match.liveGameTime === "number"
     ) {
       return {
-        homeScore: match.liveHomeScore ?? match.homeScore ?? 0,
-        awayScore: match.liveAwayScore ?? match.awayScore ?? 0,
+        homeScore: match.liveHomeScore ?? 0,
+        awayScore: match.liveAwayScore ?? 0,
         period: typeof match.livePeriod === "number" ? match.livePeriod : undefined,
         gameTime: typeof match.liveGameTime === "number" ? match.liveGameTime : undefined,
       }
@@ -135,8 +136,8 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
             gameTime?: number
           }
 
-          const liveHome = data.homeScore ?? match.homeScore ?? 0
-          const liveAway = data.awayScore ?? match.awayScore ?? 0
+          const liveHome = data.homeScore ?? 0
+          const liveAway = data.awayScore ?? 0
           const livePeriod = typeof data.period === "number" ? data.period : undefined
           const liveGameTime = typeof data.gameTime === "number" ? data.gameTime : undefined
 
@@ -154,8 +155,8 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
 
     // 3) Fallback: usar marcador básico de la tabla matches
     return {
-      homeScore: match.homeScore ?? 0,
-      awayScore: match.awayScore ?? 0,
+      homeScore: 0,
+      awayScore: 0,
       period: undefined,
       gameTime: undefined,
     }
@@ -170,16 +171,18 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
   }
 
   useEffect(() => {
+    let mounted = true
+
     const run = async () => {
       setLoading(true)
       setError(null)
 
       // Cargar torneo
-      const { data: tRow, error: tError } = await supabase
+      const { data: tRow, error: tError } = (await supabase
         .from("tournaments")
         .select("id, name, short_name, description, year, branch")
         .eq("id", id)
-        .maybeSingle()
+        .maybeSingle()) as any
 
       if (tError || !tRow) {
         setError(tError?.message ?? "Campeonato no encontrado")
@@ -191,23 +194,23 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
       }
 
       const baseChamp: TournamentRow = {
-        id: tRow.id,
-        name: tRow.name,
-        shortName: tRow.short_name ?? tRow.name?.slice(0, 3)?.toUpperCase() ?? "T",
-        description: tRow.description,
-        year: tRow.year ?? null,
-        branch: tRow.branch as Branch,
+        id: (tRow as any).id,
+        name: (tRow as any).name,
+        shortName: (tRow as any).short_name ?? (tRow as any).name?.slice(0, 3)?.toUpperCase() ?? "T",
+        description: (tRow as any).description,
+        year: (tRow as any).year ?? null,
+        branch: ((tRow as any).branch as Branch) ?? "mixto",
       }
 
       setChampionship(baseChamp)
 
       // Cargar partidos del torneo
-      const { data: matchRowsRaw, error: mError } = await supabase
+      const { data: matchRowsRaw, error: mError } = (await supabase
         .from("matches")
         .select(
           "id, round, status, scheduled_at, home_score, away_score, live_home_score, live_away_score, live_period, live_game_time, home_team_id, away_team_id, phase, zone_code, created_at",
         )
-        .eq("tournament_id", id)
+        .eq("tournament_id", id)) as any
 
       if (mError) {
         console.error("[ChampionshipPage] Error cargando matches", mError)
@@ -222,48 +225,101 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
 
       let matchRows = matchRowsRaw ?? []
 
-      // Para partidos finalizados, recalculamos el score a partir de las
-      // estadísticas de la planilla (match_player_stats_planilla), para que
-      // siempre coincida con los puntos sumados por jugador.
-      const finishedMatchIds = matchRows
-        .filter((m: any) => m?.status === "finalizado" && m?.id)
-        .map((m: any) => String(m.id))
+      const loadFinalScores = async (matchIds: string[]) => {
+        if (matchIds.length === 0) return
 
-      if (finishedMatchIds.length > 0) {
+        // Public view can hit RLS when reading stats tables from the browser.
+        // Prefer a server-side aggregation endpoint for finalized scores.
+        try {
+          const res = await fetch(`/api/public/tournaments/${id}/final-scores`, { method: "GET" })
+          if (res.ok) {
+            const json = (await res.json().catch(() => null)) as any
+            const scores = json?.scores
+            if (scores && typeof scores === "object") {
+              const nextFinalScores: Record<string, { home?: number; away?: number }> = {}
+              for (const matchId of matchIds) {
+                const row = (scores as any)[String(matchId)]
+                if (!row) continue
+                const home = (row as any)?.home
+                const away = (row as any)?.away
+                if (typeof home === "number" || typeof away === "number") {
+                  nextFinalScores[String(matchId)] = {
+                    home: typeof home === "number" ? home : undefined,
+                    away: typeof away === "number" ? away : undefined,
+                  }
+                }
+              }
+
+              if (Object.keys(nextFinalScores).length > 0) {
+                finalScoresByMatchRef.current = { ...finalScoresByMatchRef.current, ...nextFinalScores }
+                setFinalScoresByMatch((prev) => ({ ...prev, ...nextFinalScores }))
+                return
+              }
+            }
+          }
+        } catch {
+          // ignore and fallback to client-side queries
+        }
+
         const { data: statsRows, error: statsError } = await supabase
           .from("match_player_stats_planilla")
           .select("match_id, team_id, points")
-          .in("match_id", finishedMatchIds)
+          .in("match_id", matchIds)
 
-        if (!statsError && Array.isArray(statsRows)) {
-          const totalsByMatch: Record<string, Record<string, number>> = {}
+        let effectiveRows: any[] = !statsError && Array.isArray(statsRows) ? (statsRows as any[]) : []
 
-          for (const row of statsRows as any[]) {
-            const matchId = String(row.match_id)
-            const teamId = String(row.team_id)
-            const pts = typeof row.points === "number" ? row.points : 0
-            if (!totalsByMatch[matchId]) totalsByMatch[matchId] = {}
-            totalsByMatch[matchId][teamId] = (totalsByMatch[matchId][teamId] ?? 0) + pts
+        if (effectiveRows.length === 0) {
+          const { data: legacyRows, error: legacyError } = await supabase
+            .from("match_player_stats")
+            .select("match_id, team_id, points")
+            .in("match_id", matchIds)
+
+          if (!legacyError && Array.isArray(legacyRows)) {
+            effectiveRows = legacyRows as any[]
           }
+        }
 
-          matchRows = matchRows.map((m: any) => {
-            const matchId = String(m.id)
-            const totalsForMatch = totalsByMatch[matchId]
-            if (m.status !== "finalizado" || !totalsForMatch) return m
+        if (effectiveRows.length === 0) return
 
-            const homePts = totalsForMatch[String(m.home_team_id)]
-            const awayPts = totalsForMatch[String(m.away_team_id)]
+        const totalsByMatch: Record<string, Record<string, number>> = {}
 
-            if (typeof homePts !== "number" && typeof awayPts !== "number") return m
+        for (const row of effectiveRows) {
+          const matchId = String(row.match_id)
+          const teamId = String(row.team_id)
+          const pts = typeof row.points === "number" ? row.points : 0
+          if (!totalsByMatch[matchId]) totalsByMatch[matchId] = {}
+          totalsByMatch[matchId][teamId] = (totalsByMatch[matchId][teamId] ?? 0) + pts
+        }
 
-            return {
-              ...m,
-              home_score: typeof homePts === "number" ? homePts : m.home_score,
-              away_score: typeof awayPts === "number" ? awayPts : m.away_score,
+        const nextFinalScores: Record<string, { home?: number; away?: number }> = {}
+        for (const m of matchRows) {
+          const matchId = String((m as any).id)
+          if (!(m as any).id) continue
+          if ((m as any).status !== "finalizado") continue
+          const totalsForMatch = totalsByMatch[matchId]
+          if (!totalsForMatch) continue
+          const homeTeamId = String((m as any).home_team_id)
+          const awayTeamId = String((m as any).away_team_id)
+          const homePts = totalsForMatch[homeTeamId]
+          const awayPts = totalsForMatch[awayTeamId]
+          if (typeof homePts === "number" || typeof awayPts === "number") {
+            nextFinalScores[matchId] = {
+              home: typeof homePts === "number" ? homePts : undefined,
+              away: typeof awayPts === "number" ? awayPts : undefined,
             }
-          })
+          }
+        }
+
+        if (Object.keys(nextFinalScores).length > 0) {
+          finalScoresByMatchRef.current = { ...finalScoresByMatchRef.current, ...nextFinalScores }
+          setFinalScoresByMatch((prev) => ({ ...prev, ...nextFinalScores }))
         }
       }
+
+      // Nota: en la vista pública, el resultado oficial debe provenir de
+      // matches.home_score/away_score. No sobreescribimos esos campos con
+      // totales calculados desde estadísticas (pueden estar restringidas por RLS
+      // o desincronizadas). 
 
       const teamIds = Array.from(
         new Set(
@@ -382,8 +438,10 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
                   return {
                     ...m,
                     status: (updated.status as UiMatch["status"]) ?? m.status,
-                    homeScore: updated.home_score ?? m.homeScore ?? null,
-                    awayScore: updated.away_score ?? m.awayScore ?? null,
+                    homeScore:
+                      updated.home_score ?? m.homeScore ?? null,
+                    awayScore:
+                      updated.away_score ?? m.awayScore ?? null,
                     liveHomeScore: updated.live_home_score ?? null,
                     liveAwayScore: updated.live_away_score ?? null,
                     livePeriod: updated.live_period ?? null,
