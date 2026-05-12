@@ -30,7 +30,7 @@ async function assertMesaPreplanillaRole(accessToken: string, matchId: string) {
 
   const { data: callerProfile, error: callerProfileError } = await adminClient
     .from("profiles")
-    .select("role")
+    .select("role, is_table_official, is_referee")
     .eq("id", callerId)
     .maybeSingle()
 
@@ -39,7 +39,18 @@ async function assertMesaPreplanillaRole(accessToken: string, matchId: string) {
   }
 
   const role = (callerProfile?.role as string | undefined) ?? ""
+  const isTableOfficial = Boolean((callerProfile as any)?.is_table_official)
+
   if (role === "admin") {
+    return { ok: true as const, adminClient, callerId, role }
+  }
+
+  if (role === "oficial_mesa") {
+    return { ok: true as const, adminClient, callerId, role }
+  }
+
+  // Permitir cuentas con rol principal 'arbitro' pero que también son oficiales de mesa.
+  if (role === "arbitro" && isTableOfficial) {
     return { ok: true as const, adminClient, callerId, role }
   }
 
@@ -47,8 +58,6 @@ async function assertMesaPreplanillaRole(accessToken: string, matchId: string) {
     return { ok: false as const, status: 403, error: "Prohibido" }
   }
 
-  // Permitir a oficiales de mesa usar pre-planilla sin depender de asignaciones explícitas,
-  // para soportar el flujo multi-dispositivo.
   return { ok: true as const, adminClient, callerId, role }
 }
 
