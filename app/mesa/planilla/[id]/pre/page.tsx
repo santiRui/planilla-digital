@@ -110,6 +110,7 @@ export default function PrePlanillaPage() {
 
   const [sendSubmitting, setSendSubmitting] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
+  const [sendSuccess, setSendSuccess] = useState(false)
 
   const [state, setState] = useState<PrePlanillaState>(() => {
     if (typeof window === "undefined") return defaultState()
@@ -233,12 +234,13 @@ export default function PrePlanillaPage() {
 
   const sendData = async () => {
     setSendError(null)
+    setSendSuccess(false)
     setSendSubmitting(true)
     try {
       const { data: sessionData } = await supabase.auth.getSession()
       const token = sessionData.session?.access_token
       if (!token) {
-        setSendError("No autorizado")
+        setSendError("No se pudo enviar: sesión no iniciada. Volvé a iniciar sesión e intentá nuevamente.")
         setSendSubmitting(false)
         return
       }
@@ -257,12 +259,36 @@ export default function PrePlanillaPage() {
 
       if (!res.ok) {
         const json = (await res.json().catch(() => null)) as any
-        setSendError(json?.error ?? "No se pudieron enviar los datos")
+        const backendMsg = typeof json?.error === "string" ? json.error : ""
+
+        if (res.status === 401) {
+          setSendError("No se pudo enviar: sesión expirada o no autorizada. Volvé a iniciar sesión.")
+        } else if (res.status === 403) {
+          setSendError(
+            "No se pudo enviar: no tenés permisos (403). Verificá que tu cuenta tenga rol de Mesa o sea Admin.",
+          )
+        } else if (res.status === 404) {
+          setSendError("No se pudo enviar: no hay pre-planilla asociada o el recurso no existe (404).")
+        } else if (res.status === 400) {
+          setSendError(
+            backendMsg
+              ? `No se pudo enviar: ${backendMsg}`
+              : "No se pudo enviar: datos inválidos. Revisá la selección de jugadores/iniciales y probá nuevamente.",
+          )
+        } else {
+          setSendError(backendMsg ? `No se pudieron enviar los datos: ${backendMsg}` : "No se pudieron enviar los datos")
+        }
+
         setSendSubmitting(false)
         return
       }
+
+      setSendSuccess(true)
+      setTimeout(() => {
+        setSendSuccess(false)
+      }, 2500)
     } catch {
-      setSendError("No se pudieron enviar los datos")
+      setSendError("No se pudieron enviar los datos: error de conexión. Revisá tu internet e intentá nuevamente.")
     } finally {
       setSendSubmitting(false)
     }
@@ -814,6 +840,7 @@ export default function PrePlanillaPage() {
           </div>
 
           {sendError && <div className="mt-2 text-center text-sm text-destructive">{sendError}</div>}
+          {sendSuccess && <div className="mt-2 text-center text-sm text-[var(--color-success)]">Datos enviados</div>}
 
           {bothConfirmed && (
             <div className="mt-6 flex items-center justify-center">
