@@ -47,22 +47,8 @@ async function assertMesaPreplanillaRole(accessToken: string, matchId: string) {
     return { ok: false as const, status: 403, error: "Prohibido" }
   }
 
-  const { data: assignment, error: assignmentError } = await adminClient
-    .from("match_official_assignments")
-    .select("id")
-    .eq("match_id", matchId)
-    .eq("user_id", callerId)
-    .eq("role", "oficial_mesa")
-    .maybeSingle()
-
-  if (assignmentError) {
-    return { ok: false as const, status: 400, error: assignmentError.message }
-  }
-
-  if (!assignment) {
-    return { ok: false as const, status: 403, error: "Prohibido" }
-  }
-
+  // Permitir a oficiales de mesa usar pre-planilla sin depender de asignaciones explícitas,
+  // para soportar el flujo multi-dispositivo.
   return { ok: true as const, adminClient, callerId, role }
 }
 
