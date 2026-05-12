@@ -33,6 +33,22 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   try {
     const { id: tournamentId } = await ctx.params
 
+    const toSeconds = (value: unknown) => {
+      if (value == null) return 0
+      if (typeof value === "number" && Number.isFinite(value)) return value
+      const raw = String(value).trim()
+      if (!raw) return 0
+      const m = raw.match(/^([0-9]{1,3}):([0-9]{1,2})$/)
+      if (m) {
+        const mm = Number(m[1] ?? 0)
+        const ss = Number(m[2] ?? 0)
+        if (!Number.isFinite(mm) || !Number.isFinite(ss)) return 0
+        return mm * 60 + ss
+      }
+      const asNum = Number(raw)
+      return Number.isFinite(asNum) ? asNum : 0
+    }
+
     const authHeader = req.headers.get("authorization")
     const match = authHeader?.match(/^Bearer\s+(.+)$/i)
     const accessToken = match?.[1]
@@ -221,9 +237,10 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
         matchIds: new Set<string>(),
       }
 
-      // Si el jugador figura en las estadísticas/planilla del partido, cuenta como PJ,
-      // incluso si tiene 0 minutos.
-      current.matchIds.add(String(row.match_id))
+      // Un partido cuenta como PJ solo si tuvo al menos 1 segundo de juego.
+      if (toSeconds(row.minutes) > 0) {
+        current.matchIds.add(String(row.match_id))
+      }
       current.points += row.points ?? 0
       current.t3Made += row.t3_made ?? 0
       current.t3Att += row.t3_att ?? 0
@@ -344,15 +361,6 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
       lastName: m.lastName,
       teamName: m.teamName,
     }))
-
-    // Temporary targeted adjustment requested by user
-    for (const row of asArray as any[]) {
-      const first = normalizeIdentityPart(row.firstName)
-      const last = normalizeIdentityPart(row.lastName)
-      if (last === "rodriguez" && first === "graciela del valle") {
-        row.points = 79
-      }
-    }
 
     const limit = 20
 

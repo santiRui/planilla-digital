@@ -611,12 +611,29 @@ export default function MesaPage() {
           <DialogFooter className="flex flex-col sm:flex-row sm:justify-end gap-2">
             <Button
               variant="outline"
-              onClick={() => {
+              onClick={async () => {
                 if (!resumeMatch) return
+                const id = resumeMatch.id
                 if (typeof window !== "undefined") {
                   window.localStorage.removeItem(`planilla-state:${resumeMatch.id}`)
+                  window.localStorage.removeItem(`preplanilla:${resumeMatch.id}`)
                 }
-                const id = resumeMatch.id
+
+                try {
+                  const { data: sessionData } = await supabase.auth.getSession()
+                  const token = sessionData.session?.access_token
+                  if (token) {
+                    await fetch(`/api/mesa/matches/${id}/preplanilla`, {
+                      method: "DELETE",
+                      headers: {
+                        authorization: `Bearer ${token}`,
+                      },
+                    })
+                  }
+                } catch {
+                  // si falla, continuamos igualmente iniciando una nueva acta desde cero
+                }
+
                 setResumeMatch(null)
                 router.push(`/mesa/planilla/${id}/pre?forcePre=1`)
               }}

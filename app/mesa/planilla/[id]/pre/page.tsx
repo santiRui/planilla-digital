@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState, type ChangeEvent } from "react"
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
 import { useParams, useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -108,6 +108,9 @@ export default function PrePlanillaPage() {
   const [noShowSubmitting, setNoShowSubmitting] = useState(false)
   const [noShowError, setNoShowError] = useState<string | null>(null)
 
+  const [sendSubmitting, setSendSubmitting] = useState(false)
+  const [sendError, setSendError] = useState<string | null>(null)
+
   const [state, setState] = useState<PrePlanillaState>(() => {
     if (typeof window === "undefined") return defaultState()
     const raw = window.localStorage.getItem(`preplanilla:${matchId}`)
@@ -187,6 +190,83 @@ export default function PrePlanillaPage() {
     if (typeof window === "undefined") return
     window.localStorage.setItem(`preplanilla:${matchId}`, JSON.stringify(state))
   }, [state, matchId])
+
+  const skipNextAutosaveRef = useRef(false)
+
+  // Si no hay estado local, intentar cargar el remoto al entrar en la pre-planilla.
+  // Esto permite continuar desde otro dispositivo.
+  useEffect(() => {
+    const run = async () => {
+      if (typeof window === "undefined") return
+      const raw = window.localStorage.getItem(`preplanilla:${matchId}`)
+      if (raw) return
+
+      try {
+        const { data: sessionData } = await supabase.auth.getSession()
+        const token = sessionData.session?.access_token
+        if (!token) return
+
+        const res = await fetch(`/api/mesa/matches/${matchId}/preplanilla`, {
+          headers: {
+            authorization: `Bearer ${token}`,
+          },
+        })
+
+        if (!res.ok) return
+        const json = (await res.json().catch(() => null)) as any
+        if (!json?.homeState || !json?.awayState) return
+
+        skipNextAutosaveRef.current = true
+        const nextState: PrePlanillaState = {
+          home: { ...emptyTeamState(), ...(json.homeState ?? {}) },
+          away: { ...emptyTeamState(), ...(json.awayState ?? {}) },
+        }
+        window.localStorage.setItem(`preplanilla:${matchId}`, JSON.stringify(nextState))
+        setState(nextState)
+      } catch {
+        // si falla, seguimos con estado vacío
+      }
+    }
+
+    run()
+  }, [supabase, matchId])
+
+  const sendData = async () => {
+    setSendError(null)
+    setSendSubmitting(true)
+    try {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData.session?.access_token
+      if (!token) {
+        setSendError("No autorizado")
+        setSendSubmitting(false)
+        return
+      }
+
+      const res = await fetch(`/api/mesa/matches/${matchId}/preplanilla`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          homeState: state.home,
+          awayState: state.away,
+        }),
+      })
+
+      if (!res.ok) {
+        const json = (await res.json().catch(() => null)) as any
+        setSendError(json?.error ?? "No se pudieron enviar los datos")
+        setSendSubmitting(false)
+        return
+      }
+    } catch {
+      setSendError("No se pudieron enviar los datos")
+    } finally {
+      setSendSubmitting(false)
+    }
+  }
 
   useEffect(() => {
     const run = async () => {
@@ -724,11 +804,16 @@ export default function PrePlanillaPage() {
             </button>
           </div>
 
-          <div className="mt-4 flex items-center justify-center">
+          <div className="mt-4 flex items-center justify-center gap-2">
             <Button variant="outline" onClick={() => setNoShowDialogOpen(true)}>
               Finalizar por no presentación
             </Button>
+            <Button variant="outline" onClick={sendData} disabled={sendSubmitting}>
+              Enviar datos
+            </Button>
           </div>
+
+          {sendError && <div className="mt-2 text-center text-sm text-destructive">{sendError}</div>}
 
           {bothConfirmed && (
             <div className="mt-6 flex items-center justify-center">
