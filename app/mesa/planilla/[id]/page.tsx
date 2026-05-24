@@ -2974,9 +2974,9 @@ export default function PlanillaPage() {
       <div className="flex-1 overflow-hidden">
         <Tabs value={mainTab} onValueChange={(v) => setMainTab(v as any)} className="h-full">
           <TabsContent value="cancha" className="m-0 h-full pb-16 md:pb-4">
-            <div className="h-full grid grid-cols-1 gap-2 p-3 md:grid-cols-12">
+            <div className="h-full grid grid-cols-1 gap-2 p-3 landscape:grid-cols-12 md:grid-cols-12">
               {/* Panel izquierdo (depende de flipSides) */}
-              <div className="hidden md:block md:col-span-3 overflow-hidden">
+              <div className="hidden landscape:block md:block landscape:col-span-3 md:col-span-3 overflow-hidden">
                 <div className="rounded-lg border bg-card overflow-hidden flex flex-col">
                   <div
                     className="px-3 py-2 text-sm font-semibold cursor-pointer"
@@ -2999,7 +2999,7 @@ export default function PlanillaPage() {
                 </div>
               </div>
 
-              <div className="md:col-span-6 h-full overflow-hidden">
+              <div className="landscape:col-span-6 md:col-span-6 h-full overflow-hidden">
                 <div className="h-full rounded-lg border bg-card overflow-hidden flex flex-col">
                   <div className="px-3 py-2 flex items-center justify-between gap-2">
                     <div>
@@ -3181,7 +3181,7 @@ export default function PlanillaPage() {
                 </div>
               </div>
 
-              <div className="md:hidden h-full overflow-hidden">
+              <div className="md:hidden landscape:hidden h-full overflow-hidden">
                 <div className="h-full rounded-lg border bg-card overflow-hidden flex flex-col">
                   <div className="px-3 py-2 flex items-center gap-2">
                     <Button
@@ -3216,7 +3216,7 @@ export default function PlanillaPage() {
               </div>
 
               {/* Panel derecho (depende de flipSides) */}
-              <div className="hidden md:block md:col-span-3 overflow-hidden">
+              <div className="hidden landscape:block md:block landscape:col-span-3 md:col-span-3 overflow-hidden">
                 <div className="rounded-lg border bg-card overflow-hidden flex flex-col">
                   <div
                     className="px-3 py-2 text-sm font-semibold text-right cursor-pointer"

@@ -3,6 +3,8 @@
 
 @custom-variant dark (&:is(.dark *));
 
+@custom-variant landscape (@media (orientation: landscape));
+
 :root {
   /* Updated to sports-themed color palette with orange accent */
   --background: oklch(0.98 0 0);
