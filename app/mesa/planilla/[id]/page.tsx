@@ -2594,12 +2594,12 @@ export default function PlanillaPage() {
             </div>
             <div className="flex items-center gap-1 ml-2">
               {player.isFederated && (
-                <span className="rounded-full bg-blue-600 text-xs font-bold text-white px-2 py-1 leading-none">
+                <span className="rounded-full bg-blue-600 text-xs landscape:text-[10px] font-bold text-white px-2 py-1 landscape:px-1.5 landscape:py-0.5 leading-none">
                   F
                 </span>
               )}
               {isCaptain && (
-                <span className="rounded-full bg-amber-500 text-xs font-bold text-white px-2 py-1 leading-none">
+                <span className="rounded-full bg-amber-500 text-xs landscape:text-[10px] font-bold text-white px-2 py-1 landscape:px-1.5 landscape:py-0.5 leading-none">
                   C
                 </span>
               )}
@@ -2610,7 +2610,7 @@ export default function PlanillaPage() {
           <Button
             size="sm"
             variant="outline"
-            className="h-8 landscape:h-7 flex-1 text-xs landscape:text-[11px] font-medium px-2 landscape:px-1.5 border-muted-foreground/20 bg-background hover:bg-muted"
+            className="h-8 landscape:h-6 flex-1 text-xs landscape:text-[11px] font-medium px-2 landscape:px-1.5 border-muted-foreground/20 bg-background hover:bg-muted"
             onClick={() => {
               if (
                 pendingReboundTeamId ||
@@ -2645,7 +2645,7 @@ export default function PlanillaPage() {
           <Button
             size="sm"
             variant="outline"
-            className="h-8 landscape:h-7 flex-1 text-[11px] landscape:text-[10px] font-medium px-2 landscape:px-1.5"
+            className="h-8 landscape:h-6 flex-1 text-[11px] landscape:text-[10px] font-medium px-2 landscape:px-1.5"
             onClick={() => {
               if (pendingReboundTeamId || pendingAssistTeamId || pendingFreeThrow || isDisqualified) return
               setSelectedPlayerId(player.id)
@@ -2981,7 +2981,7 @@ export default function PlanillaPage() {
               <div className="hidden landscape:block md:block landscape:col-span-3 md:col-span-3 overflow-hidden">
                 <div className="rounded-lg border bg-card overflow-hidden flex flex-col">
                   <div
-                    className="px-3 py-2 text-sm font-semibold cursor-pointer"
+                    className="px-3 py-2 landscape:px-2 landscape:py-1 text-sm landscape:text-[13px] font-semibold cursor-pointer"
                     style={{ borderLeftColor: leftColor, borderLeftWidth: 6 }}
                     onClick={() => {
                       setSubsDialogTeamSide(leftTeamSide)
@@ -3003,7 +3003,7 @@ export default function PlanillaPage() {
 
               <div className="landscape:col-span-6 md:col-span-6 h-full overflow-hidden">
                 <div className="h-full rounded-lg border bg-card overflow-hidden flex flex-col">
-                  <div className="px-3 py-2 flex items-center justify-between gap-2">
+                  <div className="px-3 py-2 landscape:px-2 landscape:py-1 flex items-center justify-between gap-2">
                     <div>
                       <div className="text-sm font-semibold">Cancha</div>
                       <div className="text-xs text-muted-foreground">
@@ -3221,7 +3221,7 @@ export default function PlanillaPage() {
               <div className="hidden landscape:block md:block landscape:col-span-3 md:col-span-3 overflow-hidden">
                 <div className="rounded-lg border bg-card overflow-hidden flex flex-col">
                   <div
-                    className="px-3 py-2 text-sm font-semibold text-right cursor-pointer"
+                    className="px-3 py-2 landscape:px-2 landscape:py-1 text-sm landscape:text-[13px] font-semibold text-right cursor-pointer"
                     style={{ borderRightColor: rightColor, borderRightWidth: 6 }}
                     onClick={() => {
                       setSubsDialogTeamSide(rightTeamSide)
