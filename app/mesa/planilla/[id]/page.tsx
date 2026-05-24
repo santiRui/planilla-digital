@@ -2486,7 +2486,7 @@ export default function PlanillaPage() {
 
     return (
       <div
-        className={`rounded-lg border p-2 ${isSelected ? "border-primary" : ""} ${isDisqualified ? "border-red-500 bg-red-50" : ""}`}
+        className={`rounded-lg border p-2 landscape:p-1 ${isSelected ? "border-primary" : ""} ${isDisqualified ? "border-red-500 bg-red-50" : ""}`}
         style={!isDisqualified ? { backgroundColor: baseBgColor } : undefined}
       >
         <button
@@ -2575,17 +2575,19 @@ export default function PlanillaPage() {
             setSelectedTeam(teamSide)
           }}
         >
-          <div className="flex items-center justify-between mb-1.5">
+          <div className="flex items-center justify-between mb-1.5 landscape:mb-1">
             <div className="flex items-center gap-1.5">
-              <span className={`h-8 w-8 rounded-full flex items-center justify-center font-bold text-xs ${isDisqualified ? "bg-red-500 text-white" : "bg-muted"}`}>
+              <span
+                className={`h-8 w-8 landscape:h-7 landscape:w-7 rounded-full flex items-center justify-center font-bold text-xs landscape:text-[11px] ${isDisqualified ? "bg-red-500 text-white" : "bg-muted"}`}
+              >
                 {player.jerseyNumber}
               </span>
               <div>
-                <p className={`font-medium text-xs ${isDisqualified ? "text-red-700" : ""}`}>
+                <p className={`font-medium text-xs landscape:text-[11px] ${isDisqualified ? "text-red-700" : ""}`}>
                   {player.firstName} {player.lastName.charAt(0)}.
                   {isDisqualified && " ⛔"}
                 </p>
-                <p className="text-[11px] text-muted-foreground whitespace-nowrap">
+                <p className="text-[11px] landscape:text-[10px] text-muted-foreground whitespace-nowrap">
                   {playerPoints} pts | {playerFouls} faltas
                 </p>
               </div>
@@ -2604,11 +2606,11 @@ export default function PlanillaPage() {
             </div>
           </div>
         </button>
-        <div className="mt-1.5 flex gap-1.5">
+        <div className="mt-1.5 landscape:mt-1 flex gap-1.5 landscape:gap-1">
           <Button
             size="sm"
             variant="outline"
-            className="h-8 flex-1 text-xs font-medium px-2 border-muted-foreground/20 bg-background hover:bg-muted"
+            className="h-8 landscape:h-7 flex-1 text-xs landscape:text-[11px] font-medium px-2 landscape:px-1.5 border-muted-foreground/20 bg-background hover:bg-muted"
             onClick={() => {
               if (
                 pendingReboundTeamId ||
@@ -2643,7 +2645,7 @@ export default function PlanillaPage() {
           <Button
             size="sm"
             variant="outline"
-            className="h-8 flex-1 text-[11px] font-medium px-2"
+            className="h-8 landscape:h-7 flex-1 text-[11px] landscape:text-[10px] font-medium px-2 landscape:px-1.5"
             onClick={() => {
               if (pendingReboundTeamId || pendingAssistTeamId || pendingFreeThrow || isDisqualified) return
               setSelectedPlayerId(player.id)
@@ -2991,7 +2993,7 @@ export default function PlanillaPage() {
                   >
                     {leftTeam.name}
                   </div>
-                  <div className="flex-1 overflow-auto p-2 space-y-2">
+                  <div className="flex-1 overflow-auto p-2 landscape:p-1 space-y-2 landscape:space-y-1">
                     {leftVisiblePlayers.map((player) => (
                       <PlayerButton key={player.id} player={player} teamSide={leftTeamSide} />
                     ))}
@@ -3231,7 +3233,7 @@ export default function PlanillaPage() {
                   >
                     {rightTeam.name}
                   </div>
-                  <div className="flex-1 overflow-auto p-2 space-y-2">
+                  <div className="flex-1 overflow-auto p-2 landscape:p-1 space-y-2 landscape:space-y-1">
                     {rightVisiblePlayers.map((player) => (
                       <PlayerButton key={player.id} player={player} teamSide={rightTeamSide} />
                     ))}
