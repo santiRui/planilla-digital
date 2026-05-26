@@ -36,6 +36,7 @@ type LeaderRow = {
   jerseyNumber: number | null
   firstName: string
   lastName: string
+  teamName: string
 }
 
 type LeadersResponse = {
@@ -198,6 +199,7 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                         <TableRow>
                           <TableHead className="w-12 text-center">#</TableHead>
                           <TableHead>Jugador</TableHead>
+                          <TableHead>Equipo</TableHead>
                           <TableHead className="text-center">PJ</TableHead>
                           <TableHead className="text-center">PTS</TableHead>
                         </TableRow>
@@ -227,6 +229,11 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                                       {player.firstName} {player.lastName}
                                     </p>
                                   </div>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm">{player.teamName}</span>
                                 </div>
                               </TableCell>
                               <TableCell className="text-center">{player.games}</TableCell>
@@ -262,6 +269,7 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                         <TableRow>
                           <TableHead className="w-12 text-center">#</TableHead>
                           <TableHead>Jugador</TableHead>
+                          <TableHead>Equipo</TableHead>
                           <TableHead className="text-center">PJ</TableHead>
                           <TableHead className="text-center">AST</TableHead>
                         </TableRow>
@@ -283,6 +291,9 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                                   </p>
                                 </div>
                               </div>
+                            </TableCell>
+                            <TableCell>
+                              <span className="text-sm">{player.teamName}</span>
                             </TableCell>
                             <TableCell className="text-center">{player.games}</TableCell>
                             <TableCell className="text-center font-bold text-lg">{player.assists}</TableCell>
@@ -316,6 +327,7 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                         <TableRow>
                           <TableHead className="w-12 text-center">#</TableHead>
                           <TableHead>Jugador</TableHead>
+                          <TableHead>Equipo</TableHead>
                           <TableHead className="text-center">PJ</TableHead>
                           <TableHead className="text-center">REB</TableHead>
                         </TableRow>
@@ -335,6 +347,9 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                                   </p>
                                 </div>
                               </div>
+                            </TableCell>
+                            <TableCell>
+                              <span className="text-sm">{player.teamName}</span>
                             </TableCell>
                             <TableCell className="text-center">{player.games}</TableCell>
                             <TableCell className="text-center font-bold text-lg">{player.rebounds}</TableCell>
@@ -368,6 +383,7 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                         <TableRow>
                           <TableHead className="w-12 text-center">#</TableHead>
                           <TableHead>Jugador</TableHead>
+                          <TableHead>Equipo</TableHead>
                           <TableHead className="text-center">PJ</TableHead>
                           <TableHead className="text-center">ROB</TableHead>
                         </TableRow>
@@ -387,6 +403,9 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                                   </p>
                                 </div>
                               </div>
+                            </TableCell>
+                            <TableCell>
+                              <span className="text-sm">{player.teamName}</span>
                             </TableCell>
                             <TableCell className="text-center">{player.games}</TableCell>
                             <TableCell className="text-center font-bold text-lg">{player.steals}</TableCell>
@@ -420,6 +439,7 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                         <TableRow>
                           <TableHead className="w-12 text-center">#</TableHead>
                           <TableHead>Jugador</TableHead>
+                          <TableHead>Equipo</TableHead>
                           <TableHead className="text-center">PJ</TableHead>
                           <TableHead className="text-center">TAP</TableHead>
                         </TableRow>
@@ -439,6 +459,9 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                                   </p>
                                 </div>
                               </div>
+                            </TableCell>
+                            <TableCell>
+                              <span className="text-sm">{player.teamName}</span>
                             </TableCell>
                             <TableCell className="text-center">{player.games}</TableCell>
                             <TableCell className="text-center font-bold text-lg">{player.blocks}</TableCell>
@@ -472,6 +495,7 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                         <TableRow>
                           <TableHead className="w-12 text-center">#</TableHead>
                           <TableHead>Jugador</TableHead>
+                          <TableHead>Equipo</TableHead>
                           <TableHead className="text-center">PJ</TableHead>
                           <TableHead className="text-center">FR</TableHead>
                         </TableRow>
@@ -491,6 +515,9 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                                   </p>
                                 </div>
                               </div>
+                            </TableCell>
+                            <TableCell>
+                              <span className="text-sm">{player.teamName}</span>
                             </TableCell>
                             <TableCell className="text-center">{player.games}</TableCell>
                             <TableCell className="text-center font-bold text-lg">{player.foulsReceived}</TableCell>

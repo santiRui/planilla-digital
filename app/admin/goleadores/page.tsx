@@ -282,6 +282,7 @@ type LeaderRow = {
   jerseyNumber: number | null
   firstName: string
   lastName: string
+  teamName: string
 }
 
 type LeadersResponse = {
@@ -328,6 +329,7 @@ function LeadersTable({
                   <TableHead className="w-10 text-center">#</TableHead>
                   <TableHead className="w-14 text-center">N°</TableHead>
                   <TableHead>Jugador</TableHead>
+                  <TableHead>Equipo</TableHead>
                   {extraColumns &&
                     extraColumns(safeRows[0]).map((col) => (
                       <TableHead key={col.label} className="text-center">
@@ -343,6 +345,7 @@ function LeadersTable({
                     <TableCell className="text-center font-medium">{index + 1}</TableCell>
                     <TableCell className="text-center">{row.jerseyNumber ?? "-"}</TableCell>
                     <TableCell>{`${row.firstName} ${row.lastName}`}</TableCell>
+                    <TableCell>{row.teamName}</TableCell>
                     {extraColumns &&
                       extraColumns(row).map((col) => (
                         <TableCell key={col.label} className="text-center">

@@ -54,12 +54,30 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
     const { data: leaderRows, error: leadersError } = await admin
       .from("tournament_player_leaders")
       .select(
-        "tournament_id, player_id, games, points, rebounds, assists, steals, blocks, fouls_received, players(id, first_name, last_name, jersey_number)",
+        "tournament_id, player_id, games, points, rebounds, assists, steals, blocks, fouls_received, players(id, team_id, first_name, last_name, jersey_number)",
       )
       .eq("tournament_id", tournamentId)
 
     if (leadersError) {
       return NextResponse.json({ error: leadersError.message }, { status: 400 })
+    }
+
+    const teamIds = Array.from(
+      new Set((leaderRows ?? []).map((r: any) => String(r.players?.team_id ?? "")).filter(Boolean)),
+    ) as string[]
+
+    const { data: teams, error: teamsError } = await admin
+      .from("teams")
+      .select("id, name")
+      .in("id", teamIds.length ? teamIds : ["__none__"])
+
+    if (teamsError) {
+      return NextResponse.json({ error: teamsError.message }, { status: 400 })
+    }
+
+    const teamById = new Map<string, string>()
+    for (const t of (teams ?? []) as any[]) {
+      teamById.set(String(t.id), String(t.name ?? ""))
     }
 
     const asArray = (leaderRows ?? []).map((r: any) => ({
@@ -74,6 +92,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
       jerseyNumber: (r.players?.jersey_number as number | null) ?? null,
       firstName: String(r.players?.first_name ?? ""),
       lastName: String(r.players?.last_name ?? ""),
+      teamName: teamById.get(String(r.players?.team_id ?? "")) ?? "",
     }))
 
     if (debugPlayerId) {
