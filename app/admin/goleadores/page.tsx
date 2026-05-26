@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser"
-import { Trophy, Target, ArrowLeftRight, ArrowUpCircle, Shield, Hand } from "lucide-react"
+import { Trophy, ArrowLeftRight, ArrowUpCircle, Shield, Hand } from "lucide-react"
 
 export default function GoleadoresPage() {
   const supabase = useMemo(() => createSupabaseBrowserClient(), [])
@@ -163,10 +163,6 @@ export default function GoleadoresPage() {
               <Trophy className="h-4 w-4" />
               Puntos
             </TabsTrigger>
-            <TabsTrigger value="threes" className="flex items-center gap-2">
-              <Target className="h-4 w-4" />
-              Triples
-            </TabsTrigger>
             <TabsTrigger value="assists" className="flex items-center gap-2">
               <ArrowLeftRight className="h-4 w-4" />
               Asistencias
@@ -183,6 +179,9 @@ export default function GoleadoresPage() {
               <Hand className="h-4 w-4" />
               Tapas
             </TabsTrigger>
+            <TabsTrigger value="foulsReceived" className="flex items-center gap-2">
+              FR
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="points">
@@ -197,23 +196,6 @@ export default function GoleadoresPage() {
                 {
                   label: "PPP",
                   value: row.games ? (row.points / row.games).toFixed(1) : "-",
-                },
-              ]}
-            />
-          </TabsContent>
-
-          <TabsContent value="threes">
-            <LeadersTable
-              title="Tripleros del torneo"
-              icon={<Target className="h-5 w-5 text-blue-500" />}
-              rows={leaders.topThreePointers}
-              valueKey="t3Made"
-              valueLabel="3PM"
-              extraColumns={(row) => [
-                { label: "3PA", value: row.t3Att },
-                {
-                  label: "%3P",
-                  value: row.t3Att ? `${Math.round((row.t3Made / row.t3Att) * 100)}%` : "-",
                 },
               ]}
             />
@@ -262,6 +244,17 @@ export default function GoleadoresPage() {
               extraColumns={(row) => [{ label: "PJ", value: row.games }]}
             />
           </TabsContent>
+
+          <TabsContent value="foulsReceived">
+            <LeadersTable
+              title="Faltas recibidas del torneo"
+              icon={<span className="text-sm font-semibold">FR</span>}
+              rows={leaders.topFoulsReceived}
+              valueKey="foulsReceived"
+              valueLabel="FR"
+              extraColumns={(row) => [{ label: "PJ", value: row.games }]}
+            />
+          </TabsContent>
         </Tabs>
       )}
     </div>
@@ -279,28 +272,25 @@ type Tournament = {
 
 type LeaderRow = {
   playerId: string
-  teamId: string
   games: number
   points: number
-  t3Made: number
-  t3Att: number
   assists: number
   rebounds: number
   steals: number
   blocks: number
+  foulsReceived: number
   jerseyNumber: number | null
   firstName: string
   lastName: string
-  teamName: string
 }
 
 type LeadersResponse = {
   topScorers: LeaderRow[]
-  topThreePointers: LeaderRow[]
-  topAssistants: LeaderRow[]
   topRebounders: LeaderRow[]
+  topAssistants: LeaderRow[]
   topStealers: LeaderRow[]
   topBlockers: LeaderRow[]
+  topFoulsReceived: LeaderRow[]
 }
 
 function LeadersTable({
@@ -338,7 +328,6 @@ function LeadersTable({
                   <TableHead className="w-10 text-center">#</TableHead>
                   <TableHead className="w-14 text-center">N°</TableHead>
                   <TableHead>Jugador</TableHead>
-                  <TableHead>Equipo</TableHead>
                   {extraColumns &&
                     extraColumns(safeRows[0]).map((col) => (
                       <TableHead key={col.label} className="text-center">
@@ -350,11 +339,10 @@ function LeadersTable({
               </TableHeader>
               <TableBody>
                 {safeRows.map((row, index) => (
-                  <TableRow key={`${row.playerId}-${row.teamId}`}>
+                  <TableRow key={row.playerId}>
                     <TableCell className="text-center font-medium">{index + 1}</TableCell>
                     <TableCell className="text-center">{row.jerseyNumber ?? "-"}</TableCell>
                     <TableCell>{`${row.firstName} ${row.lastName}`}</TableCell>
-                    <TableCell>{row.teamName}</TableCell>
                     {extraColumns &&
                       extraColumns(row).map((col) => (
                         <TableCell key={col.label} className="text-center">

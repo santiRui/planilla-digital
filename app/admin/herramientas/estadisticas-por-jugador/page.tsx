@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser"
 
-type Tournament = { id: string; name: string; year: number | null }
+type Tournament = { id: string; name: string; year: number | null; categoryId: string | null }
 
 type Team = { id: string; name: string }
 
@@ -92,7 +92,7 @@ export default function EstadisticasPorJugadorPage() {
     const run = async () => {
       const { data, error } = await supabase
         .from("tournaments")
-        .select("id, name, year")
+        .select("id, name, year, category_id")
         .order("created_at", { ascending: false })
 
       if (error) {
@@ -101,7 +101,14 @@ export default function EstadisticasPorJugadorPage() {
         return
       }
 
-      setTournaments((data ?? []) as Tournament[])
+      setTournaments(
+        (data ?? []).map((t: any) => ({
+          id: String(t.id),
+          name: String(t.name ?? ""),
+          year: (t.year as number | null) ?? null,
+          categoryId: (t.category_id as string | null) ?? null,
+        })) as Tournament[],
+      )
     }
 
     void run()
@@ -117,23 +124,51 @@ export default function EstadisticasPorJugadorPage() {
 
       if (!selectedTournamentId) return
 
-      const { data, error } = await supabase
-        .from("teams")
-        .select("id, name")
-        .eq("tournament_id", selectedTournamentId)
-        .order("name", { ascending: true })
+      setError(null)
 
-      if (error) {
+      const tournament = tournaments.find((t) => t.id === selectedTournamentId)
+      const categoryId = tournament?.categoryId
+
+      if (!categoryId) {
         setTeams([])
-        setError(error.message)
         return
       }
 
-      setTeams((data ?? []) as Team[])
+      const { data: teamCategoryRows, error: teamCategoryError } = await supabase
+        .from("team_categories")
+        .select("team_id")
+        .eq("category_id", categoryId)
+        .order("created_at", { ascending: true })
+
+      if (teamCategoryError) {
+        setTeams([])
+        setError(teamCategoryError.message)
+        return
+      }
+
+      const teamIds = Array.from(new Set((teamCategoryRows ?? []).map((r: any) => r.team_id).filter(Boolean))) as string[]
+      if (teamIds.length === 0) {
+        setTeams([])
+        return
+      }
+
+      const { data: teamsData, error: teamsError } = await supabase
+        .from("teams")
+        .select("id, name")
+        .in("id", teamIds)
+        .order("name", { ascending: true })
+
+      if (teamsError) {
+        setTeams([])
+        setError(teamsError.message)
+        return
+      }
+
+      setTeams((teamsData ?? []).map((t: any) => ({ id: String(t.id), name: String(t.name ?? "") })))
     }
 
     void run()
-  }, [selectedTournamentId, supabase])
+  }, [selectedTournamentId, supabase, tournaments])
 
   useEffect(() => {
     const run = async () => {
@@ -231,6 +266,23 @@ export default function EstadisticasPorJugadorPage() {
 
     return base
   }, [rowsWithMatch])
+
+  const formatMinutes = (value: number | string | null) => {
+    if (value == null) return "-"
+    if (typeof value === "string") {
+      const raw = value.trim()
+      if (!raw) return "-"
+      if (/^\d{1,3}:\d{2}$/.test(raw)) return raw
+    }
+
+    const asNum = typeof value === "number" ? value : Number(String(value))
+    if (!Number.isFinite(asNum)) return String(value)
+
+    const totalSeconds = Math.max(0, Math.round(asNum * 60))
+    const mm = Math.floor(totalSeconds / 60)
+    const ss = totalSeconds % 60
+    return `${mm}:${ss.toString().padStart(2, "0")}`
+  }
 
   async function load() {
     try {
@@ -363,6 +415,7 @@ export default function EstadisticasPorJugadorPage() {
                 Totales del torneo{selectedTournament ? `: ${selectedTournament.name}` : ""}
                 {selectedTeam ? ` | ${selectedTeam.name}` : ""}
                 {selectedPlayer ? ` | ${selectedPlayer.lastName} ${selectedPlayer.firstName}` : ""}
+                {selectedPlayer ? ` | ${selectedPlayer.id}` : ""}
               </CardTitle>
             </CardHeader>
             <CardContent className="grid gap-3 md:grid-cols-4 text-sm">
@@ -419,7 +472,7 @@ export default function EstadisticasPorJugadorPage() {
                 <TableBody>
                   {rowsWithMatch.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={15} className="text-center py-8 text-muted-foreground">
+                      <TableCell colSpan={14} className="text-center py-8 text-muted-foreground">
                         Seleccioná torneo, equipo y jugadora y tocá "Ver partidos".
                       </TableCell>
                     </TableRow>
@@ -438,7 +491,7 @@ export default function EstadisticasPorJugadorPage() {
                           </TableCell>
                           <TableCell className="text-center">{m?.status ?? "-"}</TableCell>
                           <TableCell className="text-center">{r.source}</TableCell>
-                          <TableCell className="text-center">{r.minutes ?? "-"}</TableCell>
+                          <TableCell className="text-center">{formatMinutes(r.minutes)}</TableCell>
                           <TableCell className="text-center font-semibold">{r.points ?? 0}</TableCell>
                           <TableCell className="text-center">
                             {r.t1Made ?? 0}/{r.t1Att ?? 0}

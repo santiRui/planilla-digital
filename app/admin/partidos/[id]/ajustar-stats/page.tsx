@@ -188,6 +188,7 @@ export default function AdjustMatchStatsPage() {
                 <tr className="border-b text-xs text-muted-foreground">
                   <th className="px-2 py-1 text-left">#</th>
                   <th className="px-2 py-1 text-left">Jugador</th>
+                  <th className="px-2 py-1 text-left">ID</th>
                   <th className="px-2 py-1 text-right">Min</th>
                   <th className="px-2 py-1 text-right">Pts</th>
                 </tr>
@@ -199,6 +200,7 @@ export default function AdjustMatchStatsPage() {
                       {s.jerseyNumber ?? ""}
                     </td>
                     <td className="px-2 py-1 text-left whitespace-nowrap">{s.playerName}</td>
+                    <td className="px-2 py-1 text-left font-mono text-xs text-muted-foreground break-all">{s.playerId}</td>
                     <td className="px-2 py-1 text-right">
                       {s.minutes != null ? s.minutes.toFixed(2) : ""}
                     </td>
@@ -213,7 +215,7 @@ export default function AdjustMatchStatsPage() {
                   </tr>
                 ))}
                 <tr className="font-semibold">
-                  <td className="px-2 py-1" colSpan={3}>
+                  <td className="px-2 py-1" colSpan={4}>
                     Total
                   </td>
                   <td className="px-2 py-1 text-right">{homeTotalPoints}</td>
@@ -237,6 +239,7 @@ export default function AdjustMatchStatsPage() {
                 <tr className="border-b text-xs text-muted-foreground">
                   <th className="px-2 py-1 text-left">#</th>
                   <th className="px-2 py-1 text-left">Jugador</th>
+                  <th className="px-2 py-1 text-left">ID</th>
                   <th className="px-2 py-1 text-right">Min</th>
                   <th className="px-2 py-1 text-right">Pts</th>
                 </tr>
@@ -248,6 +251,7 @@ export default function AdjustMatchStatsPage() {
                       {s.jerseyNumber ?? ""}
                     </td>
                     <td className="px-2 py-1 text-left whitespace-nowrap">{s.playerName}</td>
+                    <td className="px-2 py-1 text-left font-mono text-xs text-muted-foreground break-all">{s.playerId}</td>
                     <td className="px-2 py-1 text-right">
                       {s.minutes != null ? s.minutes.toFixed(2) : ""}
                     </td>
@@ -262,7 +266,7 @@ export default function AdjustMatchStatsPage() {
                   </tr>
                 ))}
                 <tr className="font-semibold">
-                  <td className="px-2 py-1" colSpan={3}>
+                  <td className="px-2 py-1" colSpan={4}>
                     Total
                   </td>
                   <td className="px-2 py-1 text-right">{awayTotalPoints}</td>

@@ -15,7 +15,6 @@ import {
   BarChart3,
   Hand,
   Shield,
-  Target,
   Trophy,
 } from "lucide-react"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -27,28 +26,25 @@ interface EstadisticasPageProps {
 
 type LeaderRow = {
   playerId: string
-  teamId: string
   games: number
   points: number
-  t3Made: number
-  t3Att: number
   assists: number
   rebounds: number
   steals: number
   blocks: number
+  foulsReceived: number
   jerseyNumber: number | null
   firstName: string
   lastName: string
-  teamName: string
 }
 
 type LeadersResponse = {
   topScorers: LeaderRow[]
-  topThreePointers: LeaderRow[]
-  topAssistants: LeaderRow[]
   topRebounders: LeaderRow[]
+  topAssistants: LeaderRow[]
   topStealers: LeaderRow[]
   topBlockers: LeaderRow[]
+  topFoulsReceived: LeaderRow[]
 }
 
 export default function EstadisticasPage({ params }: EstadisticasPageProps) {
@@ -105,12 +101,12 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
     )
   }
 
-  const topScorers = useMemo(() => (leaders?.topScorers ?? []).slice(0, 20), [leaders])
-  const topThreePointers = useMemo(() => (leaders?.topThreePointers ?? []).slice(0, 20), [leaders])
-  const topAssistants = useMemo(() => (leaders?.topAssistants ?? []).slice(0, 20), [leaders])
-  const topRebounders = useMemo(() => (leaders?.topRebounders ?? []).slice(0, 20), [leaders])
-  const topStealers = useMemo(() => (leaders?.topStealers ?? []).slice(0, 20), [leaders])
-  const topBlockers = useMemo(() => (leaders?.topBlockers ?? []).slice(0, 20), [leaders])
+  const topScorers = useMemo(() => (leaders?.topScorers ?? []).slice(0, 10), [leaders])
+  const topRebounders = useMemo(() => (leaders?.topRebounders ?? []).slice(0, 10), [leaders])
+  const topAssistants = useMemo(() => (leaders?.topAssistants ?? []).slice(0, 10), [leaders])
+  const topStealers = useMemo(() => (leaders?.topStealers ?? []).slice(0, 10), [leaders])
+  const topBlockers = useMemo(() => (leaders?.topBlockers ?? []).slice(0, 10), [leaders])
+  const topFoulsReceived = useMemo(() => (leaders?.topFoulsReceived ?? []).slice(0, 10), [leaders])
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -161,10 +157,6 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
               <Trophy className="h-4 w-4" />
               Puntos
             </TabsTrigger>
-            <TabsTrigger value="threes" className="gap-2">
-              <Target className="h-4 w-4" />
-              Triples
-            </TabsTrigger>
             <TabsTrigger value="assists" className="gap-2">
               <ArrowLeftRight className="h-4 w-4" />
               Asist.
@@ -180,6 +172,9 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
             <TabsTrigger value="blocks" className="gap-2">
               <Hand className="h-4 w-4" />
               Tapas
+            </TabsTrigger>
+            <TabsTrigger value="foulsReceived" className="gap-2">
+              FR
             </TabsTrigger>
           </TabsList>
 
@@ -203,7 +198,6 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                         <TableRow>
                           <TableHead className="w-12 text-center">#</TableHead>
                           <TableHead>Jugador</TableHead>
-                          <TableHead>Equipo</TableHead>
                           <TableHead className="text-center">PJ</TableHead>
                           <TableHead className="text-center">PTS</TableHead>
                         </TableRow>
@@ -235,85 +229,8 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                                   </div>
                                 </div>
                               </TableCell>
-                              <TableCell>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-sm">{player.teamName}</span>
-                                </div>
-                              </TableCell>
                               <TableCell className="text-center">{player.games}</TableCell>
                               <TableCell className="text-center font-bold text-lg">{player.points}</TableCell>
-                            </TableRow>
-                          )
-                        })}
-                      </TableBody>
-                    </Table>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="threes">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Target className="h-5 w-5 text-blue-500" />
-                  Tripleras del Torneo
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
-                {leadersLoading ? (
-                  <div className="py-10 text-center text-muted-foreground">Cargando estadísticas...</div>
-                ) : leadersError ? (
-                  <div className="py-10 text-center text-destructive">{leadersError}</div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead className="w-12 text-center">#</TableHead>
-                          <TableHead>Jugador</TableHead>
-                          <TableHead>Equipo</TableHead>
-                          <TableHead className="text-center">PJ</TableHead>
-                          <TableHead className="text-center">3PM</TableHead>
-                          <TableHead className="text-center">3PA</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {topThreePointers.map((player, index) => {
-                          return (
-                            <TableRow key={player.playerId}>
-                              <TableCell className="text-center">
-                                {index === 0 ? (
-                                  <Badge className="bg-yellow-500 text-white">1</Badge>
-                                ) : index === 1 ? (
-                                  <Badge className="bg-gray-400 text-white">2</Badge>
-                                ) : index === 2 ? (
-                                  <Badge className="bg-amber-700 text-white">3</Badge>
-                                ) : (
-                                  <span className="text-muted-foreground">{index + 1}</span>
-                                )}
-                              </TableCell>
-                              <TableCell>
-                                <div className="flex items-center gap-3">
-                                  <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center font-bold text-sm">
-                                    {player.jerseyNumber ?? "-"}
-                                  </div>
-                                  <div>
-                                    <p className="font-medium">
-                                      {player.firstName} {player.lastName}
-                                    </p>
-                                  </div>
-                                </div>
-                              </TableCell>
-                              <TableCell>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-sm">{player.teamName}</span>
-                                </div>
-                              </TableCell>
-                              <TableCell className="text-center">{player.games}</TableCell>
-                              <TableCell className="text-center font-bold text-lg">{player.t3Made}</TableCell>
-                              <TableCell className="text-center">{player.t3Att}</TableCell>
                             </TableRow>
                           )
                         })}
@@ -345,7 +262,6 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                         <TableRow>
                           <TableHead className="w-12 text-center">#</TableHead>
                           <TableHead>Jugador</TableHead>
-                          <TableHead>Equipo</TableHead>
                           <TableHead className="text-center">PJ</TableHead>
                           <TableHead className="text-center">AST</TableHead>
                         </TableRow>
@@ -367,9 +283,6 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                                   </p>
                                 </div>
                               </div>
-                            </TableCell>
-                            <TableCell>
-                              <span className="text-sm">{player.teamName}</span>
                             </TableCell>
                             <TableCell className="text-center">{player.games}</TableCell>
                             <TableCell className="text-center font-bold text-lg">{player.assists}</TableCell>
@@ -403,7 +316,6 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                         <TableRow>
                           <TableHead className="w-12 text-center">#</TableHead>
                           <TableHead>Jugador</TableHead>
-                          <TableHead>Equipo</TableHead>
                           <TableHead className="text-center">PJ</TableHead>
                           <TableHead className="text-center">REB</TableHead>
                         </TableRow>
@@ -423,9 +335,6 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                                   </p>
                                 </div>
                               </div>
-                            </TableCell>
-                            <TableCell>
-                              <span className="text-sm">{player.teamName}</span>
                             </TableCell>
                             <TableCell className="text-center">{player.games}</TableCell>
                             <TableCell className="text-center font-bold text-lg">{player.rebounds}</TableCell>
@@ -459,7 +368,6 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                         <TableRow>
                           <TableHead className="w-12 text-center">#</TableHead>
                           <TableHead>Jugador</TableHead>
-                          <TableHead>Equipo</TableHead>
                           <TableHead className="text-center">PJ</TableHead>
                           <TableHead className="text-center">ROB</TableHead>
                         </TableRow>
@@ -479,9 +387,6 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                                   </p>
                                 </div>
                               </div>
-                            </TableCell>
-                            <TableCell>
-                              <span className="text-sm">{player.teamName}</span>
                             </TableCell>
                             <TableCell className="text-center">{player.games}</TableCell>
                             <TableCell className="text-center font-bold text-lg">{player.steals}</TableCell>
@@ -515,7 +420,6 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                         <TableRow>
                           <TableHead className="w-12 text-center">#</TableHead>
                           <TableHead>Jugador</TableHead>
-                          <TableHead>Equipo</TableHead>
                           <TableHead className="text-center">PJ</TableHead>
                           <TableHead className="text-center">TAP</TableHead>
                         </TableRow>
@@ -536,11 +440,60 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                                 </div>
                               </div>
                             </TableCell>
-                            <TableCell>
-                              <span className="text-sm">{player.teamName}</span>
-                            </TableCell>
                             <TableCell className="text-center">{player.games}</TableCell>
                             <TableCell className="text-center font-bold text-lg">{player.blocks}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="foulsReceived">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <span className="font-semibold">FR</span>
+                  Faltas recibidas del Torneo
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                {leadersLoading ? (
+                  <div className="py-10 text-center text-muted-foreground">Cargando estadísticas...</div>
+                ) : leadersError ? (
+                  <div className="py-10 text-center text-destructive">{leadersError}</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-12 text-center">#</TableHead>
+                          <TableHead>Jugador</TableHead>
+                          <TableHead className="text-center">PJ</TableHead>
+                          <TableHead className="text-center">FR</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {topFoulsReceived.map((player: LeaderRow, index: number) => (
+                          <TableRow key={player.playerId}>
+                            <TableCell className="text-center">{index + 1}</TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-3">
+                                <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center font-bold text-sm">
+                                  {player.jerseyNumber ?? "-"}
+                                </div>
+                                <div>
+                                  <p className="font-medium">
+                                    {player.firstName} {player.lastName}
+                                  </p>
+                                </div>
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-center">{player.games}</TableCell>
+                            <TableCell className="text-center font-bold text-lg">{player.foulsReceived}</TableCell>
                           </TableRow>
                         ))}
                       </TableBody>

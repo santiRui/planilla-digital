@@ -795,6 +795,32 @@ create policy "match_events_admin_delete" on public.match_events
 for delete to authenticated
 using (public.is_admin(auth.uid()));
 
+create table if not exists public.tournament_player_leaders (
+  id uuid primary key default gen_random_uuid(),
+  tournament_id uuid not null references public.tournaments(id) on delete cascade,
+  player_id uuid not null references public.players(id) on delete cascade,
+  games integer not null default 0,
+  points integer not null default 0,
+  rebounds integer not null default 0,
+  assists integer not null default 0,
+  steals integer not null default 0,
+  blocks integer not null default 0,
+  fouls_received integer not null default 0,
+  updated_at timestamptz not null default now(),
+  unique (tournament_id, player_id)
+);
+
+alter table public.tournament_player_leaders enable row level security;
+
+create policy "tournament_player_leaders_public_select" on public.tournament_player_leaders
+for select to anon, authenticated
+using (true);
+
+create policy "tournament_player_leaders_admin_write" on public.tournament_player_leaders
+for all to authenticated
+using (public.is_admin(auth.uid()))
+with check (public.is_admin(auth.uid()));
+
 create policy "team_standings_public_select" on public.team_standings
 for select to anon, authenticated
 using (true);

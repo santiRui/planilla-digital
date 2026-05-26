@@ -102,6 +102,95 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       return NextResponse.json({ error: error.message }, { status: 400 })
     }
 
+    // Recalcular contenedores por torneo/jugadora (goleadores persistidos)
+    const admin = auth.adminClient
+
+    const { data: matchRow, error: matchError } = await admin
+      .from("matches")
+      .select("id, tournament_id")
+      .eq("id", matchId)
+      .maybeSingle()
+
+    if (matchError || !matchRow?.tournament_id) {
+      return NextResponse.json({ ok: true, inserted: rows.length })
+    }
+
+    const tournamentId = String(matchRow.tournament_id)
+    const affectedPlayerIds = Array.from(new Set(rows.map((r) => String(r.player_id)).filter(Boolean)))
+
+    if (affectedPlayerIds.length > 0) {
+      const { data: tournamentMatches, error: tournamentMatchesError } = await admin
+        .from("matches")
+        .select("id")
+        .eq("tournament_id", tournamentId)
+
+      if (!tournamentMatchesError) {
+        const tournamentMatchIds = (tournamentMatches ?? []).map((m: any) => String(m.id)).filter(Boolean)
+
+        const { data: allStatsRows, error: allStatsError } = await admin
+          .from("match_player_stats_planilla")
+          .select("match_id, player_id, points, rebounds, assists, steals, blocks_committed, fouls_received")
+          .in("match_id", tournamentMatchIds.length ? tournamentMatchIds : ["__none__"])
+          .in("player_id", affectedPlayerIds)
+
+        if (!allStatsError && Array.isArray(allStatsRows) && allStatsRows.length > 0) {
+          const byPlayer = new Map<
+            string,
+            {
+              matchIds: Set<string>
+              points: number
+              rebounds: number
+              assists: number
+              steals: number
+              blocks: number
+              foulsReceived: number
+            }
+          >()
+
+          for (const r of allStatsRows as any[]) {
+            const pid = String(r.player_id ?? "")
+            if (!pid) continue
+            const current = byPlayer.get(pid) ?? {
+              matchIds: new Set<string>(),
+              points: 0,
+              rebounds: 0,
+              assists: 0,
+              steals: 0,
+              blocks: 0,
+              foulsReceived: 0,
+            }
+            current.matchIds.add(String(r.match_id))
+            current.points += Number(r.points ?? 0)
+            current.rebounds += Number(r.rebounds ?? 0)
+            current.assists += Number(r.assists ?? 0)
+            current.steals += Number(r.steals ?? 0)
+            current.blocks += Number(r.blocks_committed ?? 0)
+            current.foulsReceived += Number(r.fouls_received ?? 0)
+            byPlayer.set(pid, current)
+          }
+
+          const leaderRows = Array.from(byPlayer.entries()).map(([playerId, agg]) => ({
+            tournament_id: tournamentId,
+            player_id: playerId,
+            games: agg.matchIds.size,
+            points: agg.points,
+            rebounds: agg.rebounds,
+            assists: agg.assists,
+            steals: agg.steals,
+            blocks: agg.blocks,
+            fouls_received: agg.foulsReceived,
+            updated_at: new Date().toISOString(),
+          }))
+
+          if (leaderRows.length > 0) {
+            await admin
+              .from("tournament_player_leaders")
+              .upsert(leaderRows, { onConflict: "tournament_id,player_id" })
+          }
+        }
+      }
+    }
+
     return NextResponse.json({ ok: true, inserted: rows.length })
   } catch (e) {
     const message = e instanceof Error ? e.message : "Error interno"
