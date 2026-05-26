@@ -1,24 +1,96 @@
 "use client"
 
-import { use } from "react"
+import { use, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Activity, ArrowLeft, BarChart3, Trophy, Target, TrendingUp } from "lucide-react"
+import {
+  Activity,
+  ArrowLeft,
+  ArrowLeftRight,
+  ArrowUpCircle,
+  BarChart3,
+  Hand,
+  Shield,
+  Target,
+  Trophy,
+} from "lucide-react"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { getChampionshipById, getTeamById, getTeamsByChampionship, players } from "@/lib/mock-data"
+import { getChampionshipById } from "@/lib/mock-data"
 
 interface EstadisticasPageProps {
   params: Promise<{ id: string }>
+}
+
+type LeaderRow = {
+  playerId: string
+  teamId: string
+  games: number
+  points: number
+  t3Made: number
+  t3Att: number
+  assists: number
+  rebounds: number
+  steals: number
+  blocks: number
+  jerseyNumber: number | null
+  firstName: string
+  lastName: string
+  teamName: string
+}
+
+type LeadersResponse = {
+  topScorers: LeaderRow[]
+  topThreePointers: LeaderRow[]
+  topAssistants: LeaderRow[]
+  topRebounders: LeaderRow[]
+  topStealers: LeaderRow[]
+  topBlockers: LeaderRow[]
 }
 
 export default function EstadisticasPage({ params }: EstadisticasPageProps) {
   const { id } = use(params)
   const router = useRouter()
   const championship = getChampionshipById(id)
+
+  const [leaders, setLeaders] = useState<LeadersResponse | null>(null)
+  const [leadersError, setLeadersError] = useState<string | null>(null)
+  const [leadersLoading, setLeadersLoading] = useState(false)
+
+  useEffect(() => {
+    let canceled = false
+    const run = async () => {
+      setLeadersLoading(true)
+      setLeadersError(null)
+      try {
+        const res = await fetch(`/api/public/tournaments/${id}/leaders`, { cache: "no-store" })
+        const json = (await res.json().catch(() => null)) as any
+        if (!res.ok) {
+          if (canceled) return
+          setLeaders(null)
+          setLeadersError(json?.error ?? "No se pudieron cargar las estadísticas")
+          setLeadersLoading(false)
+          return
+        }
+        if (canceled) return
+        setLeaders(json as LeadersResponse)
+        setLeadersLoading(false)
+      } catch (e) {
+        if (canceled) return
+        setLeaders(null)
+        setLeadersError(e instanceof Error ? e.message : "Error desconocido")
+        setLeadersLoading(false)
+      }
+    }
+
+    if (id) void run()
+    return () => {
+      canceled = true
+    }
+  }, [id])
 
   if (!championship) {
     return (
@@ -33,24 +105,12 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
     )
   }
 
-  const teams = getTeamsByChampionship(id)
-  const teamIds = teams.map((t) => t.id)
-  const championshipPlayers = players.filter((p) => teamIds.includes(p.teamId))
-
-  // Mock player stats (in a real app, this would come from a database)
-  const playerStats = championshipPlayers.map((player) => ({
-    ...player,
-    points: Math.floor(Math.random() * 150) + 50,
-    games: Math.floor(Math.random() * 5) + 2,
-    assists: Math.floor(Math.random() * 30) + 5,
-    rebounds: Math.floor(Math.random() * 40) + 10,
-  }))
-
-  const topScorers = [...playerStats].sort((a, b) => b.points - a.points).slice(0, 10)
-  const topPPG = [...playerStats]
-    .map((p) => ({ ...p, ppg: p.points / p.games }))
-    .sort((a, b) => b.ppg - a.ppg)
-    .slice(0, 10)
+  const topScorers = useMemo(() => (leaders?.topScorers ?? []).slice(0, 20), [leaders])
+  const topThreePointers = useMemo(() => (leaders?.topThreePointers ?? []).slice(0, 20), [leaders])
+  const topAssistants = useMemo(() => (leaders?.topAssistants ?? []).slice(0, 20), [leaders])
+  const topRebounders = useMemo(() => (leaders?.topRebounders ?? []).slice(0, 20), [leaders])
+  const topStealers = useMemo(() => (leaders?.topStealers ?? []).slice(0, 20), [leaders])
+  const topBlockers = useMemo(() => (leaders?.topBlockers ?? []).slice(0, 20), [leaders])
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -95,19 +155,35 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
 
       {/* Stats Content */}
       <main className="flex-1 mx-auto max-w-7xl w-full px-4 py-8 sm:px-6 lg:px-8">
-        <Tabs defaultValue="scorers" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-2 lg:w-auto lg:inline-grid">
-            <TabsTrigger value="scorers" className="gap-2">
-              <Target className="h-4 w-4" />
-              Goleadores
+        <Tabs defaultValue="points" className="space-y-6">
+          <TabsList className="grid w-full grid-cols-2 md:grid-cols-3 lg:w-auto lg:inline-grid lg:grid-cols-6">
+            <TabsTrigger value="points" className="gap-2">
+              <Trophy className="h-4 w-4" />
+              Puntos
             </TabsTrigger>
-            <TabsTrigger value="averages" className="gap-2">
-              <TrendingUp className="h-4 w-4" />
-              Promedios
+            <TabsTrigger value="threes" className="gap-2">
+              <Target className="h-4 w-4" />
+              Triples
+            </TabsTrigger>
+            <TabsTrigger value="assists" className="gap-2">
+              <ArrowLeftRight className="h-4 w-4" />
+              Asist.
+            </TabsTrigger>
+            <TabsTrigger value="rebounds" className="gap-2">
+              <ArrowUpCircle className="h-4 w-4" />
+              Rebotes
+            </TabsTrigger>
+            <TabsTrigger value="steals" className="gap-2">
+              <Shield className="h-4 w-4" />
+              Robos
+            </TabsTrigger>
+            <TabsTrigger value="blocks" className="gap-2">
+              <Hand className="h-4 w-4" />
+              Tapas
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="scorers">
+          <TabsContent value="points">
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -116,107 +192,174 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-12 text-center">#</TableHead>
-                        <TableHead>Jugador</TableHead>
-                        <TableHead>Equipo</TableHead>
-                        <TableHead className="text-center">PJ</TableHead>
-                        <TableHead className="text-center">PTS</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {topScorers.map((player, index) => {
-                        const team = getTeamById(player.teamId)
-                        return (
-                          <TableRow key={player.id}>
-                            <TableCell className="text-center">
-                              {index === 0 ? (
-                                <Badge className="bg-yellow-500 text-white">1</Badge>
-                              ) : index === 1 ? (
-                                <Badge className="bg-gray-400 text-white">2</Badge>
-                              ) : index === 2 ? (
-                                <Badge className="bg-amber-700 text-white">3</Badge>
-                              ) : (
-                                <span className="text-muted-foreground">{index + 1}</span>
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-3">
-                                <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center font-bold text-sm">
-                                  {player.jerseyNumber}
+                {leadersLoading ? (
+                  <div className="py-10 text-center text-muted-foreground">Cargando estadísticas...</div>
+                ) : leadersError ? (
+                  <div className="py-10 text-center text-destructive">{leadersError}</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-12 text-center">#</TableHead>
+                          <TableHead>Jugador</TableHead>
+                          <TableHead>Equipo</TableHead>
+                          <TableHead className="text-center">PJ</TableHead>
+                          <TableHead className="text-center">PTS</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {topScorers.map((player, index) => {
+                          return (
+                            <TableRow key={player.playerId}>
+                              <TableCell className="text-center">
+                                {index === 0 ? (
+                                  <Badge className="bg-yellow-500 text-white">1</Badge>
+                                ) : index === 1 ? (
+                                  <Badge className="bg-gray-400 text-white">2</Badge>
+                                ) : index === 2 ? (
+                                  <Badge className="bg-amber-700 text-white">3</Badge>
+                                ) : (
+                                  <span className="text-muted-foreground">{index + 1}</span>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-3">
+                                  <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center font-bold text-sm">
+                                    {player.jerseyNumber ?? "-"}
+                                  </div>
+                                  <div>
+                                    <p className="font-medium">
+                                      {player.firstName} {player.lastName}
+                                    </p>
+                                  </div>
                                 </div>
-                                <div>
-                                  <p className="font-medium">
-                                    {player.firstName} {player.lastName}
-                                  </p>
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm">{player.teamName}</span>
                                 </div>
-                              </div>
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex items-center gap-2">
-                                <div
-                                  className="h-4 w-4 rounded-full"
-                                  style={{ backgroundColor: team?.primaryColor || "#6b7280" }}
-                                />
-                                <span className="text-sm">{team?.club}</span>
-                              </div>
-                            </TableCell>
-                            <TableCell className="text-center">{player.games}</TableCell>
-                            <TableCell className="text-center font-bold text-lg">{player.points}</TableCell>
-                          </TableRow>
-                        )
-                      })}
-                    </TableBody>
-                  </Table>
-                </div>
+                              </TableCell>
+                              <TableCell className="text-center">{player.games}</TableCell>
+                              <TableCell className="text-center font-bold text-lg">{player.points}</TableCell>
+                            </TableRow>
+                          )
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
 
-          <TabsContent value="averages">
+          <TabsContent value="threes">
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <TrendingUp className="h-5 w-5 text-blue-500" />
-                  Mejores Promedios (PPG)
+                  <Target className="h-5 w-5 text-blue-500" />
+                  Tripleras del Torneo
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-12 text-center">#</TableHead>
-                        <TableHead>Jugador</TableHead>
-                        <TableHead>Equipo</TableHead>
-                        <TableHead className="text-center">PJ</TableHead>
-                        <TableHead className="text-center">PTS</TableHead>
-                        <TableHead className="text-center">PPG</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {topPPG.map((player, index) => {
-                        const team = getTeamById(player.teamId)
-                        return (
-                          <TableRow key={player.id}>
+                {leadersLoading ? (
+                  <div className="py-10 text-center text-muted-foreground">Cargando estadísticas...</div>
+                ) : leadersError ? (
+                  <div className="py-10 text-center text-destructive">{leadersError}</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-12 text-center">#</TableHead>
+                          <TableHead>Jugador</TableHead>
+                          <TableHead>Equipo</TableHead>
+                          <TableHead className="text-center">PJ</TableHead>
+                          <TableHead className="text-center">3PM</TableHead>
+                          <TableHead className="text-center">3PA</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {topThreePointers.map((player, index) => {
+                          return (
+                            <TableRow key={player.playerId}>
+                              <TableCell className="text-center">
+                                {index === 0 ? (
+                                  <Badge className="bg-yellow-500 text-white">1</Badge>
+                                ) : index === 1 ? (
+                                  <Badge className="bg-gray-400 text-white">2</Badge>
+                                ) : index === 2 ? (
+                                  <Badge className="bg-amber-700 text-white">3</Badge>
+                                ) : (
+                                  <span className="text-muted-foreground">{index + 1}</span>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-3">
+                                  <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center font-bold text-sm">
+                                    {player.jerseyNumber ?? "-"}
+                                  </div>
+                                  <div>
+                                    <p className="font-medium">
+                                      {player.firstName} {player.lastName}
+                                    </p>
+                                  </div>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm">{player.teamName}</span>
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-center">{player.games}</TableCell>
+                              <TableCell className="text-center font-bold text-lg">{player.t3Made}</TableCell>
+                              <TableCell className="text-center">{player.t3Att}</TableCell>
+                            </TableRow>
+                          )
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="assists">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <ArrowLeftRight className="h-5 w-5 text-green-500" />
+                  Asistidoras del Torneo
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                {leadersLoading ? (
+                  <div className="py-10 text-center text-muted-foreground">Cargando estadísticas...</div>
+                ) : leadersError ? (
+                  <div className="py-10 text-center text-destructive">{leadersError}</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-12 text-center">#</TableHead>
+                          <TableHead>Jugador</TableHead>
+                          <TableHead>Equipo</TableHead>
+                          <TableHead className="text-center">PJ</TableHead>
+                          <TableHead className="text-center">AST</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {topAssistants.map((player, index) => (
+                          <TableRow key={player.playerId}>
                             <TableCell className="text-center">
-                              {index === 0 ? (
-                                <Badge className="bg-yellow-500 text-white">1</Badge>
-                              ) : index === 1 ? (
-                                <Badge className="bg-gray-400 text-white">2</Badge>
-                              ) : index === 2 ? (
-                                <Badge className="bg-amber-700 text-white">3</Badge>
-                              ) : (
-                                <span className="text-muted-foreground">{index + 1}</span>
-                              )}
+                              {index + 1}
                             </TableCell>
                             <TableCell>
                               <div className="flex items-center gap-3">
                                 <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center font-bold text-sm">
-                                  {player.jerseyNumber}
+                                  {player.jerseyNumber ?? "-"}
                                 </div>
                                 <div>
                                   <p className="font-medium">
@@ -226,25 +369,184 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                               </div>
                             </TableCell>
                             <TableCell>
-                              <div className="flex items-center gap-2">
-                                <div
-                                  className="h-4 w-4 rounded-full"
-                                  style={{ backgroundColor: team?.primaryColor || "#6b7280" }}
-                                />
-                                <span className="text-sm">{team?.club}</span>
-                              </div>
+                              <span className="text-sm">{player.teamName}</span>
                             </TableCell>
                             <TableCell className="text-center">{player.games}</TableCell>
-                            <TableCell className="text-center">{player.points}</TableCell>
-                            <TableCell className="text-center font-bold text-lg text-primary">
-                              {player.ppg.toFixed(1)}
-                            </TableCell>
+                            <TableCell className="text-center font-bold text-lg">{player.assists}</TableCell>
                           </TableRow>
-                        )
-                      })}
-                    </TableBody>
-                  </Table>
-                </div>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="rebounds">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <ArrowUpCircle className="h-5 w-5 text-purple-500" />
+                  Reboteras del Torneo
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                {leadersLoading ? (
+                  <div className="py-10 text-center text-muted-foreground">Cargando estadísticas...</div>
+                ) : leadersError ? (
+                  <div className="py-10 text-center text-destructive">{leadersError}</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-12 text-center">#</TableHead>
+                          <TableHead>Jugador</TableHead>
+                          <TableHead>Equipo</TableHead>
+                          <TableHead className="text-center">PJ</TableHead>
+                          <TableHead className="text-center">REB</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {topRebounders.map((player, index) => (
+                          <TableRow key={player.playerId}>
+                            <TableCell className="text-center">{index + 1}</TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-3">
+                                <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center font-bold text-sm">
+                                  {player.jerseyNumber ?? "-"}
+                                </div>
+                                <div>
+                                  <p className="font-medium">
+                                    {player.firstName} {player.lastName}
+                                  </p>
+                                </div>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <span className="text-sm">{player.teamName}</span>
+                            </TableCell>
+                            <TableCell className="text-center">{player.games}</TableCell>
+                            <TableCell className="text-center font-bold text-lg">{player.rebounds}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="steals">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Shield className="h-5 w-5 text-red-500" />
+                  Recuperadoras del Torneo
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                {leadersLoading ? (
+                  <div className="py-10 text-center text-muted-foreground">Cargando estadísticas...</div>
+                ) : leadersError ? (
+                  <div className="py-10 text-center text-destructive">{leadersError}</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-12 text-center">#</TableHead>
+                          <TableHead>Jugador</TableHead>
+                          <TableHead>Equipo</TableHead>
+                          <TableHead className="text-center">PJ</TableHead>
+                          <TableHead className="text-center">ROB</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {topStealers.map((player, index) => (
+                          <TableRow key={player.playerId}>
+                            <TableCell className="text-center">{index + 1}</TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-3">
+                                <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center font-bold text-sm">
+                                  {player.jerseyNumber ?? "-"}
+                                </div>
+                                <div>
+                                  <p className="font-medium">
+                                    {player.firstName} {player.lastName}
+                                  </p>
+                                </div>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <span className="text-sm">{player.teamName}</span>
+                            </TableCell>
+                            <TableCell className="text-center">{player.games}</TableCell>
+                            <TableCell className="text-center font-bold text-lg">{player.steals}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="blocks">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Hand className="h-5 w-5 text-indigo-500" />
+                  Taponadoras del Torneo
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                {leadersLoading ? (
+                  <div className="py-10 text-center text-muted-foreground">Cargando estadísticas...</div>
+                ) : leadersError ? (
+                  <div className="py-10 text-center text-destructive">{leadersError}</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-12 text-center">#</TableHead>
+                          <TableHead>Jugador</TableHead>
+                          <TableHead>Equipo</TableHead>
+                          <TableHead className="text-center">PJ</TableHead>
+                          <TableHead className="text-center">TAP</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {topBlockers.map((player, index) => (
+                          <TableRow key={player.playerId}>
+                            <TableCell className="text-center">{index + 1}</TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-3">
+                                <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center font-bold text-sm">
+                                  {player.jerseyNumber ?? "-"}
+                                </div>
+                                <div>
+                                  <p className="font-medium">
+                                    {player.firstName} {player.lastName}
+                                  </p>
+                                </div>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <span className="text-sm">{player.teamName}</span>
+                            </TableCell>
+                            <TableCell className="text-center">{player.games}</TableCell>
+                            <TableCell className="text-center font-bold text-lg">{player.blocks}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
