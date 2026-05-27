@@ -129,7 +129,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
         const { data: allStatsRows, error: allStatsError } = await admin
           .from("match_player_stats_planilla")
-          .select("match_id, player_id, points, rebounds, assists, steals, blocks_committed, fouls_received")
+          .select(
+            "match_id, player_id, points, t3_made, t3_att, rebounds, assists, steals, blocks_committed, fouls_received",
+          )
           .in("match_id", tournamentMatchIds.length ? tournamentMatchIds : ["__none__"])
           .in("player_id", affectedPlayerIds)
 
@@ -139,6 +141,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
             {
               matchIds: Set<string>
               points: number
+              t3Made: number
+              t3Att: number
               rebounds: number
               assists: number
               steals: number
@@ -153,6 +157,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
             const current = byPlayer.get(pid) ?? {
               matchIds: new Set<string>(),
               points: 0,
+              t3Made: 0,
+              t3Att: 0,
               rebounds: 0,
               assists: 0,
               steals: 0,
@@ -161,6 +167,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
             }
             current.matchIds.add(String(r.match_id))
             current.points += Number(r.points ?? 0)
+            current.t3Made += Number(r.t3_made ?? 0)
+            current.t3Att += Number(r.t3_att ?? 0)
             current.rebounds += Number(r.rebounds ?? 0)
             current.assists += Number(r.assists ?? 0)
             current.steals += Number(r.steals ?? 0)
@@ -174,6 +182,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
             player_id: playerId,
             games: agg.matchIds.size,
             points: agg.points,
+            t3_made: agg.t3Made,
+            t3_att: agg.t3Att,
             rebounds: agg.rebounds,
             assists: agg.assists,
             steals: agg.steals,

@@ -54,7 +54,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
     const { data: leaderRows, error: leadersError } = await admin
       .from("tournament_player_leaders")
       .select(
-        "tournament_id, player_id, games, points, rebounds, assists, steals, blocks, fouls_received, players(id, team_id, first_name, last_name, jersey_number)",
+        "tournament_id, player_id, games, points, t3_made, t3_att, rebounds, assists, steals, blocks, fouls_received, players(id, team_id, first_name, last_name, jersey_number)",
       )
       .eq("tournament_id", tournamentId)
 
@@ -84,6 +84,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
       playerId: String(r.player_id),
       games: Number(r.games ?? 0),
       points: Number(r.points ?? 0),
+      t3Made: Number(r.t3_made ?? 0),
+      t3Att: Number(r.t3_att ?? 0),
       rebounds: Number(r.rebounds ?? 0),
       assists: Number(r.assists ?? 0),
       steals: Number(r.steals ?? 0),
@@ -106,6 +108,10 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
       .sort((a, b) => b.points - a.points || (b.games || 0) - (a.games || 0))
       .slice(0, limit)
 
+    const topThreePointers = [...asArray]
+      .sort((a, b) => b.t3Made - a.t3Made || (b.games || 0) - (a.games || 0))
+      .slice(0, limit)
+
     const topRebounders = [...asArray]
       .sort((a, b) => b.rebounds - a.rebounds || (b.games || 0) - (a.games || 0))
       .slice(0, limit)
@@ -126,7 +132,15 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
       .sort((a, b) => b.foulsReceived - a.foulsReceived || (b.games || 0) - (a.games || 0))
       .slice(0, limit)
 
-    return NextResponse.json({ topScorers, topRebounders, topAssistants, topStealers, topBlockers, topFoulsReceived })
+    return NextResponse.json({
+      topScorers,
+      topThreePointers,
+      topRebounders,
+      topAssistants,
+      topStealers,
+      topBlockers,
+      topFoulsReceived,
+    })
   } catch (e) {
     const message = e instanceof Error ? e.message : "Error interno"
     console.error("GET /api/admin/tournaments/[id]/leaders failed:", e)

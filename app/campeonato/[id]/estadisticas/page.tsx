@@ -28,6 +28,8 @@ type LeaderRow = {
   playerId: string
   games: number
   points: number
+  t3Made: number
+  t3Att: number
   assists: number
   rebounds: number
   steals: number
@@ -41,6 +43,7 @@ type LeaderRow = {
 
 type LeadersResponse = {
   topScorers: LeaderRow[]
+  topThreePointers: LeaderRow[]
   topRebounders: LeaderRow[]
   topAssistants: LeaderRow[]
   topStealers: LeaderRow[]
@@ -103,6 +106,7 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
   }
 
   const topScorers = useMemo(() => (leaders?.topScorers ?? []).slice(0, 10), [leaders])
+  const topThreePointers = useMemo(() => (leaders?.topThreePointers ?? []).slice(0, 10), [leaders])
   const topRebounders = useMemo(() => (leaders?.topRebounders ?? []).slice(0, 10), [leaders])
   const topAssistants = useMemo(() => (leaders?.topAssistants ?? []).slice(0, 10), [leaders])
   const topStealers = useMemo(() => (leaders?.topStealers ?? []).slice(0, 10), [leaders])
@@ -153,10 +157,13 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
       {/* Stats Content */}
       <main className="flex-1 mx-auto max-w-7xl w-full px-4 py-8 sm:px-6 lg:px-8">
         <Tabs defaultValue="points" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-2 md:grid-cols-3 lg:w-auto lg:inline-grid lg:grid-cols-6">
+          <TabsList className="grid w-full grid-cols-2 md:grid-cols-3 lg:w-auto lg:inline-grid lg:grid-cols-7">
             <TabsTrigger value="points" className="gap-2">
               <Trophy className="h-4 w-4" />
               Puntos
+            </TabsTrigger>
+            <TabsTrigger value="threes" className="gap-2">
+              3PT
             </TabsTrigger>
             <TabsTrigger value="assists" className="gap-2">
               <ArrowLeftRight className="h-4 w-4" />
@@ -241,6 +248,70 @@ export default function EstadisticasPage({ params }: EstadisticasPageProps) {
                             </TableRow>
                           )
                         })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="threes">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <span className="font-semibold">3PT</span>
+                  Tripleros del Torneo
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                {leadersLoading ? (
+                  <div className="py-10 text-center text-muted-foreground">Cargando estadísticas...</div>
+                ) : leadersError ? (
+                  <div className="py-10 text-center text-destructive">{leadersError}</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-12 text-center">#</TableHead>
+                          <TableHead>Jugador</TableHead>
+                          <TableHead>Equipo</TableHead>
+                          <TableHead className="text-center">PJ</TableHead>
+                          <TableHead className="text-center">T3</TableHead>
+                          <TableHead className="text-center">T3F</TableHead>
+                          <TableHead className="text-center">T3%</TableHead>
+                          <TableHead className="text-center">PTS3</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {topThreePointers.map((player, index) => (
+                          <TableRow key={player.playerId}>
+                            <TableCell className="text-center">{index + 1}</TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-3">
+                                <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center font-bold text-sm">
+                                  {player.jerseyNumber ?? "-"}
+                                </div>
+                                <div>
+                                  <p className="font-medium">
+                                    {player.firstName} {player.lastName}
+                                  </p>
+                                </div>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <span className="text-sm">{player.teamName}</span>
+                            </TableCell>
+                            <TableCell className="text-center">{player.games}</TableCell>
+                            <TableCell className="text-center font-bold text-lg">{player.t3Made}</TableCell>
+                            <TableCell className="text-center">{player.t3Att}</TableCell>
+                            <TableCell className="text-center">
+                              {player.t3Att ? `${((player.t3Made / player.t3Att) * 100).toFixed(1)}%` : "-"}
+                            </TableCell>
+                            <TableCell className="text-center">{player.t3Made * 3}</TableCell>
+                          </TableRow>
+                        ))}
                       </TableBody>
                     </Table>
                   </div>

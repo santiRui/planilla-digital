@@ -801,6 +801,8 @@ create table if not exists public.tournament_player_leaders (
   player_id uuid not null references public.players(id) on delete cascade,
   games integer not null default 0,
   points integer not null default 0,
+  t3_made integer not null default 0,
+  t3_att integer not null default 0,
   rebounds integer not null default 0,
   assists integer not null default 0,
   steals integer not null default 0,

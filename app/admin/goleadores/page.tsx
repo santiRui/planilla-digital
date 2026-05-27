@@ -158,10 +158,13 @@ export default function GoleadoresPage() {
         </Card>
       ) : (
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-          <TabsList className="grid w-full max-w-3xl grid-cols-6">
+          <TabsList className="grid w-full max-w-4xl grid-cols-7">
             <TabsTrigger value="points" className="flex items-center gap-2">
               <Trophy className="h-4 w-4" />
               Puntos
+            </TabsTrigger>
+            <TabsTrigger value="threes" className="flex items-center gap-2">
+              3PT
             </TabsTrigger>
             <TabsTrigger value="assists" className="flex items-center gap-2">
               <ArrowLeftRight className="h-4 w-4" />
@@ -199,6 +202,57 @@ export default function GoleadoresPage() {
                 },
               ]}
             />
+          </TabsContent>
+
+          <TabsContent value="threes">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <span className="text-sm font-semibold">3PT</span>
+                  <span>Tripleros del torneo</span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {leaders.topThreePointers.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-8">No hay datos disponibles.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-10 text-center">#</TableHead>
+                          <TableHead className="w-14 text-center">N°</TableHead>
+                          <TableHead>Jugador</TableHead>
+                          <TableHead>Equipo</TableHead>
+                          <TableHead className="text-center">PJ</TableHead>
+                          <TableHead className="text-center">T3</TableHead>
+                          <TableHead className="text-center">T3F</TableHead>
+                          <TableHead className="text-center">T3%</TableHead>
+                          <TableHead className="text-center">PTS3</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {leaders.topThreePointers.map((row, index) => (
+                          <TableRow key={row.playerId}>
+                            <TableCell className="text-center font-medium">{index + 1}</TableCell>
+                            <TableCell className="text-center">{row.jerseyNumber ?? "-"}</TableCell>
+                            <TableCell>{`${row.firstName} ${row.lastName}`}</TableCell>
+                            <TableCell>{row.teamName}</TableCell>
+                            <TableCell className="text-center">{row.games}</TableCell>
+                            <TableCell className="text-center font-bold">{row.t3Made}</TableCell>
+                            <TableCell className="text-center">{row.t3Att}</TableCell>
+                            <TableCell className="text-center">
+                              {row.t3Att ? `${((row.t3Made / row.t3Att) * 100).toFixed(1)}%` : "-"}
+                            </TableCell>
+                            <TableCell className="text-center">{row.t3Made * 3}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </TabsContent>
 
           <TabsContent value="assists">
@@ -274,6 +328,8 @@ type LeaderRow = {
   playerId: string
   games: number
   points: number
+  t3Made: number
+  t3Att: number
   assists: number
   rebounds: number
   steals: number
@@ -287,6 +343,7 @@ type LeaderRow = {
 
 type LeadersResponse = {
   topScorers: LeaderRow[]
+  topThreePointers: LeaderRow[]
   topRebounders: LeaderRow[]
   topAssistants: LeaderRow[]
   topStealers: LeaderRow[]

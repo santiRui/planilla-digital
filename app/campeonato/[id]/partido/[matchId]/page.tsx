@@ -1190,7 +1190,6 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
                               <tr className="border-b text-[11px] text-muted-foreground">
                                 <th className="px-2 py-1 text-left w-10">#</th>
                                 <th className="px-2 py-1 text-left w-40">Jugador</th>
-                                <th className="px-2 py-1 text-left w-40">ID</th>
                                 <th className="px-2 py-1 text-right w-12">Min</th>
                                 <th className="px-2 py-1 text-right w-12">Pts</th>
                                 <th className="px-2 py-1 text-right w-16">T1</th>
@@ -1223,9 +1222,6 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
                                     <tr key={p.id} className="border-b last:border-0">
                                       <td className="px-2 py-1 text-left font-semibold">{p.jerseyNumber ?? ""}</td>
                                       <td className="px-2 py-1 text-left whitespace-nowrap">{`${p.lastName.toUpperCase()}, ${p.firstName}`}</td>
-                                      <td className="px-2 py-1 text-left font-mono text-[11px] text-muted-foreground break-all">
-                                        {(s as any)?.playerId ?? p.id}
-                                      </td>
                                       <td className="px-2 py-1 text-right">{minutesDisplay}</td>
                                       <td className="px-2 py-1 text-right font-semibold">{s?.points ?? 0}</td>
                                       <td className="px-2 py-1 text-right">{(s?.t1Made ?? 0)}/{(s?.t1Att ?? 0)}</td>
@@ -1245,7 +1241,7 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
                                 })}
                               {/* Totales equipo local */}
                               <tr className="border-t font-semibold bg-muted/40">
-                                <td className="px-2 py-1 text-left" colSpan={3}>
+                                <td className="px-2 py-1 text-left" colSpan={2}>
                                   Total
                                 </td>
                                 <td className="px-2 py-1 text-right">
@@ -1291,7 +1287,6 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
                               <tr className="border-b text-[11px] text-muted-foreground">
                                 <th className="px-2 py-1 text-left w-10">#</th>
                                 <th className="px-2 py-1 text-left w-40">Jugador</th>
-                                <th className="px-2 py-1 text-left w-40">ID</th>
                                 <th className="px-2 py-1 text-right w-12">Min</th>
                                 <th className="px-2 py-1 text-right w-12">Pts</th>
                                 <th className="px-2 py-1 text-right w-16">T1</th>
@@ -1325,9 +1320,6 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
                                     <tr key={p.id} className="border-b last:border-0">
                                       <td className="px-2 py-1 text-left font-semibold">{p.jerseyNumber ?? ""}</td>
                                       <td className="px-2 py-1 text-left whitespace-nowrap">{`${p.lastName.toUpperCase()}, ${p.firstName}`}</td>
-                                      <td className="px-2 py-1 text-left font-mono text-[11px] text-muted-foreground break-all">
-                                        {(s as any)?.playerId ?? p.id}
-                                      </td>
                                       <td className="px-2 py-1 text-right">{minutesDisplay}</td>
                                       <td className="px-2 py-1 text-right font-semibold">{s?.points ?? 0}</td>
                                       <td className="px-2 py-1 text-right">{(s?.t1Made ?? 0)}/{(s?.t1Att ?? 0)}</td>
@@ -1348,7 +1340,7 @@ export default function MatchDetailPage({ params }: MatchDetailPageProps) {
 
                               {/* Totales equipo visitante */}
                               <tr className="border-t font-semibold bg-muted/40">
-                                <td className="px-2 py-1 text-left" colSpan={3}>
+                                <td className="px-2 py-1 text-left" colSpan={2}>
                                   Total
                                 </td>
                                 <td className="px-2 py-1 text-right">
