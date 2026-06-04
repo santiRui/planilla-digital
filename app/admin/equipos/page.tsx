@@ -17,7 +17,7 @@ import { AutocompleteInput } from "@/components/ui/autocomplete-input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Breadcrumbs } from "@/components/breadcrumbs"
-import { Plus, Users, Edit, MoreHorizontal, UserCircle } from "lucide-react"
+import { Plus, Users, Edit, MoreHorizontal, UserCircle, Printer } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { EmptyState } from "@/components/ui/empty-state"
 import Link from "next/link"
@@ -44,6 +44,7 @@ export default function EquiposPage() {
   const [teams, setTeams] = useState<Team[]>([])
   const [teamPlayerCounts, setTeamPlayerCounts] = useState<Record<string, number>>({})
   const [teamScoring, setTeamScoring] = useState<Record<string, number>>({})
+  const [playersByTeamId, setPlayersByTeamId] = useState<Record<string, TeamPlayerRow[]>>({})
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -119,6 +120,7 @@ export default function EquiposPage() {
 
       const counts: Record<string, number> = {}
       const scoringByTeam: Record<string, number> = {}
+      const playersMap: Record<string, TeamPlayerRow[]> = {}
       const { data: sessionData } = await supabase.auth.getSession()
       const token = sessionData.session?.access_token
 
@@ -139,11 +141,22 @@ export default function EquiposPage() {
             counts[teamId] = (counts[teamId] ?? 0) + 1
             const playerScoring = typeof p.scoring === "number" ? p.scoring : 0
             scoringByTeam[teamId] = (scoringByTeam[teamId] ?? 0) + playerScoring
+
+            if (!playersMap[teamId]) playersMap[teamId] = []
+            playersMap[teamId]!.push({
+              teamId,
+              jerseyNumber: (p.jersey_number as number | null) ?? null,
+              firstName: String(p.first_name ?? ""),
+              lastName: String(p.last_name ?? ""),
+              dni: String(p.dni ?? ""),
+              birthDate: (p.birth_date as string | null) ?? null,
+            })
           })
         }
       }
       setTeamPlayerCounts(counts)
       setTeamScoring(scoringByTeam)
+      setPlayersByTeamId(playersMap)
       setLoading(false)
     }
 
@@ -265,6 +278,54 @@ export default function EquiposPage() {
   }
   const getPlayerCount = (teamId: string) => teamPlayerCounts[teamId] ?? 0
   const getTeamScoring = (teamId: string) => teamScoring[teamId] ?? 0
+
+  const csvEscape = (value: string | number | null | undefined) => {
+    const s = String(value ?? "")
+    if (/[";\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`
+    return s
+  }
+
+  const formatBirthDate = (raw: string | null) => {
+    if (!raw) return ""
+    const d = new Date(raw)
+    if (Number.isNaN(d.getTime())) return raw
+    return d.toLocaleDateString("es-AR")
+  }
+
+  const downloadRosterCsv = async (team: Team) => {
+    const rows = (playersByTeamId[team.id] ?? []).slice().sort((a, b) => {
+      const an = a.jerseyNumber ?? 999
+      const bn = b.jerseyNumber ?? 999
+      return an - bn
+    })
+
+    const lines: string[] = []
+    lines.push(`Equipo;${csvEscape(team.name)}`)
+    lines.push("")
+    lines.push("NRO CAMISETA;NOMBRE;APELLIDO;DNI;FECHA DE NACIMIENTO")
+    for (const p of rows) {
+      lines.push(
+        [
+          csvEscape(p.jerseyNumber ?? ""),
+          csvEscape(p.firstName),
+          csvEscape(p.lastName),
+          csvEscape(p.dni),
+          csvEscape(formatBirthDate(p.birthDate)),
+        ].join(";"),
+      )
+    }
+
+    const blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    const safeName = team.name.replace(/[\\/:*?"<>|]+/g, "-").trim() || "equipo"
+    a.download = `planilla-${safeName}.csv`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  }
 
   const categoryById = useMemo(() => {
     return Object.fromEntries(categories.map((c) => [c.id, c])) as Record<string, Category>
@@ -542,6 +603,10 @@ export default function EquiposPage() {
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => downloadRosterCsv(team)}>
+                        <Printer className="mr-2 h-4 w-4" />
+                        Descargar planilla
+                      </DropdownMenuItem>
                       <DropdownMenuItem onClick={() => openEdit(team)}>
                         <Edit className="mr-2 h-4 w-4" />
                         Editar
@@ -604,6 +669,16 @@ type Category = {
   name: string
   branch: Branch
   ageGroup: string
+  scoringCap: number | null
+}
+
+type TeamPlayerRow = {
+  teamId: string
+  jerseyNumber: number | null
+  firstName: string
+  lastName: string
+  dni: string
+  birthDate: string | null
 }
 
 type Team = {
