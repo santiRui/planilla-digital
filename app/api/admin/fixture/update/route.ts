@@ -255,6 +255,15 @@ export async function POST(req: Request) {
       const zoneTeamIds = Array.from(zoneTeamIdSet).filter((id) => !!id)
       if (zoneTeamIds.length < 2) continue
 
+      // Detectamos cuántas ruedas ya tiene el fixture de esta zona, en base a la
+      // fecha (round) máxima presente. Esto evita que, al actualizar con el valor
+      // por defecto (1 rueda), se pierdan/no se generen las vueltas de un torneo
+      // que ya es de ida y vuelta. Nunca reducimos las ruedas existentes.
+      const baseRounds = zoneTeamIds.length % 2 === 0 ? Math.max(1, zoneTeamIds.length - 1) : Math.max(1, zoneTeamIds.length)
+      const maxRound = zoneMatches.reduce((max, m) => Math.max(max, m.round ?? 0), 0)
+      const existingWheels = maxRound > 0 ? Math.max(1, Math.ceil(maxRound / baseRounds)) : 1
+      const effectiveWheels = Math.max(wheelsCount, existingWheels)
+
       // Separar partidos jugados de programados.
       const played = zoneMatches.filter((m) => m.status !== "programado")
       const scheduled = zoneMatches.filter((m) => m.status === "programado")
@@ -270,8 +279,8 @@ export async function POST(req: Request) {
       }
 
       // Generamos el round-robin teórico (con wheels) para TODOS los equipos
-      // de la zona.
-      const generated = roundRobinPairsWithWheels(zoneTeamIds, wheelsCount).sort(
+      // de la zona. Usamos effectiveWheels para no perder las vueltas ya existentes.
+      const generated = roundRobinPairsWithWheels(zoneTeamIds, effectiveWheels).sort(
         (a, b) => a.round - b.round,
       )
 
