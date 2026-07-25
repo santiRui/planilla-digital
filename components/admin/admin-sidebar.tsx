@@ -22,7 +22,6 @@ import { Button } from "@/components/ui/button"
 import { useState } from "react"
 
 const navigation = [
-  { name: "Dashboard", href: "/admin", icon: LayoutGrid },
   { name: "Torneos", href: "/admin/torneos", icon: Trophy },
   { name: "Categorías", href: "/admin/categorias", icon: Layers },
   { name: "Equipos", href: "/admin/equipos", icon: Users },
@@ -31,6 +30,7 @@ const navigation = [
   { name: "Fixture", href: "/admin/fixture", icon: Calendar },
   { name: "Programación", href: "/admin/programacion", icon: MapPin },
   { name: "Jornada", href: "/admin/jornada", icon: Calendar },
+  { name: "Cierre de jornada", href: "/admin/cierre-jornada", icon: Calendar },
   { name: "Goleadores", href: "/admin/goleadores", icon: Trophy },
   { name: "Estadísticas por jugadora", href: "/admin/herramientas/estadisticas-por-jugador", icon: BarChart3 },
   { name: "Canchas", href: "/admin/canchas", icon: MapPin },
@@ -38,7 +38,6 @@ const navigation = [
   { name: "Contabilidad", href: "/admin/tesoreria", icon: ClipboardList },
   { name: "Observaciones", href: "/admin/observaciones", icon: AlertTriangle },
   { name: "Personal", href: "/admin/personal", icon: UserCircle },
-  { name: "Configuración", href: "/admin/configuracion", icon: Settings },
 ]
 
 export function AdminSidebar() {

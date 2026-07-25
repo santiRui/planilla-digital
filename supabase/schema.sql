@@ -182,6 +182,9 @@ create table if not exists public.venues (
   updated_at timestamptz not null default now()
 );
 
+alter table public.venues
+add column if not exists fee_per_match numeric(10,2);
+
 create table if not exists public.courts (
   id uuid primary key default gen_random_uuid(),
   venue_id uuid not null references public.venues(id) on delete cascade,
@@ -190,6 +193,9 @@ create table if not exists public.courts (
   updated_at timestamptz not null default now(),
   unique (venue_id, name)
 );
+
+alter table public.courts
+add column if not exists fee_per_match numeric(10,2);
 
 create table if not exists public.matches (
   id uuid primary key default gen_random_uuid(),
@@ -357,6 +363,21 @@ create table if not exists public.team_standings (
   points int not null default 0,
   updated_at timestamptz not null default now(),
   unique (tournament_id, team_id)
+);
+
+create table if not exists public.match_payments (
+  id uuid primary key default gen_random_uuid(),
+  match_id uuid not null references public.matches(id) on delete cascade,
+  venue_id uuid references public.venues(id) on delete set null,
+  court_fee numeric(10,2),
+  home_cash numeric(10,2) default 0,
+  home_transfer numeric(10,2) default 0,
+  away_cash numeric(10,2) default 0,
+  away_transfer numeric(10,2) default 0,
+  receiver_name text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (match_id)
 );
 
 create index if not exists team_standings_tournament_idx on public.team_standings(tournament_id);

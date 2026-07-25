@@ -6,6 +6,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server"
 const updateVenueSchema = z.object({
   name: z.string().min(1),
   address: z.string().optional().nullable(),
+  feePerMatch: z.number().nonnegative().optional(),
 })
 
 async function assertAdmin(accessToken: string) {
@@ -59,16 +60,17 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       return NextResponse.json({ error: "Datos inválidos", details: parsed.error.flatten() }, { status: 400 })
     }
 
-    const { name, address } = parsed.data
+    const { name, address, feePerMatch } = parsed.data
 
     const { data: venue, error } = await auth.adminClient
       .from("venues")
       .update({
         name,
         address: address ?? null,
+        fee_per_match: feePerMatch ?? null,
       })
       .eq("id", id)
-      .select("id, name, address, created_at")
+      .select("id, name, address, fee_per_match, created_at")
       .single()
 
     if (error || !venue) {

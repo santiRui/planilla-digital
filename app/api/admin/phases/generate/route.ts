@@ -257,23 +257,29 @@ export async function POST(req: Request) {
       const standings = computeStandings(teamIds, regularMatches)
 
       const requested = Math.min(teamsToQualify, standings.length)
-      const n = requested % 2 === 0 ? requested : requested - 1
-
-      if (n < 2) {
+      if (requested < 2) {
         return NextResponse.json({ error: "No hay suficientes equipos clasificados" }, { status: 400 })
       }
 
-      qualified = standings.slice(0, n)
+      qualified = standings.slice(0, requested)
     }
 
-    const n = qualified.length % 2 === 0 ? qualified.length : qualified.length - 1
-    qualified = qualified.slice(0, n)
-    const matchups: Array<{ home: string; away: string }> = []
-    const half = qualified.length / 2
+    // Aplicar "libres": si hay menos equipos reales que cupos configurados,
+    // los primeros quedan libres y no se emparejan en esta fase.
+    const total = qualified.length
+    const initialByes = Math.max(0, teamsToQualify - total)
+    const byes = Math.min(initialByes, total)
 
-    // Playoffs: siempre emparejar 1º con último, 2º con anteúltimo, etc.
+    const active = qualified.slice(byes)
+    const n = active.length % 2 === 0 ? active.length : active.length - 1
+
+    const matchups: Array<{ home: string; away: string }> = []
+    const half = n / 2
+
+    // Playoffs: siempre emparejar 1º con último, 2º con anteúltimo, etc.,
+    // dentro del grupo de equipos que sí juegan esta fase.
     for (let i = 0; i < half; i++) {
-      matchups.push({ home: qualified[i]!.teamId, away: qualified[qualified.length - 1 - i]!.teamId })
+      matchups.push({ home: active[i]!.teamId, away: active[n - 1 - i]!.teamId })
     }
 
     const phase: Phase = hasConfig ? phaseFromQualified(teamsToQualify) : ((parsed.data.phase ?? "cuartos") as Phase)

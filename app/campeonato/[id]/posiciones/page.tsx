@@ -119,9 +119,48 @@ function computeStandings(teams: Team[], matches: MatchRow[]): StandingRow[] {
 
   const list = Array.from(rows.values())
 
+  // Helper: head-to-head point differential between two teams, considering only fase_regular & finalizado
+  const headToHeadDiff = (teamA: string, teamB: string) => {
+    let diffA = 0
+    let games = 0
+    for (const m of matches) {
+      if (m.phase !== "fase_regular") continue
+      if (m.status !== "finalizado") continue
+      const involvesA = m.homeTeamId === teamA || m.awayTeamId === teamA
+      const involvesB = m.homeTeamId === teamB || m.awayTeamId === teamB
+      if (!involvesA || !involvesB) continue
+
+      const aIsHome = m.homeTeamId === teamA
+      const homeScore = m.homeScore ?? 0
+      const awayScore = m.awayScore ?? 0
+      const aScore = aIsHome ? homeScore : awayScore
+      const bScore = aIsHome ? awayScore : homeScore
+
+      diffA += aScore - bScore
+      games += 1
+    }
+    return { diffA, games }
+  }
+
   list.sort((a, b) => {
     if (b.points !== a.points) return b.points - a.points
-    if (a.np !== b.np) return a.np - b.np
+
+    // Regla de NP: si uno tiene al menos una no presentación y el otro ninguna,
+    // el que no tiene NP queda arriba. Si ambos tienen 0 o ambos tienen >=1, se sigue.
+    const aHasNp = a.np > 0
+    const bHasNp = b.np > 0
+    if (aHasNp !== bHasNp) {
+      return aHasNp ? 1 : -1
+    }
+
+    // Confrontación mutua como primer desempate cuando están empatados en puntos
+    const { diffA, games } = headToHeadDiff(a.teamId, b.teamId)
+    if (games > 0 && diffA !== 0) {
+      return diffA > 0 ? -1 : 1
+    }
+
+    // Si la confrontación mutua está igualada o no hay partidos entre ellos,
+    // usamos diferencia de gol general y luego puntos a favor
     const aDiff = a.pointsFor - a.pointsAgainst
     const bDiff = b.pointsFor - b.pointsAgainst
     if (bDiff !== aDiff) return bDiff - aDiff
@@ -170,9 +209,44 @@ function computeProjectedStandings(teams: Team[], matches: MatchRow[]): Standing
 
   const list = Array.from(rows.values())
 
+  const headToHeadDiff = (teamA: string, teamB: string) => {
+    let diffA = 0
+    let games = 0
+    for (const m of matches) {
+      if (m.phase !== "fase_regular") continue
+      if (m.status !== "finalizado" && m.status !== "en_juego") continue
+      const involvesA = m.homeTeamId === teamA || m.awayTeamId === teamA
+      const involvesB = m.homeTeamId === teamB || m.awayTeamId === teamB
+      if (!involvesA || !involvesB) continue
+
+      const aIsHome = m.homeTeamId === teamA
+      const homeScore =
+        typeof m.liveHomeScore === "number" && m.liveHomeScore >= 0 ? m.liveHomeScore : m.homeScore ?? 0
+      const awayScore =
+        typeof m.liveAwayScore === "number" && m.liveAwayScore >= 0 ? m.liveAwayScore : m.awayScore ?? 0
+      const aScore = aIsHome ? homeScore : awayScore
+      const bScore = aIsHome ? awayScore : homeScore
+
+      diffA += aScore - bScore
+      games += 1
+    }
+    return { diffA, games }
+  }
+
   list.sort((a, b) => {
     if (b.points !== a.points) return b.points - a.points
-    if (a.np !== b.np) return a.np - b.np
+
+    const aHasNp = a.np > 0
+    const bHasNp = b.np > 0
+    if (aHasNp !== bHasNp) {
+      return aHasNp ? 1 : -1
+    }
+
+    const { diffA, games } = headToHeadDiff(a.teamId, b.teamId)
+    if (games > 0 && diffA !== 0) {
+      return diffA > 0 ? -1 : 1
+    }
+
     const aDiff = a.pointsFor - a.pointsAgainst
     const bDiff = b.pointsFor - b.pointsAgainst
     if (bDiff !== aDiff) return bDiff - aDiff

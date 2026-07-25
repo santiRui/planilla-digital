@@ -388,16 +388,21 @@ async function maybeAdvancePhase(adminClient: ReturnType<typeof createSupabaseAd
 
   const list = (allSeries ?? []) as Array<{ series_index: number; winner_team_id: string | null }>
   if (list.length === 0) return
-  if (list.some((s) => !s.winner_team_id)) return
+  
+  // Para cuartos -> semifinales queremos permitir avanzar por lado de llave:
+  // se genera la semifinal 1 (ganador serie 1 vs ganador serie 4) cuando
+  // ambas series tienen ganador, aunque las series 2 y 3 sigan en juego, y
+  // viceversa para la semifinal 2 (ganador serie 2 vs ganador serie 3).
+  // Para otras transiciones (por ejemplo semifinal -> final) seguimos
+  // requiriendo que todas las series de la fase actual tengan ganador.
 
   const { data: existingNext } = await adminClient
     .from("playoff_series")
-    .select("id")
+    .select("id, series_index")
     .eq("tournament_id", series.tournament_id)
     .eq("phase", next)
-    .limit(1)
 
-  if ((existingNext ?? []).length > 0) return
+  const existingNextIndices = new Set<number>((existingNext ?? []).map((r: any) => Number(r.series_index)))
 
   const { data: config } = await adminClient
     .from("tournament_playoff_config")
@@ -412,17 +417,118 @@ async function maybeAdvancePhase(adminClient: ReturnType<typeof createSupabaseAd
         ? Number((config as any)?.best_of_semifinal ?? 1)
         : Number((config as any)?.best_of_final ?? 1)
 
-  const winners = list.map((s) => s.winner_team_id!).filter(Boolean)
-  const nextMatchups: Array<{ home: string; away: string }> = []
-  const half = winners.length / 2
-  for (let i = 0; i < half; i += 1) {
-    nextMatchups.push({ home: winners[i]!, away: winners[winners.length - 1 - i]! })
+  const nextMatchups: Array<{ home: string; away: string; index: number }> = []
+
+  if (phase === "cuartos" && next === "semifinal") {
+    // Para cuartos podemos tener 2 o 4 series.
+    const byIndex = new Map<number, string>()
+    for (const s of list) {
+      if (s.winner_team_id) {
+        byIndex.set(Number(s.series_index), s.winner_team_id)
+      }
+    }
+
+    const indices = Array.from(byIndex.keys()).sort((a, b) => a - b)
+
+    if (indices.length === 2) {
+      // Caso 2 series: semifinal única entre serie 1 y 2.
+      const i1 = indices[0]
+      const i2 = indices[1]
+      const w1 = byIndex.get(i1)!
+      const w2 = byIndex.get(i2)!
+      if (w1 && w2 && !existingNextIndices.has(1)) {
+        nextMatchups.push({ home: w1, away: w2, index: 1 })
+      }
+    } else if (indices.length === 3) {
+      // Caso especial: 3 series de cuartos + 1 equipo libre (semilla 1).
+      // - Semifinal 1: ganador serie 1 vs ganador serie 2 (lado "2-3").
+      // - Semifinal 2: semilla 1 (bye) vs ganador serie 3 (lado "1-4/5").
+
+      const w1 = byIndex.get(1)
+      const w2 = byIndex.get(2)
+      const w3 = byIndex.get(3)
+
+      // Semifinal entre ganadores de series 1 y 2 (no depende de la serie 3).
+      if (w1 && w2 && !existingNextIndices.has(1)) {
+        nextMatchups.push({ home: w1, away: w2, index: 1 })
+      }
+
+      // Para armar la otra semifinal necesitamos conocer al equipo libre (semilla 1).
+      if (w3 && !existingNextIndices.has(2)) {
+        // Calculamos la tabla de fase regular y tomamos la primera posición
+        // como semilla 1 (equipo que quedó "Libre" en cuartos).
+        const { data: tournamentRow } = await adminClient
+          .from("tournaments")
+          .select("category_id")
+          .eq("id", series.tournament_id)
+          .maybeSingle()
+
+        const categoryId = (tournamentRow as any)?.category_id as string | null
+
+        let topSeedId: string | null = null
+
+        if (categoryId) {
+          const { data: teamRows } = await adminClient
+            .from("team_categories")
+            .select("team_id")
+            .eq("category_id", categoryId)
+
+          const teamIds = Array.from(new Set((teamRows ?? []).map((r: any) => r.team_id).filter(Boolean))) as string[]
+
+          const { data: regularMatches } = await adminClient
+            .from("matches")
+            .select("home_team_id, away_team_id, home_score, away_score, status_reason")
+            .eq("tournament_id", series.tournament_id)
+            .eq("phase", "fase_regular")
+            .eq("status", "finalizado")
+
+          const regular = (regularMatches ?? []) as MatchLite[]
+          const standings = computeStandings(teamIds, regular)
+          if (standings.length > 0) {
+            topSeedId = standings[0]!.teamId
+          }
+        }
+
+        if (topSeedId) {
+          nextMatchups.push({ home: topSeedId, away: w3, index: 2 })
+        }
+      }
+    } else {
+      // Caso clásico 4 series (u otro número par >=4): semifinal 1 = 1 vs último,
+      // semifinal 2 = 2 vs anteúltimo, etc.
+      const sortedIndices = indices.slice().sort((a, b) => a - b)
+      const half = Math.floor(sortedIndices.length / 2)
+      for (let i = 0; i < half; i += 1) {
+        const left = sortedIndices[i]
+        const right = sortedIndices[sortedIndices.length - 1 - i]
+        const wLeft = byIndex.get(left)
+        const wRight = byIndex.get(right)
+        const targetIndex = i + 1
+        if (wLeft && wRight && !existingNextIndices.has(targetIndex)) {
+          nextMatchups.push({ home: wLeft, away: wRight, index: targetIndex })
+        }
+      }
+    }
+  } else {
+    // Comportamiento genérico: solo avanzamos si TODAS las series
+    // tienen ganador (por ejemplo, para semifinal -> final).
+    if (list.some((s) => !s.winner_team_id)) return
+
+    const winners = list.map((s) => s.winner_team_id!).filter(Boolean)
+    const half = winners.length / 2
+    for (let i = 0; i < half; i += 1) {
+      const idx = i + 1
+      if (existingNextIndices.has(idx)) continue
+      nextMatchups.push({ home: winners[i]!, away: winners[winners.length - 1 - i]!, index: idx })
+    }
   }
 
-  const seriesRows = nextMatchups.map((m, idx) => ({
+  if (nextMatchups.length === 0) return
+
+  const seriesRows = nextMatchups.map((m) => ({
     tournament_id: series.tournament_id,
     phase: next,
-    series_index: idx + 1,
+    series_index: m.index,
     home_team_id: m.home,
     away_team_id: m.away,
     best_of: bestOf,

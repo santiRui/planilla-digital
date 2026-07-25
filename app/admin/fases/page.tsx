@@ -326,15 +326,36 @@ export default function FasesPage() {
     return playoffConfig.qualifiedTeams % distinctZones.length === 0
   }, [distinctZones.length, playoffConfig.qualifiedTeams])
 
-  // Generate playoff matchups (1 vs 8, 2 vs 7, etc.)
+  // Generate playoff matchups para vista previa.
+  // Regla: si hay menos equipos clasificados que los cupos configurados (ej. 7 para 8),
+  // los primeros quedan libres (bye). En la vista se muestran como "#1 Equipo vs Libre".
   const generateMatchups = () => {
-    const matchups: { home: string; away: string }[] = []
-    const half = qualifiedTeams.length / 2
+    const matchups: { home: string; away: string | null; isBye?: boolean }[] = []
+
+    if (!qualifiedTeams.length) return matchups
+
+    const expected = playoffConfig.qualifiedTeams
+    const total = qualifiedTeams.length
+
+    // Cantidad de "libres": diferencia entre cupos configurados y equipos reales, acotada al total.
+    const initialByes = Math.max(0, expected - total)
+    const byes = Math.min(initialByes, total)
+
+    // Primero agregamos filas explícitas de libres para los mejores sembrados
+    for (let i = 0; i < byes; i++) {
+      const team = qualifiedTeams[i]
+      if (!team) continue
+      matchups.push({ home: team.teamId, away: null, isBye: true })
+    }
+
+    // Equipos que efectivamente juegan esta fase (sin los libres de arriba de la tabla)
+    const active = qualifiedTeams.slice(byes)
+    const half = Math.floor(active.length / 2)
 
     for (let i = 0; i < half; i++) {
       matchups.push({
-        home: qualifiedTeams[i]?.teamId || "",
-        away: qualifiedTeams[qualifiedTeams.length - 1 - i]?.teamId || "",
+        home: active[i]?.teamId || "",
+        away: active[active.length - 1 - i]?.teamId || "",
       })
     }
 
@@ -803,57 +824,77 @@ export default function FasesPage() {
                 <div className="space-y-2">
                   <Label>Vista Previa de Cruces</Label>
                   <div className="space-y-2">
-                    {matchups.map((matchup, index) => (
-                      <div key={index} className="flex items-center justify-between p-3 rounded-lg border bg-muted/30">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-muted-foreground">#{index * 2 + 1}</span>
-                          {getTeamLogo(matchup.home) ? (
-                            <div
-                              className="h-6 w-6 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0"
-                              style={{ borderColor: getTeamColor(matchup.home) }}
-                            >
-                              <img
-                                src={getTeamLogo(matchup.home)}
-                                alt={getTeamName(matchup.home)}
-                                className="h-full w-full object-cover"
-                              />
-                            </div>
-                          ) : (
-                            <div
-                              className="h-6 w-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold shrink-0"
-                              style={{ backgroundColor: getTeamColor(matchup.home) }}
-                            >
-                              {getTeamName(matchup.home).substring(0, 2).toUpperCase()}
-                            </div>
-                          )}
-                          <span className="font-medium">{getTeamName(matchup.home)}</span>
+                    {matchups.map((matchup, index) => {
+                      const homeSeed = qualifiedTeams.findIndex((t) => t.teamId === matchup.home) + 1
+                      const awaySeed =
+                        matchup.away != null
+                          ? qualifiedTeams.findIndex((t) => t.teamId === matchup.away) + 1
+                          : null
+
+                      return (
+                        <div
+                          key={index}
+                          className="flex items-center justify-between p-3 rounded-lg border bg-muted/30"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground">#{homeSeed || "-"}</span>
+                            {getTeamLogo(matchup.home) ? (
+                              <div
+                                className="h-6 w-6 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0"
+                                style={{ borderColor: getTeamColor(matchup.home) }}
+                              >
+                                <img
+                                  src={getTeamLogo(matchup.home)}
+                                  alt={getTeamName(matchup.home)}
+                                  className="h-full w-full object-cover"
+                                />
+                              </div>
+                            ) : (
+                              <div
+                                className="h-6 w-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold shrink-0"
+                                style={{ backgroundColor: getTeamColor(matchup.home) }}
+                              >
+                                {getTeamName(matchup.home).substring(0, 2).toUpperCase()}
+                              </div>
+                            )}
+                            <span className="font-medium">{getTeamName(matchup.home)}</span>
+                          </div>
+                          <span className="text-muted-foreground">vs</span>
+                          <div className="flex items-center gap-2">
+                            {matchup.isBye || matchup.away == null ? (
+                              <>
+                                <span className="font-medium">Libre</span>
+                                <span className="text-xs text-muted-foreground">(pasa directo)</span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="font-medium">{getTeamName(matchup.away)}</span>
+                                {getTeamLogo(matchup.away) ? (
+                                  <div
+                                    className="h-6 w-6 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0"
+                                    style={{ borderColor: getTeamColor(matchup.away) }}
+                                  >
+                                    <img
+                                      src={getTeamLogo(matchup.away)}
+                                      alt={getTeamName(matchup.away)}
+                                      className="h-full w-full object-cover"
+                                    />
+                                  </div>
+                                ) : (
+                                  <div
+                                    className="h-6 w-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold shrink-0"
+                                    style={{ backgroundColor: getTeamColor(matchup.away)} }
+                                  >
+                                    {getTeamName(matchup.away).substring(0, 2).toUpperCase()}
+                                  </div>
+                                )}
+                                <span className="text-xs text-muted-foreground">#{awaySeed || "-"}</span>
+                              </>
+                            )}
+                          </div>
                         </div>
-                        <span className="text-muted-foreground">vs</span>
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{getTeamName(matchup.away)}</span>
-                          {getTeamLogo(matchup.away) ? (
-                            <div
-                              className="h-6 w-6 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0"
-                              style={{ borderColor: getTeamColor(matchup.away) }}
-                            >
-                              <img
-                                src={getTeamLogo(matchup.away)}
-                                alt={getTeamName(matchup.away)}
-                                className="h-full w-full object-cover"
-                              />
-                            </div>
-                          ) : (
-                            <div
-                              className="h-6 w-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold shrink-0"
-                              style={{ backgroundColor: getTeamColor(matchup.away) }}
-                            >
-                              {getTeamName(matchup.away).substring(0, 2).toUpperCase()}
-                            </div>
-                          )}
-                          <span className="text-xs text-muted-foreground">#{qualifiedTeams.length - index * 2}</span>
-                        </div>
-                      </div>
-                    ))}
+                      )
+                    })}
                   </div>
                 </div>
 
@@ -1022,9 +1063,46 @@ function computeStandings(teams: Team[], matches: MatchRow[]): StandingRow[] {
 
   const list = Array.from(rows.values())
 
+  // Helper: diferencia de puntos en enfrentamientos directos entre dos equipos
+  const headToHeadDiff = (teamA: string, teamB: string) => {
+    let diffA = 0
+    let games = 0
+    for (const m of matches) {
+      if (m.phase !== "fase_regular") continue
+      if (m.status !== "finalizado") continue
+      const involvesA = m.homeTeamId === teamA || m.awayTeamId === teamA
+      const involvesB = m.homeTeamId === teamB || m.awayTeamId === teamB
+      if (!involvesA || !involvesB) continue
+
+      const aIsHome = m.homeTeamId === teamA
+      const homeScore = m.homeScore ?? 0
+      const awayScore = m.awayScore ?? 0
+      const aScore = aIsHome ? homeScore : awayScore
+      const bScore = aIsHome ? awayScore : homeScore
+
+      diffA += aScore - bScore
+      games += 1
+    }
+    return { diffA, games }
+  }
+
   list.sort((a, b) => {
     if (b.points !== a.points) return b.points - a.points
-    if (a.np !== b.np) return a.np - b.np
+
+    // Regla NP: el que no tiene NP va arriba si el otro sí tiene.
+    const aHasNp = a.np > 0
+    const bHasNp = b.np > 0
+    if (aHasNp !== bHasNp) {
+      return aHasNp ? 1 : -1
+    }
+
+    // Confrontación mutua como siguiente criterio
+    const { diffA, games } = headToHeadDiff(a.teamId, b.teamId)
+    if (games > 0 && diffA !== 0) {
+      return diffA > 0 ? -1 : 1
+    }
+
+    // Si siguen empatados, diferencia general y luego puntos a favor
     const aDiff = a.pointsFor - a.pointsAgainst
     const bDiff = b.pointsFor - b.pointsAgainst
     if (bDiff !== aDiff) return bDiff - aDiff
@@ -1085,9 +1163,44 @@ function computeProjectedStandings(teams: Team[], matches: MatchRow[]): Standing
 
   const list = Array.from(rows.values())
 
+  const headToHeadDiff = (teamA: string, teamB: string) => {
+    let diffA = 0
+    let games = 0
+    for (const m of matches) {
+      if (m.phase !== "fase_regular") continue
+      if (m.status !== "finalizado" && m.status !== "en_juego") continue
+      const involvesA = m.homeTeamId === teamA || m.awayTeamId === teamA
+      const involvesB = m.homeTeamId === teamB || m.awayTeamId === teamB
+      if (!involvesA || !involvesB) continue
+
+      const aIsHome = m.homeTeamId === teamA
+      const homeScore =
+        typeof m.liveHomeScore === "number" && m.liveHomeScore >= 0 ? m.liveHomeScore : m.homeScore ?? 0
+      const awayScore =
+        typeof m.liveAwayScore === "number" && m.liveAwayScore >= 0 ? m.liveAwayScore : m.awayScore ?? 0
+      const aScore = aIsHome ? homeScore : awayScore
+      const bScore = aIsHome ? awayScore : homeScore
+
+      diffA += aScore - bScore
+      games += 1
+    }
+    return { diffA, games }
+  }
+
   list.sort((a, b) => {
     if (b.points !== a.points) return b.points - a.points
-    if (a.np !== b.np) return a.np - b.np
+
+    const aHasNp = a.np > 0
+    const bHasNp = b.np > 0
+    if (aHasNp !== bHasNp) {
+      return aHasNp ? 1 : -1
+    }
+
+    const { diffA, games } = headToHeadDiff(a.teamId, b.teamId)
+    if (games > 0 && diffA !== 0) {
+      return diffA > 0 ? -1 : 1
+    }
+
     const aDiff = a.pointsFor - a.pointsAgainst
     const bDiff = b.pointsFor - b.pointsAgainst
     if (bDiff !== aDiff) return bDiff - aDiff

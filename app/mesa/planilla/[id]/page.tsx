@@ -209,11 +209,14 @@ export default function PlanillaPage() {
   useEffect(() => {
     const run = async () => {
       const { data: sessionData } = await supabase.auth.getSession()
-      const user = sessionData.session?.user
-      if (!user) {
+      const session = sessionData.session
+      const user = session?.user
+      if (!user || !session?.access_token) {
         setAssignmentRole(null)
         return
       }
+
+      setAuthToken(session.access_token)
 
       const { data: assignments, error: assignmentError } = await supabase
         .from("match_official_assignments")
@@ -536,6 +539,16 @@ export default function PlanillaPage() {
     }
   })
   const [showClockEditorWarning, setShowClockEditorWarning] = useState(false)
+  const [authToken, setAuthToken] = useState<string | null>(null)
+  const [venueFee, setVenueFee] = useState<number | null>(null)
+  const [homeCashInput, setHomeCashInput] = useState("")
+  const [homeTransferInput, setHomeTransferInput] = useState("")
+  const [awayCashInput, setAwayCashInput] = useState("")
+  const [awayTransferInput, setAwayTransferInput] = useState("")
+  const [receiverNameInput, setReceiverNameInput] = useState("")
+  const [paymentsLoading, setPaymentsLoading] = useState(false)
+  const [paymentsError, setPaymentsError] = useState<string | null>(null)
+  const [paymentsSaving, setPaymentsSaving] = useState(false)
   
   // Estados para faltas
   const [showPersonalFoulDialog, setShowPersonalFoulDialog] = useState(false)
@@ -747,6 +760,122 @@ export default function PlanillaPage() {
       // Si hay datos corruptos, los ignoramos
     }
   }, [matchId, match?.homeTeamId, match?.awayTeamId, homeTeam?.id, awayTeam?.id])
+
+  // Cargar arancel de sede y pagos previos (solo desde el backend, una vez que tenemos matchId y authToken)
+  useEffect(() => {
+    if (!matchId || !authToken) return
+    let cancelled = false
+
+    const run = async () => {
+      setPaymentsLoading(true)
+      setPaymentsError(null)
+      try {
+        const res = await fetch(`/api/mesa/match-payments?matchId=${encodeURIComponent(matchId)}`, {
+          headers: { Authorization: `Bearer ${authToken}` },
+        })
+        const json = (await res.json().catch(() => null)) as any
+        if (!res.ok) {
+          if (!cancelled) setPaymentsError(json?.error ?? "No se pudieron cargar los pagos del partido")
+          return
+        }
+
+        const payment = json?.payment
+        if (!payment || cancelled) return
+
+        const rawFee = payment.court_fee
+        setVenueFee(rawFee != null ? Number(rawFee) : null)
+
+        setHomeCashInput(payment.home_cash != null ? String(payment.home_cash) : "")
+        setHomeTransferInput(payment.home_transfer != null ? String(payment.home_transfer) : "")
+        setAwayCashInput(payment.away_cash != null ? String(payment.away_cash) : "")
+        setAwayTransferInput(payment.away_transfer != null ? String(payment.away_transfer) : "")
+        setReceiverNameInput(payment.receiver_name != null ? String(payment.receiver_name) : "")
+      } catch (e) {
+        if (!cancelled) {
+          const msg = e instanceof Error ? e.message : "Error al cargar arancel/pagos"
+          setPaymentsError(msg)
+        }
+      } finally {
+        if (!cancelled) setPaymentsLoading(false)
+      }
+    }
+
+    void run()
+
+    return () => {
+      cancelled = true
+    }
+  }, [matchId, authToken])
+
+  const handleSavePayments = async () => {
+    if (!authToken) {
+      setPaymentsError("Tenés que iniciar sesión para registrar pagos.")
+      return
+    }
+
+    const parseAmount = (val: string) => {
+      const trimmed = val.trim()
+      if (!trimmed) return 0
+      const num = Number(trimmed.replace(",", "."))
+      return Number.isFinite(num) && num >= 0 ? num : NaN
+    }
+
+    const homeCash = parseAmount(homeCashInput)
+    const homeTransfer = parseAmount(homeTransferInput)
+    const awayCash = parseAmount(awayCashInput)
+    const awayTransfer = parseAmount(awayTransferInput)
+
+    if ([homeCash, homeTransfer, awayCash, awayTransfer].some((n) => Number.isNaN(n))) {
+      setPaymentsError("Todos los montos deben ser números válidos mayores o iguales a 0.")
+      return
+    }
+
+    // Validación básica contra arancel: por ahora solo verificamos que cada equipo pague al menos el arancel si no es 0.
+    if (venueFee != null && venueFee > 0) {
+      const homeTotal = homeCash + homeTransfer
+      const awayTotal = awayCash + awayTransfer
+
+      if (homeTotal > 0 && Math.abs(homeTotal - venueFee) > 0.01) {
+        setPaymentsError("La suma de efectivo y transferencia del equipo local debe coincidir con el arancel de la sede.")
+        return
+      }
+
+      if (awayTotal > 0 && Math.abs(awayTotal - venueFee) > 0.01) {
+        setPaymentsError(
+          "La suma de efectivo y transferencia del equipo visitante debe coincidir con el arancel de la sede.",
+        )
+        return
+      }
+    }
+
+    setPaymentsSaving(true)
+    setPaymentsError(null)
+    try {
+      const res = await fetch("/api/mesa/match-payments", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          matchId,
+          homeCash,
+          homeTransfer,
+          awayCash,
+          awayTransfer,
+          receiverName: receiverNameInput.trim() || null,
+        }),
+      })
+
+      const json = (await res.json().catch(() => null)) as any
+      if (!res.ok) {
+        setPaymentsError(json?.error ?? "No se pudieron guardar los pagos del partido")
+        return
+      }
+    } finally {
+      setPaymentsSaving(false)
+    }
+  }
 
   // Ajustar el reloj visible al tiempo del último evento registrado en el historial
   // Solo lo hacemos en la inicialización: cuando el reloj sigue en su valor base (10 minutos) y no está corriendo.
@@ -3791,6 +3920,138 @@ export default function PlanillaPage() {
                       onClick={() => (match.status === "en_juego" ? setShowEndDialog(true) : null)}
                     >
                       Finalizar Partido
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="rounded-md border p-3 flex flex-col gap-3">
+                  <div>
+                    <div className="text-sm font-semibold">Arancel y pagos</div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      El arancel se toma de la sede del partido. Cada equipo puede pagar en efectivo y/o transferencia.
+                    </div>
+                  </div>
+
+                  <div className="text-xs text-muted-foreground">
+                    <span className="font-semibold">Arancel por equipo: </span>
+                    {venueFee != null
+                      ? `ARS ${venueFee.toLocaleString("es-AR", { maximumFractionDigits: 2 })}`
+                      : "Sin arancel configurado"}
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="space-y-2 text-sm">
+                      <div className="font-semibold">
+                        Local – {homeTeam.name}
+                        {venueFee != null && (
+                          <span className="text-xs text-muted-foreground ml-1">
+                            (Debe abonar: $
+                            {venueFee.toLocaleString("es-AR", { maximumFractionDigits: 2 })})
+                          </span>
+                        )}
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <label className="text-xs text-muted-foreground" htmlFor="home-cash">
+                            Efectivo Local
+                          </label>
+                          <input
+                            id="home-cash"
+                            type="number"
+                            min={0}
+                            step="100"
+                            className="h-8 w-32 rounded border px-2 text-right text-sm bg-background"
+                            value={homeCashInput}
+                            onChange={(e) => setHomeCashInput(e.target.value)}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <label className="text-xs text-muted-foreground" htmlFor="home-transfer">
+                            Transferencia Local
+                          </label>
+                          <input
+                            id="home-transfer"
+                            type="number"
+                            min={0}
+                            step="100"
+                            className="h-8 w-32 rounded border px-2 text-right text-sm bg-background"
+                            value={homeTransferInput}
+                            onChange={(e) => setHomeTransferInput(e.target.value)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 text-sm">
+                      <div className="font-semibold">
+                        Visitante – {awayTeam.name}
+                        {venueFee != null && (
+                          <span className="text-xs text-muted-foreground ml-1">
+                            (Debe abonar: $
+                            {venueFee.toLocaleString("es-AR", { maximumFractionDigits: 2 })})
+                          </span>
+                        )}
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <label className="text-xs text-muted-foreground" htmlFor="away-cash">
+                            Efectivo Visitante
+                          </label>
+                          <input
+                            id="away-cash"
+                            type="number"
+                            min={0}
+                            step="100"
+                            className="h-8 w-32 rounded border px-2 text-right text-sm bg-background"
+                            value={awayCashInput}
+                            onChange={(e) => setAwayCashInput(e.target.value)}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <label className="text-xs text-muted-foreground" htmlFor="away-transfer">
+                            Transferencia Visitante
+                          </label>
+                          <input
+                            id="away-transfer"
+                            type="number"
+                            min={0}
+                            step="100"
+                            className="h-8 w-32 rounded border px-2 text-right text-sm bg-background"
+                            value={awayTransferInput}
+                            onChange={(e) => setAwayTransferInput(e.target.value)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1 text-sm">
+                    <label className="text-xs text-muted-foreground" htmlFor="receiver-name">
+                      Nombre de quien recibió la plata
+                    </label>
+                    <input
+                      id="receiver-name"
+                      type="text"
+                      className="h-8 w-full rounded border px-2 text-sm bg-background"
+                      value={receiverNameInput}
+                      onChange={(e) => setReceiverNameInput(e.target.value)}
+                      placeholder="Ej: Juan Pérez"
+                    />
+                  </div>
+
+                  {paymentsError && <p className="text-xs text-destructive">{paymentsError}</p>}
+
+                  <div className="flex items-center justify-end gap-2">
+                    {paymentsLoading && (
+                      <span className="text-xs text-muted-foreground">Cargando arancel/pagos...</span>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleSavePayments}
+                      disabled={paymentsSaving || paymentsLoading}
+                    >
+                      {paymentsSaving ? "Guardando..." : "Guardar pagos"}
                     </Button>
                   </div>
                 </div>

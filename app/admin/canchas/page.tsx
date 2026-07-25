@@ -62,6 +62,7 @@ export default function CanchasPage() {
   const [venueForm, setVenueForm] = useState({
     name: "",
     address: "",
+    feePerMatch: "",
   })
 
   const [courtForm, setCourtForm] = useState({
@@ -147,13 +148,17 @@ export default function CanchasPage() {
 
   const openCreateVenue = () => {
     setEditingVenue(null)
-    setVenueForm({ name: "", address: "" })
+    setVenueForm({ name: "", address: "", feePerMatch: "" })
     setVenueDialogOpen(true)
   }
 
   const openEditVenue = (venue: VenueRow) => {
     setEditingVenue(venue)
-    setVenueForm({ name: venue.name, address: venue.address ?? "" })
+    setVenueForm({
+      name: venue.name,
+      address: venue.address ?? "",
+      feePerMatch: venue.feePerMatch != null ? String(venue.feePerMatch) : "",
+    })
     setVenueDialogOpen(true)
   }
 
@@ -172,9 +177,16 @@ export default function CanchasPage() {
 
       const name = venueForm.name.trim()
       const address = venueForm.address.trim()
+      const feePerMatchValue = venueForm.feePerMatch.trim()
 
       if (!name) {
         setError("Completá el nombre de la sede.")
+        return
+      }
+
+      const feePerMatch = feePerMatchValue ? Number(feePerMatchValue.replace(",", ".")) : null
+      if (feePerMatchValue && (Number.isNaN(feePerMatch) || feePerMatch < 0)) {
+        setError("El arancel debe ser un número válido mayor o igual a 0.")
         return
       }
 
@@ -191,6 +203,7 @@ export default function CanchasPage() {
         body: JSON.stringify({
           name,
           address: address || null,
+          feePerMatch: feePerMatch ?? undefined,
         }),
       })
 
@@ -209,7 +222,7 @@ export default function CanchasPage() {
 
       setVenueDialogOpen(false)
       setEditingVenue(null)
-      setVenueForm({ name: "", address: "" })
+      setVenueForm({ name: "", address: "", feePerMatch: "" })
     } finally {
       setSubmitting(false)
     }
@@ -438,6 +451,7 @@ export default function CanchasPage() {
                     <TableRow>
                       <TableHead>Nombre</TableHead>
                       <TableHead>Dirección</TableHead>
+                      <TableHead>Arancel (ARS)</TableHead>
                       <TableHead className="w-[50px]"></TableHead>
                     </TableRow>
                   </TableHeader>
@@ -446,6 +460,11 @@ export default function CanchasPage() {
                       <TableRow key={venue.id}>
                         <TableCell className="font-medium">{venue.name}</TableCell>
                         <TableCell>{venue.address ? venue.address : "-"}</TableCell>
+                        <TableCell>
+                          {venue.feePerMatch != null
+                            ? venue.feePerMatch.toLocaleString("es-AR", { maximumFractionDigits: 2 })
+                            : "-"}
+                        </TableCell>
                         <TableCell>
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
@@ -600,6 +619,15 @@ export default function CanchasPage() {
                 placeholder="Opcional"
               />
             </div>
+            <div className="grid gap-2">
+              <Label htmlFor="venue-fee">Arancel por partido (ARS)</Label>
+              <Input
+                id="venue-fee"
+                value={venueForm.feePerMatch}
+                onChange={(e) => setVenueForm((prev) => ({ ...prev, feePerMatch: e.target.value }))}
+                placeholder="Ej: 45000"
+              />
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setVenueDialogOpen(false)}>
@@ -697,6 +725,7 @@ type VenueRow = {
   id: string
   name: string
   address: string | null
+  feePerMatch: number | null
   createdAt?: string
 }
 
@@ -712,6 +741,7 @@ function mapVenueFromApi(row: any): VenueRow {
     id: row.id,
     name: row.name,
     address: row.address ?? null,
+    feePerMatch: row.fee_per_match ?? null,
     createdAt: row.created_at,
   }
 }

@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils"
 export default function TournamentStandingsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const router = useRouter()
-  const { tournaments, categories, teams, standings } = useAppStore()
+  const { tournaments, categories, teams, standings, matches } = useAppStore()
   const [selectedCategory, setSelectedCategory] = useState<string>("all")
 
   const tournament = tournaments.find((t) => t.id === id)
@@ -101,16 +101,48 @@ export default function TournamentStandingsPage({ params }: { params: Promise<{ 
         ) : (
           <div className="space-y-8">
             {filteredCategories.map((category) => {
+              const categoryMatches = matches.filter(
+                (m) => m.categoryId === category.id && m.phase === "fase_regular" && m.status === "finalizado",
+              )
+
+              const headToHeadDiff = (teamA: string, teamB: string) => {
+                let diffA = 0
+                let games = 0
+                for (const m of categoryMatches) {
+                  const involvesA = m.homeTeamId === teamA || m.awayTeamId === teamA
+                  const involvesB = m.homeTeamId === teamB || m.awayTeamId === teamB
+                  if (!involvesA || !involvesB) continue
+
+                  const aIsHome = m.homeTeamId === teamA
+                  const aScore = aIsHome ? (m.homeScore ?? 0) : (m.awayScore ?? 0)
+                  const bScore = aIsHome ? (m.awayScore ?? 0) : (m.homeScore ?? 0)
+
+                  diffA += aScore - bScore
+                  games += 1
+                }
+                return { diffA, games }
+              }
+
               const categoryStandings = standings
                 .filter((s) => s.categoryId === category.id)
                 .sort((a, b) => {
                   if (b.points !== a.points) return b.points - a.points
+
                   const aNp = (a as any).np ?? 0
                   const bNp = (b as any).np ?? 0
-                  if (aNp !== bNp) return aNp - bNp
+                  if (aNp !== bNp) {
+                    return aNp > 0 && bNp === 0 ? 1 : -1
+                  }
+
+                  const { diffA, games } = headToHeadDiff(a.teamId, b.teamId)
+                  if (games > 0 && diffA !== 0) {
+                    return diffA > 0 ? -1 : 1
+                  }
+
                   const aDiff = a.pointsFor - a.pointsAgainst
                   const bDiff = b.pointsFor - b.pointsAgainst
-                  return bDiff - aDiff
+                  if (bDiff !== aDiff) return bDiff - aDiff
+                  return b.pointsFor - a.pointsFor
                 })
 
               return (

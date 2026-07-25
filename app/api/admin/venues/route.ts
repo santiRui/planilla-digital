@@ -6,6 +6,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server"
 const createVenueSchema = z.object({
   name: z.string().min(1),
   address: z.string().optional().nullable(),
+  feePerMatch: z.number().nonnegative().optional(),
 })
 
 async function assertAdmin(accessToken: string) {
@@ -52,7 +53,7 @@ export async function GET(req: Request) {
 
     const { data, error } = await auth.adminClient
       .from("venues")
-      .select("id, name, address, created_at")
+      .select("id, name, address, fee_per_match, created_at")
       .order("created_at", { ascending: true })
 
     if (error) {
@@ -89,15 +90,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Datos inválidos", details: parsed.error.flatten() }, { status: 400 })
     }
 
-    const { name, address } = parsed.data
+    const { name, address, feePerMatch } = parsed.data
 
     const { data: venue, error } = await auth.adminClient
       .from("venues")
       .insert({
         name,
         address: address ?? null,
+        fee_per_match: feePerMatch ?? null,
       })
-      .select("id, name, address, created_at")
+      .select("id, name, address, fee_per_match, created_at")
       .single()
 
     if (error || !venue) {

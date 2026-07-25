@@ -6,6 +6,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server"
 const createCourtSchema = z.object({
   venueId: z.string().min(1),
   name: z.string().min(1),
+  feePerMatch: z.number().nonnegative().optional(),
 })
 
 async function assertAdmin(accessToken: string) {
@@ -53,7 +54,10 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url)
     const venueId = searchParams.get("venueId")
 
-    let q = auth.adminClient.from("courts").select("id, venue_id, name, created_at").order("created_at", { ascending: true })
+    let q = auth.adminClient
+      .from("courts")
+      .select("id, venue_id, name, created_at")
+      .order("created_at", { ascending: true })
 
     if (venueId) {
       q = q.eq("venue_id", venueId)
