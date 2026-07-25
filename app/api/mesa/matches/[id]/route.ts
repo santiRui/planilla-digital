@@ -201,7 +201,10 @@ function computeStandings(teamIds: string[], finalMatches: MatchLite[]): Standin
   return list
 }
 
-async function resolveSeriesAndMaybeAdvance(adminClient: ReturnType<typeof createSupabaseAdminClient>, match: MatchRow) {
+export async function resolveSeriesAndMaybeAdvance(
+  adminClient: ReturnType<typeof createSupabaseAdminClient>,
+  match: MatchRow,
+) {
   if (!match.playoff_series_id) return
   if (!isPhaseValue(match.phase)) return
   if (match.status !== "finalizado") return
@@ -420,7 +423,8 @@ async function maybeAdvancePhase(adminClient: ReturnType<typeof createSupabaseAd
   const nextMatchups: Array<{ home: string; away: string; index: number }> = []
 
   if (phase === "cuartos" && next === "semifinal") {
-    // Para cuartos podemos tener 2 o 4 series.
+    // Para cuartos podemos tener 2, 3 (con un libre) o 4 series.
+    const totalSeries = list.length
     const byIndex = new Map<number, string>()
     for (const s of list) {
       if (s.winner_team_id) {
@@ -428,18 +432,20 @@ async function maybeAdvancePhase(adminClient: ReturnType<typeof createSupabaseAd
       }
     }
 
-    const indices = Array.from(byIndex.keys()).sort((a, b) => a - b)
-
-    if (indices.length === 2) {
-      // Caso 2 series: semifinal única entre serie 1 y 2.
-      const i1 = indices[0]
-      const i2 = indices[1]
-      const w1 = byIndex.get(i1)!
-      const w2 = byIndex.get(i2)!
-      if (w1 && w2 && !existingNextIndices.has(1)) {
-        nextMatchups.push({ home: w1, away: w2, index: 1 })
+    if (totalSeries === 2) {
+      // Torneo con solo 2 cruces de cuartos: cuando ambas series tienen
+      // ganador se arma una única semifinal entre esas dos series.
+      const indices = Array.from(byIndex.keys()).sort((a, b) => a - b)
+      if (indices.length === 2) {
+        const i1 = indices[0]
+        const i2 = indices[1]
+        const w1 = byIndex.get(i1)!
+        const w2 = byIndex.get(i2)!
+        if (w1 && w2 && !existingNextIndices.has(1)) {
+          nextMatchups.push({ home: w1, away: w2, index: 1 })
+        }
       }
-    } else if (indices.length === 3) {
+    } else if (totalSeries === 3) {
       // Caso especial: 3 series de cuartos + 1 equipo libre (semilla 1).
       // - Semifinal 1: ganador serie 1 vs ganador serie 2 (lado "2-3").
       // - Semifinal 2: semilla 1 (bye) vs ganador serie 3 (lado "1-4/5").
@@ -493,14 +499,42 @@ async function maybeAdvancePhase(adminClient: ReturnType<typeof createSupabaseAd
           nextMatchups.push({ home: topSeedId, away: w3, index: 2 })
         }
       }
+    } else if (totalSeries === 4) {
+      // Caso clásico 4 cruces de cuartos.
+      // Numeramos explícitamente:
+      //  - Cuarto 1 (series_index = 1)
+      //  - Cuarto 2 (series_index = 2)
+      //  - Cuarto 3 (series_index = 3)
+      //  - Cuarto 4 (series_index = 4)
+      // Semifinales:
+      //  - Semi 1: ganador Cuarto 1 vs ganador Cuarto 4 (series_index = 1)
+      //  - Semi 2: ganador Cuarto 2 vs ganador Cuarto 3 (series_index = 2)
+      // Cada semifinal se crea en cuanto ambos ganadores existen,
+      // aunque el otro lado de la llave todavía no esté definido.
+
+      const w1 = byIndex.get(1)
+      const w2 = byIndex.get(2)
+      const w3 = byIndex.get(3)
+      const w4 = byIndex.get(4)
+
+      // Semi 2 vs 3 (índice 2) puede generarse apenas existan ambos.
+      if (w2 && w3 && !existingNextIndices.has(2)) {
+        nextMatchups.push({ home: w2, away: w3, index: 2 })
+      }
+
+      // Semi 1 vs 4 (índice 1) se genera cuando existan esos ganadores.
+      if (w1 && w4 && !existingNextIndices.has(1)) {
+        nextMatchups.push({ home: w1, away: w4, index: 1 })
+      }
     } else {
-      // Caso clásico 4 series (u otro número par >=4): semifinal 1 = 1 vs último,
-      // semifinal 2 = 2 vs anteúltimo, etc.
-      const sortedIndices = indices.slice().sort((a, b) => a - b)
-      const half = Math.floor(sortedIndices.length / 2)
+      // Cualquier otro caso (por compatibilidad futura): aplicamos el
+      // emparejamiento genérico 1 vs último, 2 vs anteúltimo, etc.,
+      // pero solo usando las series que ya tienen ganador.
+      const indicesWithWinner = Array.from(byIndex.keys()).sort((a, b) => a - b)
+      const half = Math.floor(indicesWithWinner.length / 2)
       for (let i = 0; i < half; i += 1) {
-        const left = sortedIndices[i]
-        const right = sortedIndices[sortedIndices.length - 1 - i]
+        const left = indicesWithWinner[i]
+        const right = indicesWithWinner[indicesWithWinner.length - 1 - i]
         const wLeft = byIndex.get(left)
         const wRight = byIndex.get(right)
         const targetIndex = i + 1

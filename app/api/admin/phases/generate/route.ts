@@ -264,25 +264,71 @@ export async function POST(req: Request) {
       qualified = standings.slice(0, requested)
     }
 
-    // Aplicar "libres": si hay menos equipos reales que cupos configurados,
-    // los primeros quedan libres y no se emparejan en esta fase.
+    const phase: Phase = hasConfig ? phaseFromQualified(teamsToQualify) : ((parsed.data.phase ?? "cuartos") as Phase)
+
+    // Aplicar "libres": si hay menos equipos reales que cupos configurados.
+    // Caso especial: cuartos con 8 plazas pero menos de 8 equipos reales
+    // (por ejemplo, 7 equipos para 8 cupos). En ese escenario queremos
+    // mantener siempre 4 cruces numerados 1..4, donde:
+    //  - Cuarto 1: semilla 1 vs Libre (winner_team_id = semilla 1 desde el inicio)
+    //  - Cuarto 2: semilla 2 vs semilla 7
+    //  - Cuarto 3: semilla 3 vs semilla 6
+    //  - Cuarto 4: semilla 4 vs semilla 5
+    // Así las semifinales pueden armarse como
+    //  Semi 1 = ganador Cuarto 1 vs ganador Cuarto 4
+    //  Semi 2 = ganador Cuarto 2 vs ganador Cuarto 3.
+
     const total = qualified.length
     const initialByes = Math.max(0, teamsToQualify - total)
     const byes = Math.min(initialByes, total)
 
-    const active = qualified.slice(byes)
-    const n = active.length % 2 === 0 ? active.length : active.length - 1
+    const matchups: Array<{ home: string; away: string | null; winnerPreset?: string | null; seriesIndex: number }> = []
 
-    const matchups: Array<{ home: string; away: string }> = []
-    const half = n / 2
+    if (phase === "cuartos" && teamsToQualify === 8 && byes > 0 && total >= 4) {
+      const seeds = qualified.map((q) => q.teamId)
 
-    // Playoffs: siempre emparejar 1º con último, 2º con anteúltimo, etc.,
-    // dentro del grupo de equipos que sí juegan esta fase.
-    for (let i = 0; i < half; i++) {
-      matchups.push({ home: active[i]!.teamId, away: active[n - 1 - i]!.teamId })
+      // Serie 1: semilla 1 recibe bye (vs Libre). Ganador predefinido.
+      const topSeed = seeds[0]!
+      matchups.push({ home: topSeed, away: null, winnerPreset: topSeed, seriesIndex: 1 })
+
+      const s2 = seeds[1]
+      const s3 = seeds[2]
+      const s4 = seeds[3]
+      const s5 = seeds[4]
+      const s6 = seeds[5]
+      const s7 = seeds[6]
+
+      // Cuarto 2: 2 vs 7
+      if (s2 && s7) {
+        matchups.push({ home: s2, away: s7, winnerPreset: null, seriesIndex: 2 })
+      }
+
+      // Cuarto 3: 3 vs 6
+      if (s3 && s6) {
+        matchups.push({ home: s3, away: s6, winnerPreset: null, seriesIndex: 3 })
+      }
+
+      // Cuarto 4: 4 vs 5
+      if (s4 && s5) {
+        matchups.push({ home: s4, away: s5, winnerPreset: null, seriesIndex: 4 })
+      }
+    } else {
+      // Comportamiento genérico: distribuimos los byes al principio y
+      // emparejamos sólo a los equipos activos por 1º vs último, etc.
+      const active = qualified.slice(byes)
+      const n = active.length % 2 === 0 ? active.length : active.length - 1
+      const half = n / 2
+
+      for (let i = 0; i < half; i++) {
+        matchups.push({
+          home: active[i]!.teamId,
+          away: active[n - 1 - i]!.teamId,
+          winnerPreset: null,
+          seriesIndex: i + 1,
+        })
+      }
     }
 
-    const phase: Phase = hasConfig ? phaseFromQualified(teamsToQualify) : ((parsed.data.phase ?? "cuartos") as Phase)
     const bestOf = hasConfig ? bestOfForPhase(phase, config) : 1
 
     const { error: deleteMatchesError } = await auth.adminClient
@@ -305,15 +351,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: deleteSeriesError.message }, { status: 400 })
     }
 
-    const seriesRows = matchups.map((m, idx) => ({
+    const seriesRows = matchups.map((m) => ({
       tournament_id: tournamentId,
       phase,
-      series_index: idx + 1,
+      series_index: m.seriesIndex,
       home_team_id: m.home,
-      away_team_id: m.away,
+      // away_team_id es NOT NULL, así que para el bye usamos el mismo equipo
+      // en home y away. Esto ya es válido porque quitamos la constraint
+      // playoff_series_distinct_teams.
+      away_team_id: m.away ?? m.home,
       best_of: bestOf,
-      winner_team_id: null,
-      tiebreak_applied: null,
+      winner_team_id: m.winnerPreset ?? null,
+      tiebreak_applied: m.winnerPreset ? "bye" : null,
       random_winner_team_id: null,
     }))
 
@@ -336,6 +385,13 @@ export async function POST(req: Request) {
 
     const insertRows = seriesList.flatMap((s) => {
       const rows = [] as any[]
+
+      // Para la serie con bye (Libre), codificada como home_team_id === away_team_id
+      // y con winner_team_id ya seteado, no generamos partidos reales.
+      if (s.home_team_id === s.away_team_id) {
+        return rows
+      }
+
       for (let game = 1; game <= bestOf; game += 1) {
         const isEven = game % 2 === 0
         const homeTeamId = isEven ? s.away_team_id : s.home_team_id

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 import { createSupabaseAdminClient } from "@/lib/supabase/admin"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
+import { resolveSeriesAndMaybeAdvance } from "@/app/api/mesa/matches/[id]/route"
 
 const updateMatchSchedulingSchema = z.object({
   scheduledDate: z.string().optional().nullable(), // YYYY-MM-DD
@@ -77,7 +78,9 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     // Leemos el estado actual del partido para poder aplicar reglas de transición (por ej. suspendido -> programado al reprogramar)
     const { data: currentMatch, error: currentError } = await auth.adminClient
       .from("matches")
-      .select("id, status, scheduled_at")
+      .select(
+        "id, status, scheduled_at, tournament_id, phase, home_team_id, away_team_id, home_score, away_score, playoff_series_id, series_game_number",
+      )
       .eq("id", id)
       .maybeSingle()
 
@@ -155,7 +158,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       .update(update)
       .eq("id", id)
       .select(
-        "id, tournament_id, home_team_id, away_team_id, round, phase, status, scheduled_at, venue_id, court_id, home_score, away_score, created_at, match_official_assignments(user_id, role)",
+        "id, tournament_id, home_team_id, away_team_id, round, phase, status, scheduled_at, venue_id, court_id, home_score, away_score, playoff_series_id, series_game_number, created_at, match_official_assignments(user_id, role)",
       )
       .single()
 
@@ -207,19 +210,13 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       }
     }
 
-    const { data: finalMatch, error: refetchError } = await auth.adminClient
-      .from("matches")
-      .select(
-        "id, tournament_id, home_team_id, away_team_id, round, phase, status, scheduled_at, venue_id, court_id, home_score, away_score, created_at, match_official_assignments(user_id, role)",
-      )
-      .eq("id", id)
-      .single()
-
-    if (refetchError || !finalMatch) {
-      return NextResponse.json({ error: refetchError?.message ?? "No se pudo leer el partido" }, { status: 400 })
+    // Si desde Programación se marca un partido de play-off como finalizado,
+    // reutilizamos la misma lógica de avance de series que en la mesa.
+    if (updated.playoff_series_id && updated.status === "finalizado") {
+      await resolveSeriesAndMaybeAdvance(auth.adminClient as any, updated as any)
     }
 
-    return NextResponse.json({ match: finalMatch })
+    return NextResponse.json({ match: updated })
   } catch (e) {
     const message = e instanceof Error ? e.message : "Error interno"
     console.error("PATCH /api/admin/matches/[id] failed:", e)
