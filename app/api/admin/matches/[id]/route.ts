@@ -172,6 +172,8 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     const hasRefereesField = Object.prototype.hasOwnProperty.call(parsed.data, "refereeIds")
     const hasTableOfficialsField = Object.prototype.hasOwnProperty.call(parsed.data, "tableOfficialIds")
 
+    let matchToReturn = updated
+
     if (hasRefereesField || hasTableOfficialsField) {
       const refereeIds = Array.from(new Set((parsed.data.refereeIds ?? []).filter(Boolean)))
       const tableOfficialIds = Array.from(new Set((parsed.data.tableOfficialIds ?? []).filter(Boolean)))
@@ -208,15 +210,34 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
           return NextResponse.json({ error: insertAssignmentsError.message }, { status: 400 })
         }
       }
+
+      // Volvemos a leer el partido con las designaciones recién insertadas para devolver
+      // al cliente el estado actualizado que usará Programación.
+      const { data: refreshed, error: refreshedError } = await auth.adminClient
+        .from("matches")
+        .select(
+          "id, tournament_id, home_team_id, away_team_id, round, phase, status, scheduled_at, venue_id, court_id, home_score, away_score, playoff_series_id, series_game_number, created_at, match_official_assignments(user_id, role)",
+        )
+        .eq("id", id)
+        .single()
+
+      if (!refreshed || refreshedError) {
+        return NextResponse.json(
+          { error: refreshedError?.message ?? "No se pudo cargar el partido actualizado" },
+          { status: 400 },
+        )
+      }
+
+      matchToReturn = refreshed as typeof updated
     }
 
     // Si desde Programación se marca un partido de play-off como finalizado,
     // reutilizamos la misma lógica de avance de series que en la mesa.
-    if (updated.playoff_series_id && updated.status === "finalizado") {
-      await resolveSeriesAndMaybeAdvance(auth.adminClient as any, updated as any)
+    if (matchToReturn.playoff_series_id && matchToReturn.status === "finalizado") {
+      await resolveSeriesAndMaybeAdvance(auth.adminClient as any, matchToReturn as any)
     }
 
-    return NextResponse.json({ match: updated })
+    return NextResponse.json({ match: matchToReturn })
   } catch (e) {
     const message = e instanceof Error ? e.message : "Error interno"
     console.error("PATCH /api/admin/matches/[id] failed:", e)

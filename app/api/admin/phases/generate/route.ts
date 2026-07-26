@@ -17,6 +17,7 @@ type StandingRow = {
   played: number
   won: number
   lost: number
+  np: number
   pointsFor: number
   pointsAgainst: number
   points: number
@@ -29,6 +30,8 @@ type MatchLite = {
   away_score: number | null
   phase?: string | null
   zone_code?: string | null
+  status?: string | null
+  status_reason?: string | null
 }
 
 function phaseFromQualified(qualifiedTeams: number): Phase {
@@ -70,7 +73,7 @@ async function assertAdmin(accessToken: string) {
   return { ok: true as const, adminClient }
 }
 
-function computeStandings(teamIds: string[], finalMatches: MatchLite[]): StandingRow[] {
+function computeStandings(teamIds: string[], matches: MatchLite[]): StandingRow[] {
   const rows = new Map<string, StandingRow>()
   for (const id of teamIds) {
     rows.set(id, {
@@ -78,15 +81,18 @@ function computeStandings(teamIds: string[], finalMatches: MatchLite[]): Standin
       played: 0,
       won: 0,
       lost: 0,
+      np: 0,
       pointsFor: 0,
       pointsAgainst: 0,
       points: 0,
     })
   }
 
-  for (const m of finalMatches) {
-    if (!rows.has(m.home_team_id) || !rows.has(m.away_team_id)) continue
+  for (const m of matches) {
+    // Solo consideramos partidos finalizados con ambos scores cargados
+    if ((m as any).status !== "finalizado") continue
     if (m.home_score == null || m.away_score == null) continue
+    if (!rows.has(m.home_team_id) || !rows.has(m.away_team_id)) continue
 
     const home = rows.get(m.home_team_id)!
     const away = rows.get(m.away_team_id)!
@@ -100,23 +106,76 @@ function computeStandings(teamIds: string[], finalMatches: MatchLite[]): Standin
     away.pointsFor += m.away_score
     away.pointsAgainst += m.home_score
 
+    const reason = (m.status_reason ?? "").toString()
+    const isNoShow = reason.startsWith("no_presentacion:")
+    const absent = isNoShow ? (reason.split(":")[1] as "home" | "away" | undefined) : undefined
+
+    const homeAbsent = isNoShow && absent === "home"
+    const awayAbsent = isNoShow && absent === "away"
+
     if (m.home_score > m.away_score) {
       home.won += 1
-      away.lost += 1
+      home.points += 2
+      if (awayAbsent) {
+        away.np += 1
+      } else {
+        away.lost += 1
+        away.points += 1
+      }
     } else {
       away.won += 1
-      home.lost += 1
+      away.points += 2
+      if (homeAbsent) {
+        home.np += 1
+      } else {
+        home.lost += 1
+        home.points += 1
+      }
     }
   }
 
   const list = Array.from(rows.values())
-  for (const r of list) {
-    // 2 puntos por victoria, 1 punto por derrota
-    r.points = r.won * 2 + r.lost * 1
+
+  // Helper: diferencia de puntos en enfrentamientos directos entre dos equipos
+  const headToHeadDiff = (teamA: string, teamB: string) => {
+    let diffA = 0
+    let games = 0
+    for (const m of matches) {
+      if ((m.phase ?? null) !== "fase_regular") continue
+      if ((m as any).status !== "finalizado") continue
+      const involvesA = m.home_team_id === teamA || m.away_team_id === teamA
+      const involvesB = m.home_team_id === teamB || m.away_team_id === teamB
+      if (!involvesA || !involvesB) continue
+
+      const aIsHome = m.home_team_id === teamA
+      const homeScore = m.home_score ?? 0
+      const awayScore = m.away_score ?? 0
+      const aScore = aIsHome ? homeScore : awayScore
+      const bScore = aIsHome ? awayScore : homeScore
+
+      diffA += aScore - bScore
+      games += 1
+    }
+    return { diffA, games }
   }
 
   list.sort((a, b) => {
     if (b.points !== a.points) return b.points - a.points
+
+    // Regla NP: el que no tiene NP va arriba si el otro sí tiene.
+    const aHasNp = a.np > 0
+    const bHasNp = b.np > 0
+    if (aHasNp !== bHasNp) {
+      return aHasNp ? 1 : -1
+    }
+
+    // Confrontación mutua como siguiente criterio
+    const { diffA, games } = headToHeadDiff(a.teamId, b.teamId)
+    if (games > 0 && diffA !== 0) {
+      return diffA > 0 ? -1 : 1
+    }
+
+    // Si siguen empatados, diferencia general y luego puntos a favor
     const aDiff = a.pointsFor - a.pointsAgainst
     const bDiff = b.pointsFor - b.pointsAgainst
     if (bDiff !== aDiff) return bDiff - aDiff
@@ -182,7 +241,7 @@ export async function POST(req: Request) {
 
     const { data: finalMatches, error: matchesError } = await auth.adminClient
       .from("matches")
-      .select("home_team_id, away_team_id, home_score, away_score, phase, zone_code")
+      .select("home_team_id, away_team_id, home_score, away_score, phase, zone_code, status, status_reason")
       .eq("tournament_id", tournamentId)
       .eq("status", "finalizado")
 
