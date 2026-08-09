@@ -459,7 +459,9 @@ export async function POST(req: Request) {
           tournament_id: tournamentId,
           home_team_id: homeTeamId,
           away_team_id: awayTeamId,
-          round: 1,
+          // Usamos series_game_number como round para que en el fixture público
+          // se agrupen como "Fecha 1", "Fecha 2", etc. dentro de la fase.
+          round: game,
           phase,
           status: "programado",
           scheduled_at: null,

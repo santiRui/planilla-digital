@@ -124,16 +124,31 @@ export default function TeamStatsPage({ params }: TeamPageProps) {
       // Stats del equipo en partidos finalizados
       let statRows: any[] = []
       if (finalizedMatchIds.length > 0) {
-        const { data: statsData, error: statsError } = await supabase
-          .from("match_player_stats")
+        // Primero intentamos usar la tabla de planilla, que es la fuente oficial.
+        const { data: planillaRows, error: planillaError } = await supabase
+          .from("match_player_stats_planilla")
           .select(
             "match_id, team_id, player_id, minutes, points, t1_made, t1_att, t2_made, t2_att, t3_made, t3_att, rebounds, assists, steals, turnovers, blocks_committed, blocks_received, fouls_committed, fouls_received",
           )
           .eq("team_id", teamId)
           .in("match_id", finalizedMatchIds)
 
-        if (!statsError && statsData) {
-          statRows = statsData as any[]
+        if (planillaRows && planillaRows.length > 0 && !planillaError) {
+          statRows = planillaRows as any[]
+        } else {
+          // Si todavía no hay filas en planilla (por compatibilidad hacia atrás),
+          // usamos la tabla legacy match_player_stats.
+          const { data: legacyRows, error: legacyError } = await supabase
+            .from("match_player_stats")
+            .select(
+              "match_id, team_id, player_id, minutes, points, t1_made, t1_att, t2_made, t2_att, t3_made, t3_att, rebounds, assists, steals, turnovers, blocks_committed, blocks_received, fouls_committed, fouls_received",
+            )
+            .eq("team_id", teamId)
+            .in("match_id", finalizedMatchIds)
+
+          if (!legacyError && legacyRows) {
+            statRows = legacyRows as any[]
+          }
         }
       }
 
@@ -451,7 +466,7 @@ export default function TeamStatsPage({ params }: TeamPageProps) {
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-4 text-xs text-muted-foreground">
+          <div className="grid grid-cols-3 gap-4 text-xs text-muted-foreground mt-4">
             <div>
               <div className="text-base font-semibold text-foreground">{playedMatchesCount}</div>
               <div>PJ</div>
@@ -503,16 +518,28 @@ export default function TeamStatsPage({ params }: TeamPageProps) {
                         <td className="px-1 py-1 text-left">{playedMatchesCount}</td>
                         <td className="px-1 py-1 text-right">{(teamTotals.points / playedMatchesCount).toFixed(1)}</td>
                         <td className="px-1 py-1 text-right">
-                          {(teamTotals.t1Made / playedMatchesCount).toFixed(1)}/
-                          {(teamTotals.t1Att / playedMatchesCount).toFixed(1)}
+                          {(() => {
+                            const made = teamTotals.t1Made / playedMatchesCount
+                            const att = teamTotals.t1Att / playedMatchesCount
+                            const pct = att > 0 ? (made / att) * 100 : 0
+                            return `${made.toFixed(1)}/${att.toFixed(1)} (${pct.toFixed(0)}%)`
+                          })()}
                         </td>
                         <td className="px-1 py-1 text-right">
-                          {(teamTotals.t2Made / playedMatchesCount).toFixed(1)}/
-                          {(teamTotals.t2Att / playedMatchesCount).toFixed(1)}
+                          {(() => {
+                            const made = teamTotals.t2Made / playedMatchesCount
+                            const att = teamTotals.t2Att / playedMatchesCount
+                            const pct = att > 0 ? (made / att) * 100 : 0
+                            return `${made.toFixed(1)}/${att.toFixed(1)} (${pct.toFixed(0)}%)`
+                          })()}
                         </td>
                         <td className="px-1 py-1 text-right">
-                          {(teamTotals.t3Made / playedMatchesCount).toFixed(1)}/
-                          {(teamTotals.t3Att / playedMatchesCount).toFixed(1)}
+                          {(() => {
+                            const made = teamTotals.t3Made / playedMatchesCount
+                            const att = teamTotals.t3Att / playedMatchesCount
+                            const pct = att > 0 ? (made / att) * 100 : 0
+                            return `${made.toFixed(1)}/${att.toFixed(1)} (${pct.toFixed(0)}%)`
+                          })()}
                         </td>
                         <td className="px-1 py-1 text-right">
                           {(teamTotals.rebounds / playedMatchesCount).toFixed(1)}
@@ -596,13 +623,28 @@ export default function TeamStatsPage({ params }: TeamPageProps) {
                             <td className="px-1 py-1 text-right">{(row.points / gp).toFixed(1)}</td>
                             <td className="px-1 py-1 text-right">{(row.minutes / gp).toFixed(1)}</td>
                             <td className="px-1 py-1 text-right">
-                              {(row.t1Made / gp).toFixed(1)}/{(row.t1Att / gp).toFixed(1)}
+                              {(() => {
+                                const made = row.t1Made / gp
+                                const att = row.t1Att / gp
+                                const pct = att > 0 ? (made / att) * 100 : 0
+                                return `${made.toFixed(1)}/${att.toFixed(1)} (${pct.toFixed(0)}%)`
+                              })()}
                             </td>
                             <td className="px-1 py-1 text-right">
-                              {(row.t2Made / gp).toFixed(1)}/{(row.t2Att / gp).toFixed(1)}
+                              {(() => {
+                                const made = row.t2Made / gp
+                                const att = row.t2Att / gp
+                                const pct = att > 0 ? (made / att) * 100 : 0
+                                return `${made.toFixed(1)}/${att.toFixed(1)} (${pct.toFixed(0)}%)`
+                              })()}
                             </td>
                             <td className="px-1 py-1 text-right">
-                              {(row.t3Made / gp).toFixed(1)}/{(row.t3Att / gp).toFixed(1)}
+                              {(() => {
+                                const made = row.t3Made / gp
+                                const att = row.t3Att / gp
+                                const pct = att > 0 ? (made / att) * 100 : 0
+                                return `${made.toFixed(1)}/${att.toFixed(1)} (${pct.toFixed(0)}%)`
+                              })()}
                             </td>
                             <td className="px-1 py-1 text-right">{(row.rebounds / gp).toFixed(1)}</td>
                             <td className="px-1 py-1 text-right">{(row.assists / gp).toFixed(1)}</td>

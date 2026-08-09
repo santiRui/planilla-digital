@@ -668,7 +668,7 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
 
       {/* Championship Header */}
       <section className="bg-primary text-primary-foreground">
-        <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
           <Button
             variant="ghost"
             size="sm"
@@ -680,11 +680,6 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
           </Button>
 
           <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-            {championship && (
-              <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-primary-foreground/10 text-primary-foreground font-bold text-2xl">
-                {championship.shortName}
-              </div>
-            )}
             <div>
               <div className="flex items-center gap-3 mb-1">
                 <h1 className="text-3xl font-bold">{championship?.name ?? "Cargando torneo..."}</h1>
@@ -1102,42 +1097,28 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
                       <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors">
                         <CardHeader className="pb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="flex items-center gap-3">
-                          {team.logoUrl ? (
-                            <div className="h-9 w-9 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0">
-                              <img src={team.logoUrl} alt={team.name} className="h-full w-full object-cover" />
+                            {team.logoUrl ? (
+                              <div className="h-9 w-9 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0">
+                                <img src={team.logoUrl} alt={team.name} className="h-full w-full object-cover" />
+                              </div>
+                            ) : (
+                              <div
+                                className="h-9 w-9 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0"
+                                style={{ backgroundColor: team.primaryColor ?? "#666" }}
+                              >
+                                {team.name.substring(0, 2).toUpperCase()}
+                              </div>
+                            )}
+                            <div>
+                              <CardTitle className="text-base">{team.name}</CardTitle>
+                              {team.club && <CardDescription>{team.club}</CardDescription>}
                             </div>
-                          ) : (
-                            <div
-                              className="h-9 w-9 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0"
-                              style={{ backgroundColor: team.primaryColor ?? "#666" }}
-                            >
-                              {team.name.substring(0, 2).toUpperCase()}
-                            </div>
-                          )}
-                          <div>
-                            <CardTitle className="text-base">{team.name}</CardTitle>
-                            {team.club && <CardDescription>{team.club}</CardDescription>}
                           </div>
-                        </div>
-                        <div className="grid grid-cols-3 gap-3 text-xs text-muted-foreground">
-                          <div>
-                            <div className="font-semibold text-base text-foreground">{playedMatches}</div>
-                            <div>PJ</div>
-                          </div>
-                          <div>
-                            <div className="font-semibold text-base text-foreground">{standingPoints}</div>
-                            <div>PTS</div>
-                          </div>
-                          <div>
-                            <div className="font-semibold text-base text-foreground">{totals.points}</div>
-                            <div>Puntos</div>
-                          </div>
-                        </div>
-                      </CardHeader>
-                    </Card>
-                  </Link>
-                )
-              })}
+                        </CardHeader>
+                      </Card>
+                    </Link>
+                  )
+                })}
             </div>
           )}
           </TabsContent>

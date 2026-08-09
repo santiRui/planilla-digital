@@ -491,85 +491,99 @@ export default function ProgramacionPage() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filteredMatches.map((match) => (
-                    <TableRow key={match.id}>
-                    <TableCell className="font-medium">Fecha {match.round}</TableCell>
-                    <TableCell>
-                      <div className="font-medium">
-                        {getTeamName(match.homeTeamId)} vs {getTeamName(match.awayTeamId)}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {match.scheduledDate ? (
-                        <div className="flex items-center gap-2">
-                          <div className="flex items-center gap-1">
-                            <Calendar className="h-4 w-4 text-muted-foreground" />
-                            <span>{new Date(match.scheduledDate).toLocaleDateString("es-AR")}</span>
-                            {match.scheduledTime && (
-                              <>
-                                <Clock className="h-4 w-4 text-muted-foreground ml-2" />
-                                <span>{match.scheduledTime}</span>
-                              </>
-                            )}
+                  filteredMatches.map((match) => {
+                    const phaseLabel =
+                      match.phase === "cuartos"
+                        ? "cuartos"
+                        : match.phase === "semifinal"
+                          ? "semi"
+                          : match.phase === "final"
+                            ? "final"
+                            : null
+                    const fechaText = phaseLabel
+                      ? `Fecha ${match.round} ${phaseLabel}`
+                      : `Fecha ${match.round}`
+
+                    return (
+                      <TableRow key={match.id}>
+                        <TableCell className="font-medium">{fechaText}</TableCell>
+                        <TableCell>
+                          <div className="font-medium">
+                            {getTeamName(match.homeTeamId)} vs {getTeamName(match.awayTeamId)}
                           </div>
-                          <BadgeStatus status={match.status as any} />
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <span className="text-muted-foreground">Sin programar</span>
-                          <BadgeStatus status={match.status as any} />
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {match.venueId ? (
-                        <div className="flex items-center gap-1">
-                          <MapPin className="h-4 w-4 text-muted-foreground" />
-                          <span>
-                            {getVenueName(match.venueId)}
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {match.refereeIds.length > 0 ? (
-                        <div className="text-sm">{match.refereeIds.map((id) => getOfficialName(id)).join(", ")}</div>
-                      ) : (
-                        <span className="text-muted-foreground">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {match.tableOfficialIds.length > 0 ? (
-                        <div className="text-sm">
-                          {match.tableOfficialIds.map((id) => getOfficialName(id)).join(", ")}
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Button variant="ghost" size="icon" onClick={() => openEditDialog(match)}>
-                        <Edit2 className="h-4 w-4" />
-                        <span className="sr-only">Editar programación</span>
-                      </Button>
-                      {match.status === "en_juego" && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            setSuspendMatch(match)
-                            setSuspendReason("")
-                            setSuspendError(null)
-                          }}
-                        >
-                          Suspender
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                  ))
+                        </TableCell>
+                        <TableCell>
+                          {match.scheduledDate ? (
+                            <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-1">
+                                <Calendar className="h-4 w-4 text-muted-foreground" />
+                                <span>{new Date(match.scheduledDate).toLocaleDateString("es-AR")}</span>
+                                {match.scheduledTime && (
+                                  <>
+                                    <Clock className="h-4 w-4 text-muted-foreground ml-2" />
+                                    <span>{match.scheduledTime}</span>
+                                  </>
+                                )}
+                              </div>
+                              <BadgeStatus status={match.status as any} />
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <span className="text-muted-foreground">Sin programar</span>
+                              <BadgeStatus status={match.status as any} />
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {match.venueId ? (
+                            <div className="flex items-center gap-1">
+                              <MapPin className="h-4 w-4 text-muted-foreground" />
+                              <span>{getVenueName(match.venueId)}</span>
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">-</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {match.refereeIds.length > 0 ? (
+                            <div className="text-sm">
+                              {match.refereeIds.map((id) => getOfficialName(id)).join(", ")}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">-</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {match.tableOfficialIds.length > 0 ? (
+                            <div className="text-sm">
+                              {match.tableOfficialIds.map((id) => getOfficialName(id)).join(", ")}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">-</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Button variant="ghost" size="icon" onClick={() => openEditDialog(match)}>
+                            <Edit2 className="h-4 w-4" />
+                            <span className="sr-only">Editar programación</span>
+                          </Button>
+                          {match.status === "en_juego" && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setSuspendMatch(match)
+                                setSuspendReason("")
+                                setSuspendError(null)
+                              }}
+                            >
+                              Suspender
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })
                 )}
               </TableBody>
             </Table>
@@ -584,10 +598,24 @@ export default function ProgramacionPage() {
             <DialogTitle>Programar Partido</DialogTitle>
             <DialogDescription>
               {editingMatch && (
-                <>
-                  {getTeamName(editingMatch.homeTeamId)} vs {getTeamName(editingMatch.awayTeamId)} - Fecha{" "}
-                  {editingMatch.round}
-                </>
+                (() => {
+                  const phaseLabel =
+                    editingMatch.phase === "cuartos"
+                      ? "cuartos"
+                      : editingMatch.phase === "semifinal"
+                        ? "semi"
+                        : editingMatch.phase === "final"
+                          ? "final"
+                          : null
+                  const fechaText = phaseLabel
+                    ? `Fecha ${editingMatch.round} ${phaseLabel}`
+                    : `Fecha ${editingMatch.round}`
+                  return (
+                    <>
+                      {getTeamName(editingMatch.homeTeamId)} vs {getTeamName(editingMatch.awayTeamId)} - {fechaText}
+                    </>
+                  )
+                })()
               )}
             </DialogDescription>
           </DialogHeader>

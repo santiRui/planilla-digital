@@ -544,16 +544,23 @@ async function maybeAdvancePhase(adminClient: ReturnType<typeof createSupabaseAd
       }
     }
   } else {
-    // Comportamiento genérico: solo avanzamos si TODAS las series
-    // tienen ganador (por ejemplo, para semifinal -> final).
-    if (list.some((s) => !s.winner_team_id)) return
+    // Comportamiento genérico: avanzamos por pareja en cuanto haya
+    // dos ganadores que formen un cruce (1 vs último, 2 vs anteúltimo, etc.).
+    // No exigimos que TODAS las series de la fase tengan ganador; solo
+    // se generan las llaves para las que ya existen ambos equipos.
 
-    const winners = list.map((s) => s.winner_team_id!).filter(Boolean)
-    const half = winners.length / 2
+    const withWinner = list.filter((s) => s.winner_team_id).sort((a, b) => a.series_index - b.series_index)
+    const half = Math.floor(withWinner.length / 2)
+
     for (let i = 0; i < half; i += 1) {
+      const left = withWinner[i]!
+      const right = withWinner[withWinner.length - 1 - i]!
       const idx = i + 1
       if (existingNextIndices.has(idx)) continue
-      nextMatchups.push({ home: winners[i]!, away: winners[winners.length - 1 - i]!, index: idx })
+      const wLeft = left.winner_team_id
+      const wRight = right.winner_team_id
+      if (!wLeft || !wRight) continue
+      nextMatchups.push({ home: wLeft, away: wRight, index: idx })
     }
   }
 
