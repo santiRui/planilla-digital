@@ -53,7 +53,7 @@ export default function EquiposPage() {
 
   const [formData, setFormData] = useState({
     name: "",
-    categoryId: "",
+    categoryIds: [] as string[],
     logoUrl: "",
     primaryColor: "#1e3a5f",
     secondaryColor: "#f59e0b",
@@ -174,8 +174,8 @@ export default function EquiposPage() {
         return
       }
 
-      if (!formData.name || !formData.categoryId) {
-        setError("Completá nombre y categoría.")
+      if (!formData.name || formData.categoryIds.length === 0) {
+        setError("Completá el nombre y al menos una categoría.")
         return
       }
 
@@ -207,7 +207,7 @@ export default function EquiposPage() {
 
       const payload = {
         name: formData.name,
-        categoryId: formData.categoryId,
+        categoryIds: formData.categoryIds,
         logoUrl: finalLogoUrl,
         primaryColor: formData.primaryColor,
         secondaryColor: formData.secondaryColor,
@@ -250,7 +250,7 @@ export default function EquiposPage() {
   const resetForm = () => {
     setFormData({
       name: "",
-      categoryId: "",
+      categoryIds: [],
       logoUrl: "",
       primaryColor: "#1e3a5f",
       secondaryColor: "#f59e0b",
@@ -258,11 +258,11 @@ export default function EquiposPage() {
     setLogoFile(null)
   }
 
-  const openEdit = (team: Team) => {
+  const openEditDialog = (team: Team) => {
     setEditingTeam(team)
     setFormData({
       name: team.name,
-      categoryId: team.categoryId,
+      categoryIds: team.categoryIds,
       logoUrl: team.logoUrl ?? "",
       primaryColor: team.primaryColor,
       secondaryColor: team.secondaryColor,
@@ -331,7 +331,8 @@ export default function EquiposPage() {
     return Object.fromEntries(categories.map((c) => [c.id, c])) as Record<string, Category>
   }, [categories])
 
-  const selectedCategory = categories.find((c) => c.id === formData.categoryId) || null
+  const selectedCategory =
+    (formData.categoryIds.length > 0 && categories.find((c) => c.id === formData.categoryIds[0])) || null
   const currentTeamScoring = editingTeam ? getTeamScoring(editingTeam.id) : 0
   const exceedsScoringCap =
     !!selectedCategory && typeof selectedCategory.scoringCap === "number" && selectedCategory.scoringCap >= 0
@@ -419,24 +420,36 @@ export default function EquiposPage() {
                   />
                 </div>
                 <div className="grid gap-2">
-                  <Label htmlFor="category">Categoría</Label>
-                  <Select
-                    value={formData.categoryId}
-                    onValueChange={(value) => setFormData({ ...formData, categoryId: value })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Seleccionar categoría" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {categories.map((category) => (
-                        <SelectItem key={category.id} value={category.id}>
+                  <Label>Categorías</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {categories.map((category) => {
+                      const checked = formData.categoryIds.includes(category.id)
+                      return (
+                        <button
+                          key={category.id}
+                          type="button"
+                          className={`px-2 py-1 rounded border text-xs ${
+                            checked ? "bg-primary text-primary-foreground border-primary" : "bg-background"
+                          }`}
+                          onClick={() => {
+                            setFormData((prev) => {
+                              const has = prev.categoryIds.includes(category.id)
+                              return {
+                                ...prev,
+                                categoryIds: has
+                                  ? prev.categoryIds.filter((id) => id !== category.id)
+                                  : [...prev.categoryIds, category.id],
+                              }
+                            })
+                          }}
+                        >
                           {category.name}
                           {category.ageGroup ? ` (${category.ageGroup})` : ""}
                           {typeof category.scoringCap === "number" && ` (límite: ${category.scoringCap})`}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                        </button>
+                      )
+                    })}
+                  </div>
 
                   {editingTeam &&
                     selectedCategory &&
@@ -513,7 +526,7 @@ export default function EquiposPage() {
                 <Button variant="outline" onClick={() => setIsOpen(false)}>
                   Cancelar
                 </Button>
-                <Button onClick={handleSubmit} disabled={submitting || !formData.name || !formData.categoryId}>
+                <Button onClick={handleSubmit} disabled={submitting || !formData.name || formData.categoryIds.length === 0}>
                   {editingTeam ? "Guardar Cambios" : "Crear Equipo"}
                 </Button>
               </DialogFooter>
@@ -607,7 +620,7 @@ export default function EquiposPage() {
                         <Printer className="mr-2 h-4 w-4" />
                         Descargar planilla
                       </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => openEdit(team)}>
+                      <DropdownMenuItem onClick={() => openEditDialog(team)}>
                         <Edit className="mr-2 h-4 w-4" />
                         Editar
                       </DropdownMenuItem>
