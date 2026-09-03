@@ -9,6 +9,7 @@ const createTournamentSchema = z.object({
   branch: z.enum(["masculino", "femenino", "mixto"]),
   status: z.enum(["pendiente", "activo", "finalizado"]),
   categoryId: z.string().min(1),
+  isPublic: z.boolean().optional().default(true),
 })
 
 function shortNameFrom(name: string) {
@@ -58,7 +59,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Prohibido" }, { status: 403 })
     }
 
-    const { name, year, branch, status, categoryId } = parsed.data
+    const { name, year, branch, status, categoryId, isPublic } = parsed.data
 
     const { data: category, error: categoryError } = await adminClient
       .from("categories")
@@ -87,8 +88,9 @@ export async function POST(req: Request) {
         branch,
         status,
         category_id: categoryId,
+        is_public: isPublic,
       })
-      .select("id, name, short_name, year, branch, status, created_at")
+      .select("id, name, short_name, year, branch, status, is_public, created_at")
       .single()
 
     if (tournamentError || !tournament) {

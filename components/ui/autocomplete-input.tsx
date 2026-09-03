@@ -11,6 +11,7 @@ type AutocompleteInputProps = Omit<React.ComponentProps<typeof Input>, 'value' |
   onValueChange: (value: string) => void
   options: string[]
   maxOptions?: number
+  renderOption?: (option: string, isActive: boolean) => React.ReactNode
 }
 
 function AutocompleteInput({
@@ -19,6 +20,7 @@ function AutocompleteInput({
   options,
   maxOptions = 8,
   className,
+  renderOption,
   ...props
 }: AutocompleteInputProps) {
   const [open, setOpen] = React.useState(false)
@@ -121,25 +123,28 @@ function AutocompleteInput({
         className="w-[var(--radix-popover-trigger-width)] p-1"
       >
         <div className="max-h-64 overflow-y-auto">
-          {filtered.map((opt, idx) => (
-            <button
-              key={opt}
-              type="button"
-              className={cn(
-                'w-full rounded-sm px-2 py-1.5 text-left text-sm outline-none',
-                idx === activeIndex
-                  ? 'bg-accent text-accent-foreground'
-                  : 'hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground',
-              )}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
-                selectOption(opt)
-              }}
-              onMouseEnter={() => setActiveIndex(idx)}
-            >
-              {opt}
-            </button>
-          ))}
+          {filtered.map((opt, idx) => {
+            const isActive = idx === activeIndex
+            return (
+              <button
+                key={opt}
+                type="button"
+                className={cn(
+                  'w-full rounded-sm px-2 py-1.5 text-left text-sm outline-none',
+                  isActive
+                    ? 'bg-accent text-accent-foreground'
+                    : 'hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground',
+                )}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  selectOption(opt)
+                }}
+                onMouseEnter={() => setActiveIndex(idx)}
+              >
+                {renderOption ? renderOption(opt, isActive) : opt}
+              </button>
+            )
+          })}
         </div>
       </PopoverContent>
     </Popover>

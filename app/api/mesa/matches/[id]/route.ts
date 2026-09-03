@@ -373,9 +373,54 @@ export async function resolveSeriesAndMaybeAdvance(
     ...(series as any),
     winner_team_id: winner,
   })
+
+  // Consume one membership game from each team that has remaining_games > 0 in team_memberships
+  await consumeMembershipGames(adminClient, homeTeamId, awayTeamId)
 }
 
-async function maybeAdvancePhase(adminClient: ReturnType<typeof createSupabaseAdminClient>, series: SeriesRow) {
+async function consumeMembershipGames(adminClient: SupabaseClient, homeTeamId: string, awayTeamId: string) {
+  const { data: homeMembership, error: homeMembershipError } = await adminClient
+    .from("team_memberships")
+    .select("id, remaining_games")
+    .eq("team_id", homeTeamId)
+    .maybeSingle()
+
+  if (homeMembershipError || !homeMembership || homeMembership.remaining_games <= 0) {
+    // No membership or no remaining games, do nothing
+    return
+  }
+
+  const { data: awayMembership, error: awayMembershipError } = await adminClient
+    .from("team_memberships")
+    .select("id, remaining_games")
+    .eq("team_id", awayTeamId)
+    .maybeSingle()
+
+  if (awayMembershipError || !awayMembership || awayMembership.remaining_games <= 0) {
+    // No membership or no remaining games, do nothing
+    return
+  }
+
+  // Record usage in team_membership_usages
+  await adminClient.from("team_membership_usages").insert([
+    {
+      team_membership_id: homeMembership.id,
+      game_id: null, // Assuming game_id is not required
+      used_at: new Date(),
+    },
+    {
+      team_membership_id: awayMembership.id,
+      game_id: null, // Assuming game_id is not required
+      used_at: new Date(),
+    },
+  ])
+
+  // Update remaining_games in team_memberships
+  await adminClient.from("team_memberships").update({ remaining_games: { _inc: -1 } }).eq("id", homeMembership.id)
+  await adminClient.from("team_memberships").update({ remaining_games: { _inc: -1 } }).eq("id", awayMembership.id)
+}
+
+async function maybeAdvancePhase(adminClient: SupabaseClient, series: PlayoffSeriesRow) {
   const phase = series.phase
   const next = nextPhaseFromCurrent(phase)
   if (!next) return
@@ -621,6 +666,48 @@ async function maybeAdvancePhase(adminClient: ReturnType<typeof createSupabaseAd
   await adminClient.from("matches").insert(matchesToInsert)
 }
 
+async function getRemainingMembershipGames(adminClient: SupabaseClient, teamId: string): Promise<number> {
+  const { data, error } = await adminClient
+    .from("team_memberships")
+    .select("remaining_games")
+    .eq("team_id", teamId)
+    .gt("remaining_games", 0)
+
+  if (error || !data) return 0
+  return (data as any[]).reduce((sum, row) => sum + (Number(row.remaining_games) || 0), 0)
+}
+
+async function consumeOneMembershipGame(
+  adminClient: SupabaseClient,
+  teamId: string,
+  matchId: string,
+): Promise<void> {
+  const { data: rows, error } = await adminClient
+    .from("team_memberships")
+    .select("id, remaining_games")
+    .eq("team_id", teamId)
+    .gt("remaining_games", 0)
+    .order("created_at", { ascending: true })
+
+  if (error || !rows || rows.length === 0) return
+
+  const row = rows[0] as any
+  const membershipId = String(row.id)
+  const remaining = Number(row.remaining_games) || 0
+  if (remaining <= 0) return
+
+  const { error: updateError } = await adminClient
+    .from("team_memberships")
+    .update({ remaining_games: remaining - 1 })
+    .eq("id", membershipId)
+
+  if (updateError) return
+
+  await adminClient
+    .from("team_membership_usages")
+    .insert({ team_membership_id: membershipId, team_id: teamId, match_id: matchId })
+}
+
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await ctx.params
@@ -741,6 +828,27 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
 
     if (updateError || !updated) {
       return NextResponse.json({ error: updateError?.message ?? "No se pudo actualizar" }, { status: 400 })
+    }
+
+    const justFinalized = requestedStatus === "finalizado" && existing.status !== "finalizado"
+
+    if (justFinalized) {
+      const homeId = String((updated as any).home_team_id ?? "")
+      const awayId = String((updated as any).away_team_id ?? "")
+
+      if (homeId) {
+        const remaining = await getRemainingMembershipGames(auth.adminClient, homeId)
+        if (remaining > 0) {
+          await consumeOneMembershipGame(auth.adminClient, homeId, id)
+        }
+      }
+
+      if (awayId) {
+        const remaining = await getRemainingMembershipGames(auth.adminClient, awayId)
+        if (remaining > 0) {
+          await consumeOneMembershipGame(auth.adminClient, awayId, id)
+        }
+      }
     }
 
     if (auth.role === "admin" || auth.role === "oficial_mesa") {

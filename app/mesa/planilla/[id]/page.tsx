@@ -541,6 +541,8 @@ export default function PlanillaPage() {
   const [showClockEditorWarning, setShowClockEditorWarning] = useState(false)
   const [authToken, setAuthToken] = useState<string | null>(null)
   const [venueFee, setVenueFee] = useState<number | null>(null)
+  const [homeMembershipRemainingGames, setHomeMembershipRemainingGames] = useState<number>(0)
+  const [awayMembershipRemainingGames, setAwayMembershipRemainingGames] = useState<number>(0)
   const [homeCashInput, setHomeCashInput] = useState("")
   const [homeTransferInput, setHomeTransferInput] = useState("")
   const [awayCashInput, setAwayCashInput] = useState("")
@@ -790,6 +792,13 @@ export default function PlanillaPage() {
         setAwayCashInput(payment.away_cash != null ? String(payment.away_cash) : "")
         setAwayTransferInput(payment.away_transfer != null ? String(payment.away_transfer) : "")
         setReceiverNameInput(payment.receiver_name != null ? String(payment.receiver_name) : "")
+        
+        if (typeof json?.homeMembershipRemainingGames === "number") {
+          setHomeMembershipRemainingGames(json.homeMembershipRemainingGames)
+        }
+        if (typeof json?.awayMembershipRemainingGames === "number") {
+          setAwayMembershipRemainingGames(json.awayMembershipRemainingGames)
+        }
       } catch (e) {
         if (!cancelled) {
           const msg = e instanceof Error ? e.message : "Error al cargar arancel/pagos"
@@ -1412,8 +1421,10 @@ export default function PlanillaPage() {
       const disqualifyingFouls = playerEvents.filter((e) => e.foulType === "disqualifying").length
       const fightFouls = playerEvents.filter((e) => e.foulType === "fight").length
 
+      const personalEquivalentFouls = personalFouls + unsportsmanlikeFouls
+
       return (
-        personalFouls >= 5 ||
+        personalEquivalentFouls >= 5 ||
         technicalFouls >= 2 ||
         unsportsmanlikeFouls >= 2 ||
         (technicalFouls >= 1 && unsportsmanlikeFouls >= 1) ||
@@ -1897,8 +1908,10 @@ export default function PlanillaPage() {
       const disqualifyingFouls = nextEventsForPlayer.filter((e) => e.foulType === "disqualifying").length
       const fightFouls = nextEventsForPlayer.filter((e) => e.foulType === "fight").length
 
+      const personalEquivalentFouls = personalFouls + unsportsmanlikeFouls
+
       const nowDisqualified =
-        personalFouls >= 5 ||
+        personalEquivalentFouls >= 5 ||
         technicalFouls >= 2 ||
         unsportsmanlikeFouls >= 2 ||
         (technicalFouls >= 1 && unsportsmanlikeFouls >= 1) ||
@@ -1994,8 +2007,10 @@ export default function PlanillaPage() {
       const disqualifyingFouls = remainingFouls.filter((e) => e.foulType === "disqualifying").length
       const fightFouls = remainingFouls.filter((e) => e.foulType === "fight").length
 
+      const personalEquivalentFouls = personalFouls + unsportsmanlikeFouls
+
       const stillDisqualified =
-        personalFouls >= 5 ||
+        personalEquivalentFouls >= 5 ||
         technicalFouls >= 2 ||
         unsportsmanlikeFouls >= 2 ||
         (technicalFouls >= 1 && unsportsmanlikeFouls >= 1) ||
@@ -3933,7 +3948,7 @@ export default function PlanillaPage() {
                   </div>
 
                   <div className="text-xs text-muted-foreground">
-                    <span className="font-semibold">Arancel por equipo: </span>
+                    <span className="font-semibold">Arancel por equipo (base sede): </span>
                     {venueFee != null
                       ? `ARS ${venueFee.toLocaleString("es-AR", { maximumFractionDigits: 2 })}`
                       : "Sin arancel configurado"}
@@ -3941,12 +3956,22 @@ export default function PlanillaPage() {
 
                   <div className="grid gap-3 md:grid-cols-2">
                     <div className="space-y-2 text-sm">
-                      <div className="font-semibold">
-                        Local – {homeTeam.name}
-                        {venueFee != null && (
-                          <span className="text-xs text-muted-foreground ml-1">
-                            (Debe abonar: $
-                            {venueFee.toLocaleString("es-AR", { maximumFractionDigits: 2 })})
+                      <div className="font-semibold flex flex-col gap-1">
+                        <span>
+                          Local – {homeTeam.name}
+                          {venueFee != null && (
+                            <span className="text-xs text-muted-foreground ml-1">
+                              (Debe abonar: $
+                              {(homeMembershipRemainingGames > 0 ? 0 : venueFee).toLocaleString("es-AR", {
+                                maximumFractionDigits: 2,
+                              })}
+                              )
+                            </span>
+                          )}
+                        </span>
+                        {homeMembershipRemainingGames > 0 && (
+                          <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
+                            Membresía activa – partidos restantes: {homeMembershipRemainingGames}
                           </span>
                         )}
                       </div>
@@ -3983,12 +4008,22 @@ export default function PlanillaPage() {
                     </div>
 
                     <div className="space-y-2 text-sm">
-                      <div className="font-semibold">
-                        Visitante – {awayTeam.name}
-                        {venueFee != null && (
-                          <span className="text-xs text-muted-foreground ml-1">
-                            (Debe abonar: $
-                            {venueFee.toLocaleString("es-AR", { maximumFractionDigits: 2 })})
+                      <div className="font-semibold flex flex-col gap-1">
+                        <span>
+                          Visitante – {awayTeam.name}
+                          {venueFee != null && (
+                            <span className="text-xs text-muted-foreground ml-1">
+                              (Debe abonar: $
+                              {(awayMembershipRemainingGames > 0 ? 0 : venueFee).toLocaleString("es-AR", {
+                                maximumFractionDigits: 2,
+                              })}
+                              )
+                            </span>
+                          )}
+                        </span>
+                        {awayMembershipRemainingGames > 0 && (
+                          <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
+                            Membresía activa – partidos restantes: {awayMembershipRemainingGames}
                           </span>
                         )}
                       </div>

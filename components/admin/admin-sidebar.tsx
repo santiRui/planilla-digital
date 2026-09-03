@@ -37,6 +37,7 @@ const navigation = [
   { name: "Fases", href: "/admin/fases", icon: Layers },
   { name: "Contabilidad", href: "/admin/tesoreria", icon: ClipboardList },
   { name: "Observaciones", href: "/admin/observaciones", icon: AlertTriangle },
+  { name: "Membresías", href: "/admin/membresias", icon: Users },
   { name: "Personal", href: "/admin/personal", icon: UserCircle },
 ]
 

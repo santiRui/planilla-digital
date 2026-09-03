@@ -54,6 +54,7 @@ export default function TorneosPage() {
     branch: "masculino" as Branch,
     categoryId: "",
     status: "activo" as Tournament["status"],
+    isPublic: true,
   })
 
   const supabase = useMemo(() => createSupabaseBrowserClient(), [])
@@ -93,7 +94,7 @@ export default function TorneosPage() {
       const [{ data, error }, { data: categoriesData, error: categoriesError }] = await Promise.all([
         supabase
           .from("tournaments")
-          .select("id, name, short_name, year, branch, status, created_at, category_id")
+          .select("id, name, short_name, year, branch, status, is_public, created_at, category_id")
           .order("created_at", { ascending: false }),
         supabase.from("categories").select("id, name, branch, age_group").order("created_at", { ascending: true }),
       ])
@@ -149,6 +150,7 @@ export default function TorneosPage() {
           branch: formData.branch,
           status: formData.status,
           categoryId: formData.categoryId,
+          isPublic: formData.isPublic,
         }),
       })
 
@@ -171,6 +173,7 @@ export default function TorneosPage() {
         branch: "masculino",
         categoryId: "",
         status: "activo",
+        isPublic: true,
       })
     } finally {
       setSubmitting(false)
@@ -185,6 +188,7 @@ export default function TorneosPage() {
       branch: tournament.branch,
       categoryId: (tournament as any).category_id ?? "",
       status: tournament.status,
+      isPublic: tournament.is_public ?? true,
     })
     setIsOpen(true)
   }
@@ -326,9 +330,21 @@ export default function TorneosPage() {
                   </SelectContent>
                 </Select>
               </div>
-
-              {error && <p className="text-sm text-destructive">{error}</p>}
+              <div className="grid gap-2 items-center">
+                <Label htmlFor="isPublic">Visible al público</Label>
+                <div className="flex items-center gap-2">
+                  <input
+                    id="isPublic"
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-border"
+                    checked={formData.isPublic}
+                    onChange={(e) => setFormData({ ...formData, isPublic: e.target.checked })}
+                  />
+                  <span className="text-sm text-muted-foreground">Mostrar este torneo en la vista pública</span>
+                </div>
+              </div>
             </div>
+            {error && <p className="text-sm text-destructive">{error}</p>}
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsOpen(false)}>
                 Cancelar
@@ -485,7 +501,7 @@ export default function TorneosPage() {
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-muted-foreground">{tournament.year}</span>
                   <span
-                    className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${statusColors[tournament.status]}`}
+                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${statusColors[tournament.status]}`}
                   >
                     {tournament.status === "activo"
                       ? "Activo"
@@ -524,12 +540,13 @@ export default function TorneosPage() {
 type Tournament = {
   id: string
   name: string
-  short_name: string
+  short_name: string | null
   year: number
   branch: Branch
   status: "activo" | "finalizado" | "pendiente"
+  is_public?: boolean | null
   created_at: string
-  category_id?: string | null
+  category_id: string
 }
 
 type Category = {

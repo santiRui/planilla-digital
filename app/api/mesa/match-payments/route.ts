@@ -45,10 +45,10 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Falta matchId" }, { status: 400 })
     }
 
-    // Cargar partido y sede para obtener el arancel actual desde venues
+    // Cargar partido y sede para obtener el arancel actual desde venues y equipos
     const { data: matchRow, error: matchError } = await auth.adminClient
       .from("matches")
-      .select("id, venue_id")
+      .select("id, venue_id, home_team_id, away_team_id")
       .eq("id", matchId)
       .maybeSingle()
 
@@ -57,6 +57,8 @@ export async function GET(req: Request) {
     }
 
     const venueId = (matchRow as any)?.venue_id as string | null
+    const homeTeamId = (matchRow as any)?.home_team_id as string | null
+    const awayTeamId = (matchRow as any)?.away_team_id as string | null
     let courtFee: number | null = null
 
     if (venueId) {
@@ -86,9 +88,47 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: error.message }, { status: 400 })
     }
 
+    // Calcular partidos de membresía restantes para cada equipo
+    let homeMembershipRemainingGames = 0
+    let awayMembershipRemainingGames = 0
+
+    if (homeTeamId) {
+      const { data: rows, error: memError } = await auth.adminClient
+        .from("team_memberships")
+        .select("remaining_games")
+        .eq("team_id", homeTeamId)
+        .gt("remaining_games", 0)
+
+      if (!memError && rows) {
+        homeMembershipRemainingGames = (rows as any[]).reduce(
+          (sum, r) => sum + (Number(r.remaining_games) || 0),
+          0,
+        )
+      }
+    }
+
+    if (awayTeamId) {
+      const { data: rows, error: memError } = await auth.adminClient
+        .from("team_memberships")
+        .select("remaining_games")
+        .eq("team_id", awayTeamId)
+        .gt("remaining_games", 0)
+
+      if (!memError && rows) {
+        awayMembershipRemainingGames = (rows as any[]).reduce(
+          (sum, r) => sum + (Number(r.remaining_games) || 0),
+          0,
+        )
+      }
+    }
+
     if (data) {
-      // Si ya hay registro de pagos, lo devolvemos tal cual
-      return NextResponse.json({ payment: data })
+      // Si ya hay registro de pagos, lo devolvemos tal cual junto con la info de membresía
+      return NextResponse.json({
+        payment: data,
+        homeMembershipRemainingGames,
+        awayMembershipRemainingGames,
+      })
     }
 
     // Si no hay pagos aún, devolvemos un objeto "virtual" con el arancel y montos en 0
@@ -106,7 +146,11 @@ export async function GET(req: Request) {
       updated_at: null,
     }
 
-    return NextResponse.json({ payment })
+    return NextResponse.json({
+      payment,
+      homeMembershipRemainingGames,
+      awayMembershipRemainingGames,
+    })
   } catch (e) {
     const message = e instanceof Error ? e.message : "Error interno"
     console.error("GET /api/mesa/match-payments failed:", e)

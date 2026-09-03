@@ -9,6 +9,7 @@ const updateTournamentSchema = z.object({
   branch: z.enum(["masculino", "femenino", "mixto"]),
   status: z.enum(["pendiente", "activo", "finalizado"]),
   categoryId: z.string().min(1),
+  isPublic: z.boolean().optional(),
 })
 
 function shortNameFrom(name: string) {
@@ -61,7 +62,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     return NextResponse.json({ error: "Datos inválidos", details: parsed.error.flatten() }, { status: 400 })
   }
 
-  const { name, year, branch, status, categoryId } = parsed.data
+  const { name, year, branch, status, categoryId, isPublic } = parsed.data
 
   const { data: category, error: categoryError } = await auth.adminClient
     .from("categories")
@@ -81,18 +82,24 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     return NextResponse.json({ error: "La rama del torneo debe coincidir con la rama de la categoría" }, { status: 400 })
   }
 
+  const update: Record<string, any> = {
+    name,
+    short_name: shortNameFrom(name),
+    year,
+    branch,
+    status,
+    category_id: categoryId,
+  }
+
+  if (typeof isPublic === "boolean") {
+    update.is_public = isPublic
+  }
+
   const { data: tournament, error: tournamentError } = await auth.adminClient
     .from("tournaments")
-    .update({
-      name,
-      short_name: shortNameFrom(name),
-      year,
-      branch,
-      status,
-      category_id: categoryId,
-    })
+    .update(update)
     .eq("id", id)
-    .select("id, name, short_name, year, branch, status, created_at")
+    .select("id, name, short_name, year, branch, status, is_public, created_at")
     .single()
 
   if (tournamentError || !tournament) {

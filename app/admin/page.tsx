@@ -90,6 +90,13 @@ export default function AdminDashboard() {
               <Clock className="h-5 w-5 text-primary" />
               <span className="font-medium">Programar Partidos</span>
             </Link>
+            <Link
+              href="/admin/membresias"
+              className="flex items-center gap-3 rounded-lg border p-4 hover:bg-muted transition-colors"
+            >
+              <Users className="h-5 w-5 text-primary" />
+              <span className="font-medium">Membresías por Equipo</span>
+            </Link>
           </CardContent>
         </Card>
 
