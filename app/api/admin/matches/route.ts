@@ -47,6 +47,7 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url)
     const tournamentId = searchParams.get("tournamentId")
     const categoryId = searchParams.get("categoryId")
+    const hasPlanilla = searchParams.get("hasPlanilla")
 
     let resolvedTournamentId: string | null = tournamentId
     if (!resolvedTournamentId && categoryId) {
@@ -92,34 +93,37 @@ export async function GET(req: Request) {
       .map((m) => String(m.id))
 
     let matchesWithPlanillaScores = matches
+    let planillaMatchIds = new Set<string>()
 
     if (finishedMatchIds.length > 0) {
       let statsRows: any[] = []
 
-      const { data: rowsPlanilla, error: statsPlanillaError } = await auth.adminClient
-        .from("match_player_stats_planilla")
-        .select("match_id, team_id, points")
-        .in("match_id", finishedMatchIds)
-
-      if (statsPlanillaError) {
-        return NextResponse.json({ error: statsPlanillaError.message }, { status: 400 })
-      }
-
-      if (rowsPlanilla && rowsPlanilla.length > 0) {
-        statsRows = rowsPlanilla as any[]
-      } else {
-        const { data: rowsLegacy, error: statsLegacyError } = await auth.adminClient
-          .from("match_player_stats")
+      try {
+        const { data: rowsPlanilla, error: statsPlanillaError } = await auth.adminClient
+          .from("match_player_stats_planilla")
           .select("match_id, team_id, points")
           .in("match_id", finishedMatchIds)
 
-        if (statsLegacyError) {
-          return NextResponse.json({ error: statsLegacyError.message }, { status: 400 })
-        }
+        if (!statsPlanillaError && rowsPlanilla && rowsPlanilla.length > 0) {
+          statsRows = rowsPlanilla as any[]
+          planillaMatchIds = new Set((rowsPlanilla as any[]).map((r) => String(r.match_id)))
+        } else {
+          const { data: rowsLegacy, error: statsLegacyError } = await auth.adminClient
+            .from("match_player_stats")
+            .select("match_id, team_id, points")
+            .in("match_id", finishedMatchIds)
 
-        if (rowsLegacy && rowsLegacy.length > 0) {
-          statsRows = rowsLegacy as any[]
+          if (!statsLegacyError && rowsLegacy && rowsLegacy.length > 0) {
+            statsRows = rowsLegacy as any[]
+            // Consideramos también las estadísticas legacy como "con planilla"
+            planillaMatchIds = new Set((rowsLegacy as any[]).map((r) => String(r.match_id)))
+          }
         }
+      } catch (statsError) {
+        console.error("GET /api/admin/matches: error leyendo estadísticas de planilla", statsError)
+        // Si algo falla al leer stats, seguimos sin recalcular scores
+        statsRows = []
+        planillaMatchIds = new Set()
       }
 
       if (Array.isArray(statsRows) && statsRows.length > 0) {
@@ -150,6 +154,10 @@ export async function GET(req: Request) {
           }
         })
       }
+    }
+
+    if (hasPlanilla === "true") {
+      matchesWithPlanillaScores = matchesWithPlanillaScores.filter((m) => planillaMatchIds.has(String(m.id)))
     }
 
     return NextResponse.json({ matches: matchesWithPlanillaScores })

@@ -222,6 +222,16 @@ export async function resolveSeriesAndMaybeAdvance(
   if (seriesError || !series) return
 
   if ((series as any).winner_team_id) {
+    // La serie ya tiene un ganador guardado anteriormente. Aseguramos que
+    // no queden partidos "colgados" (por ejemplo, semi 3) eliminando
+    // cualquier match de esta serie que no esté finalizado antes de
+    // intentar avanzar de fase.
+    await adminClient
+      .from("matches")
+      .delete()
+      .eq("playoff_series_id", seriesId)
+      .neq("status", "finalizado")
+
     await maybeAdvancePhase(adminClient, series as any)
     return
   }
@@ -234,7 +244,31 @@ export async function resolveSeriesAndMaybeAdvance(
 
   if (seriesMatchesError) return
 
-  const bestOf = Number((series as any).best_of)
+  // Determinamos el "mejor de" para esta serie. Si la columna best_of en
+  // playoff_series no está seteada o es inválida, leemos la configuración
+  // del torneo para esta fase y, en última instancia, usamos 1 como valor
+  // seguro por defecto.
+  let bestOf = Number((series as any).best_of)
+  if (!Number.isFinite(bestOf) || bestOf <= 0) {
+    const { data: config } = await adminClient
+      .from("tournament_playoff_config")
+      .select("best_of_cuartos, best_of_semifinal, best_of_final")
+      .eq("tournament_id", (series as any).tournament_id)
+      .maybeSingle()
+
+    const phase = (series as any).phase as string
+    const rawBestOf =
+      phase === "cuartos"
+        ? (config as any)?.best_of_cuartos
+        : phase === "semifinal"
+          ? (config as any)?.best_of_semifinal
+          : (config as any)?.best_of_final
+
+    bestOf = Number(rawBestOf)
+    if (!Number.isFinite(bestOf) || bestOf <= 0) {
+      bestOf = 1
+    }
+  }
   const finals = (seriesMatches ?? []).filter((m: any) => m.status === "finalizado") as Array<{
     home_team_id: string
     away_team_id: string
@@ -369,6 +403,15 @@ export async function resolveSeriesAndMaybeAdvance(
   const { error: updateSeriesError } = await adminClient.from("playoff_series").update(update).eq("id", seriesId)
   if (updateSeriesError) return
 
+  // La serie ya tiene un ganador: eliminamos cualquier partido restante
+  // de esta serie que todavía no esté finalizado (por ejemplo el 3er
+  // juego de una semi al mejor de 3 cuando un equipo gana 2-0).
+  await adminClient
+    .from("matches")
+    .delete()
+    .eq("playoff_series_id", seriesId)
+    .neq("status", "finalizado")
+
   await maybeAdvancePhase(adminClient, {
     ...(series as any),
     winner_team_id: winner,
@@ -458,12 +501,17 @@ async function maybeAdvancePhase(adminClient: SupabaseClient, series: PlayoffSer
     .eq("tournament_id", series.tournament_id)
     .maybeSingle()
 
-  const bestOf =
+  const rawBestOf =
     next === "cuartos"
-      ? Number((config as any)?.best_of_cuartos ?? 1)
+      ? (config as any)?.best_of_cuartos
       : next === "semifinal"
-        ? Number((config as any)?.best_of_semifinal ?? 1)
-        : Number((config as any)?.best_of_final ?? 1)
+        ? (config as any)?.best_of_semifinal
+        : (config as any)?.best_of_final
+
+  let bestOf = Number(rawBestOf)
+  if (!Number.isFinite(bestOf) || bestOf <= 0) {
+    bestOf = 1
+  }
 
   const nextMatchups: Array<{ home: string; away: string; index: number }> = []
 

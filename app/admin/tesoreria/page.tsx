@@ -16,6 +16,7 @@ interface MatchRow {
   homeTeamId: string
   awayTeamId: string
   finishedAt: string | null
+  createdAt: string | null
 }
 
 interface TournamentRow {
@@ -58,6 +59,8 @@ export default function TesoreriaPage() {
   const [paymentSubmitting, setPaymentSubmitting] = useState(false)
   const [paymentError, setPaymentError] = useState<string | null>(null)
 
+  const [activeView, setActiveView] = useState<"matches" | "payments">("matches")
+
   const supabase = useMemo(() => createSupabaseBrowserClient(), [])
 
   useEffect(() => {
@@ -94,18 +97,33 @@ export default function TesoreriaPage() {
         }
 
         const rawMatches = (matchesJson.matches ?? []) as any[]
-        // Contabilizamos todos los partidos con estado "finalizado" como jugados,
-        // aunque finished_at pueda estar en null. finishedAt se usa solo para mostrar
-        // fecha/hora si está disponible.
-        const finalized = rawMatches.filter((m) => m.status === "finalizado")
+        // Contabilizamos solo los partidos con estado "finalizado" que
+        // pasaron por el sistema, y los ordenamos del más reciente al más
+        // antiguo usando finished_at o, si no existe, created_at.
+        const finalized = (rawMatches as any[]).filter((m) => m.status === "finalizado")
 
-        const matchRows: MatchRow[] = finalized.map((m) => ({
-          id: String(m.id),
-          tournamentId: String(m.tournament_id),
-          homeTeamId: String(m.home_team_id),
-          awayTeamId: String(m.away_team_id),
-          finishedAt: m.finished_at,
-        }))
+        const matchRows: MatchRow[] = finalized
+          .map((m) => ({
+            id: String(m.id),
+            tournamentId: String(m.tournament_id),
+            homeTeamId: String(m.home_team_id),
+            awayTeamId: String(m.away_team_id),
+            finishedAt: m.finished_at,
+            createdAt: m.created_at ?? null,
+          }))
+          .sort((a, b) => {
+            const ta = a.finishedAt
+              ? new Date(a.finishedAt).getTime()
+              : a.createdAt
+                ? new Date(a.createdAt).getTime()
+                : 0
+            const tb = b.finishedAt
+              ? new Date(b.finishedAt).getTime()
+              : b.createdAt
+                ? new Date(b.createdAt).getTime()
+                : 0
+            return tb - ta
+          })
         setMatches(matchRows)
 
         const tournamentIds = Array.from(new Set(matchRows.map((m) => m.tournamentId)))
@@ -265,6 +283,23 @@ export default function TesoreriaPage() {
         </div>
       </div>
 
+      <div className="flex flex-wrap gap-2 justify-start">
+        <Button
+          variant={activeView === "matches" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setActiveView("matches")}
+        >
+          Ver partidos jugados
+        </Button>
+        <Button
+          variant={activeView === "payments" ? "default" : "outline"}
+          size="sm"
+          onClick={() => setActiveView("payments")}
+        >
+          Ver pagos realizados
+        </Button>
+      </div>
+
       {loading ? (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">Cargando tesorería...</CardContent>
@@ -273,97 +308,94 @@ export default function TesoreriaPage() {
         <Card>
           <CardContent className="py-12 text-center text-destructive">{error}</CardContent>
         </Card>
+      ) : activeView === "matches" ? (
+        <Card>
+          <CardContent className="p-0">
+            <div className="p-4 border-b">
+              <h2 className="text-lg font-semibold">Partidos con planilla digital</h2>
+              <p className="text-sm text-muted-foreground">
+                Cada partido gestionado con la planilla digital genera un cargo fijo de 3 USD.
+              </p>
+            </div>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Fecha de juego</TableHead>
+                  <TableHead>Torneo</TableHead>
+                  <TableHead>Partido</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {matches.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={3} className="text-center text-muted-foreground py-6">
+                      No hay partidos finalizados registrados.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  matches.map((m) => (
+                    <TableRow key={m.id}>
+                      <TableCell>
+                        {m.finishedAt
+                          ? new Date(m.finishedAt).toLocaleString("es-AR", {
+                              dateStyle: "short",
+                              timeStyle: "short",
+                            })
+                          : "-"}
+                      </TableCell>
+                      <TableCell>{getTournamentLabel(m.tournamentId)}</TableCell>
+                      <TableCell>
+                        {getTeamName(m.homeTeamId)} vs {getTeamName(m.awayTeamId)}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
       ) : (
-        <div className="grid gap-6 lg:grid-cols-2">
-          <Card>
-            <CardContent className="p-0">
-              <div className="p-4 border-b">
-                <h2 className="text-lg font-semibold">Partidos jugados</h2>
-                <p className="text-sm text-muted-foreground">Cada partido jugado genera un cargo fijo de 3 USD.</p>
-              </div>
-              <Table>
-                <TableHeader>
+        <Card>
+          <CardContent className="p-0">
+            <div className="p-4 border-b">
+              <h2 className="text-lg font-semibold">Pagos</h2>
+              <p className="text-sm text-muted-foreground">Historial de pagos registrados hacia el programador.</p>
+            </div>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Fecha</TableHead>
+                  <TableHead>Método</TableHead>
+                  <TableHead className="text-right">Monto (USD)</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {payments.length === 0 ? (
                   <TableRow>
-                    <TableHead>Fecha de juego</TableHead>
-                    <TableHead>Torneo</TableHead>
-                    <TableHead>Partido</TableHead>
+                    <TableCell colSpan={3} className="text-center text-muted-foreground py-6">
+                      No hay pagos registrados.
+                    </TableCell>
                   </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {matches.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={3} className="text-center text-muted-foreground py-6">
-                        No hay partidos finalizados registrados.
+                ) : (
+                  payments.map((p) => (
+                    <TableRow key={p.id}>
+                      <TableCell>
+                        {p.paidAt
+                          ? new Date(p.paidAt).toLocaleString("es-AR", {
+                              dateStyle: "short",
+                              timeStyle: "short",
+                            })
+                          : "-"}
                       </TableCell>
+                      <TableCell>{p.method}</TableCell>
+                      <TableCell className="text-right">{p.amount.toFixed(2)}</TableCell>
                     </TableRow>
-                  ) : (
-                    matches
-                      .slice()
-                      .sort((a, b) => (a.finishedAt && b.finishedAt ? a.finishedAt.localeCompare(b.finishedAt) : 0))
-                      .map((m) => (
-                        <TableRow key={m.id}>
-                          <TableCell>
-                            {m.finishedAt
-                              ? new Date(m.finishedAt).toLocaleString("es-AR", {
-                                  dateStyle: "short",
-                                  timeStyle: "short",
-                                })
-                              : "-"}
-                          </TableCell>
-                          <TableCell>{getTournamentLabel(m.tournamentId)}</TableCell>
-                          <TableCell>
-                            {getTeamName(m.homeTeamId)} vs {getTeamName(m.awayTeamId)}
-                          </TableCell>
-                        </TableRow>
-                      ))
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="p-0">
-              <div className="p-4 border-b">
-                <h2 className="text-lg font-semibold">Pagos</h2>
-                <p className="text-sm text-muted-foreground">Historial de pagos registrados hacia el programador.</p>
-              </div>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Fecha</TableHead>
-                    <TableHead>Método</TableHead>
-                    <TableHead className="text-right">Monto (USD)</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {payments.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={3} className="text-center text-muted-foreground py-6">
-                        No hay pagos registrados.
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    payments.map((p) => (
-                      <TableRow key={p.id}>
-                        <TableCell>
-                          {p.paidAt
-                            ? new Date(p.paidAt).toLocaleString("es-AR", {
-                                dateStyle: "short",
-                                timeStyle: "short",
-                              })
-                            : "-"}
-                        </TableCell>
-                        <TableCell>{p.method}</TableCell>
-                        <TableCell className="text-right">{p.amount.toFixed(2)}</TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-        </div>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
       )}
 
       <Dialog open={isPaymentOpen} onOpenChange={setIsPaymentOpen}>
