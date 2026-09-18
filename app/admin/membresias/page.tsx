@@ -44,8 +44,6 @@ export default function AdminMembershipsPage() {
   const [detailTeam, setDetailTeam] = useState<TeamRow | null>(null)
   const [detailData, setDetailData] = useState<{ memberships: any[]; usages: any[] } | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
-  const [editingMembershipId, setEditingMembershipId] = useState<string | null>(null)
-  const [editingValue, setEditingValue] = useState<string>("")
   const [activeSearch, setActiveSearch] = useState<string>("")
 
   useEffect(() => {
@@ -417,7 +415,7 @@ export default function AdminMembershipsPage() {
             <DialogHeader>
               <DialogTitle>Detalle de membresías – {detailTeam.name}</DialogTitle>
               <DialogDescription>
-                Editá la cantidad de partidos restantes o elimina membresías de este equipo.
+                Consultá el historial de membresías de este equipo y, si hace falta, eliminá una carga completa.
               </DialogDescription>
             </DialogHeader>
 
@@ -432,8 +430,11 @@ export default function AdminMembershipsPage() {
                   ) : (
                     <div className="space-y-3">
                       {detailData.memberships.map((m) => {
-                        const isEditing = editingMembershipId === m.id
-                        const displayValue = isEditing ? editingValue : String(m.remaining_games)
+                        const membershipUsageCount = detailData.usages.filter(
+                          (u) => u.team_membership_id === m.id,
+                        ).length
+                        const loadedGames = (Number(m.remaining_games) || 0) + membershipUsageCount
+
                         return (
                           <div
                             key={m.id}
@@ -441,105 +442,12 @@ export default function AdminMembershipsPage() {
                           >
                             <div className="text-sm">
                               <div>
-                                Cargada el {new Date(m.created_at).toLocaleDateString("es-AR")}
+                                Cargada el {new Date(m.created_at).toLocaleDateString("es-AR")}, {loadedGames}{" "}
+                                {loadedGames === 1 ? "partido cargado" : "partidos cargados"}
                               </div>
                               <div className="text-xs text-muted-foreground">ID: {m.id}</div>
                             </div>
                             <div className="flex flex-wrap items-center gap-2 justify-start sm:justify-end">
-                              <Input
-                                type="number"
-                                min={0}
-                                className="w-20 h-8 text-right"
-                                value={displayValue}
-                                disabled={!isEditing}
-                                onChange={(e) => setEditingValue(e.target.value)}
-                              />
-                              <span className="text-xs text-muted-foreground">restantes</span>
-                              {isEditing ? (
-                                <>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={async () => {
-                                      if (!detailTeam) return
-                                      const next = Number(editingValue.trim())
-                                      if (!Number.isFinite(next) || next < 0) {
-                                        setError("La cantidad debe ser un número mayor o igual a 0.")
-                                        return
-                                      }
-
-                                      const { data: sessionData } = await supabase.auth.getSession()
-                                      const token = sessionData.session?.access_token
-                                      if (!token) {
-                                        setError("Tenés que iniciar sesión como admin para gestionar membresías.")
-                                        return
-                                      }
-
-                                      const res = await fetch(
-                                        `/api/admin/team-memberships/${detailTeam.id}?membershipId=${encodeURIComponent(
-                                          m.id as string,
-                                        )}`,
-                                        {
-                                          method: "PATCH",
-                                          headers: {
-                                            "Content-Type": "application/json",
-                                            Authorization: `Bearer ${token}`,
-                                          },
-                                          body: JSON.stringify({ remaining_games: next }),
-                                        },
-                                      )
-                                      const json = (await res.json().catch(() => null)) as any
-                                      if (!res.ok) {
-                                        setError(json?.error ?? "No se pudo actualizar la membresía")
-                                        return
-                                      }
-
-                                      setDetailData((prev) =>
-                                        prev
-                                          ? {
-                                              ...prev,
-                                              memberships: prev.memberships.map((mm) =>
-                                                mm.id === m.id ? { ...mm, remaining_games: next } : mm,
-                                              ),
-                                            }
-                                          : prev,
-                                      )
-                                      setTotals((prev) => {
-                                        if (!detailTeam) return prev
-                                        const current = prev[detailTeam.id] ?? 0
-                                        const delta = next - (m.remaining_games as number)
-                                        return { ...prev, [detailTeam.id]: current + delta }
-                                      })
-                                      ;(m as any).remaining_games = next
-                                      setEditingMembershipId(null)
-                                      setEditingValue("")
-                                    }}
-                                  >
-                                    Guardar
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => {
-                                      setEditingMembershipId(null)
-                                      setEditingValue("")
-                                    }}
-                                  >
-                                    Cancelar
-                                  </Button>
-                                </>
-                              ) : (
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => {
-                                    setEditingMembershipId(m.id as string)
-                                    setEditingValue(String(m.remaining_games))
-                                  }}
-                                >
-                                  Editar
-                                </Button>
-                              )}
                               <Button
                                 size="sm"
                                 variant="outline"
@@ -587,21 +495,19 @@ export default function AdminMembershipsPage() {
                                   setTotals((prev) => {
                                     if (!detailTeam) return prev
                                     const current = prev[detailTeam.id] ?? 0
-                                    return { ...prev, [detailTeam.id]: Math.max(0, current - (m.remaining_games as number)) }
+                                    return {
+                                      ...prev,
+                                      [detailTeam.id]: Math.max(0, current - (m.remaining_games as number)),
+                                    }
                                   })
-
-                                  // Limpiar estado de edición asociado
-                                  if (editingMembershipId === m.id) {
-                                    setEditingMembershipId(null)
-                                    setEditingValue("")
-                                  }
                                 }}
                               >
-                              Eliminar
-                            </Button>
+                                Eliminar
+                              </Button>
+                            </div>
                           </div>
-                        </div>
-                      )})}
+                        )
+                      })}
                     </div>
                   )}
                 </div>
