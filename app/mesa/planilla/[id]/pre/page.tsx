@@ -494,9 +494,11 @@ export default function PrePlanillaPage() {
     return activePlayers
       .filter((p: Player) => ids.has(p.id))
       .map((p: Player) => ({ player: p, jersey: getJersey(p, activeState) }))
-      .sort(
-        (a: { player: Player; jersey: number }, b: { player: Player; jersey: number }) => a.jersey - b.jersey,
-      )
+      .sort((a, b) => {
+        const lastCmp = a.player.lastName.localeCompare(b.player.lastName, "es", { sensitivity: "base" })
+        if (lastCmp !== 0) return lastCmp
+        return a.player.firstName.localeCompare(b.player.firstName, "es", { sensitivity: "base" })
+      })
   }, [activePlayers, activeState])
 
   const staffOptions = useMemo(() => {
@@ -1003,9 +1005,11 @@ export default function PrePlanillaPage() {
               <div className="space-y-2">
                 {activePlayers
                   .slice()
-                  .sort(
-                    (a: Player, b: Player) => getJersey(a, activeState) - getJersey(b, activeState),
-                  )
+                  .sort((a: Player, b: Player) => {
+                    const lastCmp = a.lastName.localeCompare(b.lastName, "es", { sensitivity: "base" })
+                    if (lastCmp !== 0) return lastCmp
+                    return a.firstName.localeCompare(b.firstName, "es", { sensitivity: "base" })
+                  })
                   .map((p: Player) => {
                     const selected = activeState.selectedPlayerIds.includes(p.id)
                     const jersey = getJersey(p, activeState)

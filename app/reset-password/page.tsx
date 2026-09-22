@@ -80,6 +80,7 @@ export default function ResetPasswordRequestPage() {
                 <Input
                   id="email"
                   type="email"
+                  autoComplete="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="tuemail@ejemplo.com"

@@ -36,24 +36,17 @@ async function assertMesaLiveRole(accessToken: string, matchId: string) {
     return { ok: true as const, adminClient, callerId, role }
   }
 
+  // Permitir que cualquier usuario con rol 'oficial_mesa' pueda actualizar
+  // el marcador en vivo, aunque no esté asignado explícitamente al partido.
+  // Si el rol es distinto, devolvemos un error explícito con el rol leído
+  // desde la tabla profiles para poder depurar.
   if (role !== "oficial_mesa") {
-    return { ok: false as const, status: 403, error: "Prohibido" }
-  }
-
-  const { data: assignment, error: assignmentError } = await adminClient
-    .from("match_official_assignments")
-    .select("id")
-    .eq("match_id", matchId)
-    .eq("user_id", callerId)
-    .eq("role", "oficial_mesa")
-    .maybeSingle()
-
-  if (assignmentError) {
-    return { ok: false as const, status: 400, error: assignmentError.message }
-  }
-
-  if (!assignment) {
-    return { ok: false as const, status: 403, error: "Prohibido" }
+    console.warn("/api/mesa/matches/[id]/live: rol no permitido", { callerId, role })
+    return {
+      ok: false as const,
+      status: 403,
+      error: `Prohibido (profiles.role = "${role}")`,
+    }
   }
 
   return { ok: true as const, adminClient, callerId, role }
