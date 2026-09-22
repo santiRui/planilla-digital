@@ -31,6 +31,11 @@ export default function ProgramacionPage() {
   const [homeTeamFilter, setHomeTeamFilter] = useState("")
   const [awayTeamFilter, setAwayTeamFilter] = useState("")
 
+  const [printDate, setPrintDate] = useState("")
+  const [printVenueId, setPrintVenueId] = useState("")
+  const [printing, setPrinting] = useState(false)
+  const [printError, setPrintError] = useState<string | null>(null)
+
   const [selectedTournament, setSelectedTournament] = useState<string>("")
   const [editingMatch, setEditingMatch] = useState<MatchRow | null>(null)
   const [isOpen, setIsOpen] = useState(false)
@@ -240,6 +245,128 @@ export default function ProgramacionPage() {
 
   const referees = officials.filter((o) => o.isReferee)
   const tableOfficialsList = officials.filter((o) => o.isTableOfficial)
+
+  const handlePrintPreSheets = async () => {
+    setPrintError(null)
+    if (!printDate || !printVenueId) {
+      setPrintError("Seleccioná una fecha y una sede para imprimir las pre planillas.")
+      return
+    }
+
+    const jornadaMatches = categoryMatches.filter((m) => {
+      if (!m.scheduledDate || !m.venueId) return false
+      const d = new Date(m.scheduledDate)
+      const isoDate = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Argentina/Salta",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(d)
+      return isoDate === printDate && m.venueId === printVenueId
+    })
+
+    if (jornadaMatches.length === 0) {
+      setPrintError("No hay partidos programados para esa fecha y sede.")
+      return
+    }
+
+    const teamIds = Array.from(
+      new Set(
+        jornadaMatches
+          .flatMap((m) => [m.homeTeamId, m.awayTeamId])
+          .filter(Boolean),
+      ),
+    ) as string[]
+
+    if (teamIds.length === 0) {
+      setPrintError("No se encontraron equipos para esa jornada.")
+      return
+    }
+
+    setPrinting(true)
+    try {
+      const { data: playersData, error: playersError } = await supabase
+        .from("players")
+        .select("id, team_id, first_name, last_name")
+        .in("team_id", teamIds)
+        .order("last_name", { ascending: true })
+        .order("first_name", { ascending: true })
+
+      if (playersError) {
+        setPrintError(playersError.message)
+        return
+      }
+
+      const playersByTeam: Record<string, { firstName: string; lastName: string }[]> = {}
+      for (const p of playersData ?? []) {
+        const teamId = (p as any).team_id as string
+        if (!playersByTeam[teamId]) playersByTeam[teamId] = []
+        playersByTeam[teamId].push({ firstName: (p as any).first_name, lastName: (p as any).last_name })
+      }
+
+      const sheets = teamIds.map((teamId) => {
+        const teamName = getTeamName(teamId)
+        const players = playersByTeam[teamId] ?? []
+        const rowsHtml = players
+          .map((pl) => `<tr><td class="name">${pl.lastName.toUpperCase()}, ${pl.firstName}</td><td class="jersey"></td></tr>`)
+          .join("")
+
+        return `
+          <div class="sheet">
+            <div class="sheet-header">${teamName}</div>
+            <table class="sheet-table">
+              <thead>
+                <tr><th class="name">Jugador/a</th><th class="jersey">N°</th></tr>
+              </thead>
+              <tbody>
+                ${rowsHtml}
+              </tbody>
+            </table>
+          </div>
+        `
+      })
+
+      const html = `
+        <html>
+          <head>
+            <meta charSet="utf-8" />
+            <title>Pre planillas</title>
+            <style>
+              body { margin: 0; padding: 16px; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+              .sheet-container { display: flex; flex-wrap: wrap; gap: 8px; }
+              .sheet { border: 1px solid #000; padding: 6px; width: 48%; box-sizing: border-box; page-break-inside: avoid; }
+              .sheet-header { font-weight: 600; font-size: 11px; margin-bottom: 4px; text-align: center; }
+              .sheet-table { width: 100%; border-collapse: collapse; font-size: 10px; }
+              .sheet-table th, .sheet-table td { border: 1px solid #000; padding: 2px 4px; }
+              .sheet-table .name { text-align: left; }
+              .sheet-table .jersey { width: 22px; text-align: center; }
+              @media print {
+                body { padding: 8px; }
+                .sheet { width: 48%; margin-bottom: 4px; }
+              }
+            </style>
+          </head>
+          <body>
+            <div class="sheet-container">
+              ${sheets.join("")}
+            </div>
+            <script>window.print();</script>
+          </body>
+        </html>
+      `
+
+      const win = window.open("", "_blank")
+      if (!win) {
+        setPrintError("El navegador bloqueó la ventana de impresión. Permití las ventanas emergentes e intentá de nuevo.")
+        return
+      }
+      win.document.open()
+      win.document.write(html)
+      win.document.close()
+    } finally {
+      setPrinting(false)
+    }
+  }
 
   const dedupeIds = (ids: string[]) => {
     const seen = new Set<string>()
@@ -469,6 +596,40 @@ export default function ProgramacionPage() {
                   value={awayTeamFilter}
                   onChange={(e) => setAwayTeamFilter(e.target.value)}
                 />
+              </div>
+            </div>
+            <div className="px-4 pb-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between border-b">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full sm:w-auto">
+                <div className="grid gap-2">
+                  <Label htmlFor="print-date">Fecha de jornada</Label>
+                  <Input
+                    id="print-date"
+                    type="date"
+                    value={printDate}
+                    onChange={(e) => setPrintDate(e.target.value)}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="print-venue">Sede</Label>
+                  <Select value={printVenueId} onValueChange={setPrintVenueId}>
+                    <SelectTrigger id="print-venue">
+                      <SelectValue placeholder="Seleccionar sede" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {venues.map((venue) => (
+                        <SelectItem key={venue.id} value={venue.id}>
+                          {venue.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="flex flex-col items-start gap-2 sm:items-end">
+                <Button onClick={handlePrintPreSheets} disabled={printing}>
+                  {printing ? "Generando..." : "Imprimir pre planillas"}
+                </Button>
+                {printError && <p className="text-xs text-destructive max-w-md text-right">{printError}</p>}
               </div>
             </div>
             <Table>

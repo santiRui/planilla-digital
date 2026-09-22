@@ -34,6 +34,9 @@ export default function JornadaPage() {
   const [statusDialogSubmitting, setStatusDialogSubmitting] = useState(false)
   const [statusDialogError, setStatusDialogError] = useState<string | null>(null)
 
+  const [printing, setPrinting] = useState(false)
+  const [printError, setPrintError] = useState<string | null>(null)
+
   const supabase = useMemo(() => createSupabaseBrowserClient(), [])
 
   // Load tournaments, venues, courts
@@ -198,6 +201,117 @@ export default function JornadaPage() {
   const getVenueName = (id?: string | null) => venues.find((v) => v.id === id)?.name || "-"
   const getCourtName = (id?: string | null) => courts.find((c) => c.id === id)?.name || "-"
 
+  const handlePrintPreSheets = async () => {
+    setPrintError(null)
+    if (!selectedVenue || !selectedDate) {
+      setPrintError("Seleccioná una sede y una fecha para imprimir las pre planillas.")
+      return
+    }
+
+    if (jornadaMatches.length === 0) {
+      setPrintError("No hay partidos cargados para esa sede y fecha.")
+      return
+    }
+
+    const teamIds = Array.from(
+      new Set(
+        jornadaMatches
+          .flatMap((m) => [m.homeTeamId, m.awayTeamId])
+          .filter(Boolean),
+      ),
+    ) as string[]
+
+    if (teamIds.length === 0) {
+      setPrintError("No se encontraron equipos para esa jornada.")
+      return
+    }
+
+    setPrinting(true)
+    try {
+      const { data: playersData, error: playersError } = await supabase
+        .from("players")
+        .select("id, team_id, first_name, last_name")
+        .in("team_id", teamIds)
+        .order("last_name", { ascending: true })
+        .order("first_name", { ascending: true })
+
+      if (playersError) {
+        setPrintError(playersError.message)
+        return
+      }
+
+      const playersByTeam: Record<string, { firstName: string; lastName: string }[]> = {}
+      for (const p of playersData ?? []) {
+        const teamId = (p as any).team_id as string
+        if (!playersByTeam[teamId]) playersByTeam[teamId] = []
+        playersByTeam[teamId].push({ firstName: (p as any).first_name, lastName: (p as any).last_name })
+      }
+
+      const sheets = teamIds.map((teamId) => {
+        const teamName = getTeamName(teamId)
+        const players = playersByTeam[teamId] ?? []
+        const rowsHtml = players
+          .map((pl) => `<tr><td class="name">${pl.lastName.toUpperCase()}, ${pl.firstName}</td><td class="jersey"></td></tr>`)
+          .join("")
+
+        return `
+          <div class="sheet">
+            <div class="sheet-header">${teamName}</div>
+            <table class="sheet-table">
+              <thead>
+                <tr><th class="name">Jugador/a</th><th class="jersey">N°</th></tr>
+              </thead>
+              <tbody>
+                ${rowsHtml}
+              </tbody>
+            </table>
+          </div>
+        `
+      })
+
+      const html = `
+        <html>
+          <head>
+            <meta charSet="utf-8" />
+            <title>Pre planillas</title>
+            <style>
+              body { margin: 0; padding: 12px; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+              .sheet-container { display: flex; flex-wrap: wrap; gap: 6px; }
+              /* Más chicas para que entren hasta 6 por hoja (3 columnas x 2 filas aprox.) */
+              .sheet { border: 1px solid #000; padding: 4px; width: 31%; box-sizing: border-box; page-break-inside: avoid; }
+              .sheet-header { font-weight: 600; font-size: 9px; margin-bottom: 3px; text-align: center; }
+              .sheet-table { width: 100%; border-collapse: collapse; font-size: 8px; }
+              .sheet-table th, .sheet-table td { border: 1px solid #000; padding: 1px 2px; }
+              .sheet-table .name { text-align: left; }
+              .sheet-table .jersey { width: 18px; text-align: center; }
+              @media print {
+                body { padding: 6px; }
+                .sheet { width: 31%; margin-bottom: 4px; }
+              }
+            </style>
+          </head>
+          <body>
+            <div class="sheet-container">
+              ${sheets.join("")}
+            </div>
+            <script>window.print();</script>
+          </body>
+        </html>
+      `
+
+      const win = window.open("", "_blank")
+      if (!win) {
+        setPrintError("El navegador bloqueó la ventana de impresión. Permití las ventanas emergentes e intentá de nuevo.")
+        return
+      }
+      win.document.open()
+      win.document.write(html)
+      win.document.close()
+    } finally {
+      setPrinting(false)
+    }
+  }
+
   const formatTime = (d?: Date | null) => {
     if (!d) return "-"
     return d.toTimeString().slice(0, 5)
@@ -342,6 +456,19 @@ export default function JornadaPage() {
                 value={selectedDate}
                 onChange={(e) => setSelectedDate(e.target.value)}
               />
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between border-t pt-4 mt-2">
+            <div className="text-xs text-muted-foreground">
+              Seleccioná una sede y una fecha para ver la jornada y, si querés, imprimir las pre planillas vacías
+              para los equipos.
+            </div>
+            <div className="flex flex-col items-start gap-1 sm:flex-row sm:items-center sm:gap-2">
+              <Button onClick={handlePrintPreSheets} disabled={printing || !selectedVenue || !selectedDate}>
+                {printing ? "Generando..." : "Imprimir pre planillas"}
+              </Button>
+              {printError && <p className="text-xs text-destructive max-w-md">{printError}</p>}
             </div>
           </div>
 
