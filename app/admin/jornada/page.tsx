@@ -276,18 +276,41 @@ export default function JornadaPage() {
             <title>Pre planillas</title>
             <style>
               body { margin: 0; padding: 10px; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-              /* Contenedor en 3 columnas x 2 filas aprox., usando todo el ancho de la hoja */
-              .sheet-container { display: flex; flex-wrap: wrap; gap: 4px; justify-content: space-between; align-items: stretch; }
-              /* Cada pre-planilla ocupa ~1/3 del ancho y se estira en altura para aprovechar la página */
-              .sheet { border: 1px solid #000; padding: 4px; width: 32%; box-sizing: border-box; page-break-inside: avoid; display: flex; flex-direction: column; }
-              .sheet-header { font-weight: 600; font-size: 11px; margin-bottom: 3px; text-align: center; }
+              /* Contenedor flexible: el navegador decide cuántas entran por fila según el papel */
+              .sheet-container {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+                justify-content: flex-start;
+                align-items: flex-start;
+              }
+              /* Cada pre-planilla ocupa aprox. la mitad de la hoja en ancho, pero puede ajustarse
+                 automáticamente según el tamaño de papel/impresora. */
+              .sheet {
+                border: 1px solid #000;
+                padding: 6px;
+                width: 48%;
+                max-width: 48%;
+                box-sizing: border-box;
+                page-break-inside: avoid;
+                display: flex;
+                flex-direction: column;
+              }
+              .sheet-header { font-weight: 600; font-size: 11px; margin-bottom: 4px; text-align: center; }
               .sheet-table { width: 100%; border-collapse: collapse; font-size: 10px; flex: 1 1 auto; }
-              .sheet-table th, .sheet-table td { border: 1px solid #000; padding: 1px 2px; }
+              /* Altura de fila generosa para escribir número, similar a la tabla de referencia */
+              .sheet-table th,
+              .sheet-table td {
+                border: 1px solid #000;
+                padding: 4px 6px;
+                line-height: 1.4;
+                height: 22px;
+              }
               .sheet-table .name { text-align: left; }
-              .sheet-table .jersey { width: 18px; text-align: center; }
+              .sheet-table .jersey { width: 22px; text-align: center; }
               @media print {
-                body { padding: 6px; }
-                .sheet { width: 32%; margin-bottom: 4px; }
+                body { padding: 8px; }
+                .sheet { width: 48%; max-width: 48%; margin-bottom: 6px; }
               }
             </style>
           </head>
