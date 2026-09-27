@@ -275,19 +275,19 @@ export default function JornadaPage() {
             <meta charSet="utf-8" />
             <title>Pre planillas</title>
             <style>
-              body { margin: 0; padding: 12px; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-              .sheet-container { display: flex; flex-wrap: wrap; gap: 6px; }
-              /* Más chicas para que entren hasta 6 por hoja (3 columnas x 2 filas aprox.),
-                 pero con tipografía un poco más grande para mejor lectura. */
-              .sheet { border: 1px solid #000; padding: 4px; width: 31%; box-sizing: border-box; page-break-inside: avoid; }
+              body { margin: 0; padding: 10px; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+              /* Contenedor en 3 columnas x 2 filas aprox., usando todo el ancho de la hoja */
+              .sheet-container { display: flex; flex-wrap: wrap; gap: 4px; justify-content: space-between; align-items: stretch; }
+              /* Cada pre-planilla ocupa ~1/3 del ancho y se estira en altura para aprovechar la página */
+              .sheet { border: 1px solid #000; padding: 4px; width: 32%; box-sizing: border-box; page-break-inside: avoid; display: flex; flex-direction: column; }
               .sheet-header { font-weight: 600; font-size: 11px; margin-bottom: 3px; text-align: center; }
-              .sheet-table { width: 100%; border-collapse: collapse; font-size: 10px; }
+              .sheet-table { width: 100%; border-collapse: collapse; font-size: 10px; flex: 1 1 auto; }
               .sheet-table th, .sheet-table td { border: 1px solid #000; padding: 1px 2px; }
               .sheet-table .name { text-align: left; }
               .sheet-table .jersey { width: 18px; text-align: center; }
               @media print {
                 body { padding: 6px; }
-                .sheet { width: 31%; margin-bottom: 4px; }
+                .sheet { width: 32%; margin-bottom: 4px; }
               }
             </style>
           </head>
