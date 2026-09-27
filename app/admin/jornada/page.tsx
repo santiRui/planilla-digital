@@ -277,10 +277,11 @@ export default function JornadaPage() {
             <style>
               body { margin: 0; padding: 12px; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
               .sheet-container { display: flex; flex-wrap: wrap; gap: 6px; }
-              /* Más chicas para que entren hasta 6 por hoja (3 columnas x 2 filas aprox.) */
+              /* Más chicas para que entren hasta 6 por hoja (3 columnas x 2 filas aprox.),
+                 pero con tipografía un poco más grande para mejor lectura. */
               .sheet { border: 1px solid #000; padding: 4px; width: 31%; box-sizing: border-box; page-break-inside: avoid; }
-              .sheet-header { font-weight: 600; font-size: 9px; margin-bottom: 3px; text-align: center; }
-              .sheet-table { width: 100%; border-collapse: collapse; font-size: 8px; }
+              .sheet-header { font-weight: 600; font-size: 11px; margin-bottom: 3px; text-align: center; }
+              .sheet-table { width: 100%; border-collapse: collapse; font-size: 10px; }
               .sheet-table th, .sheet-table td { border: 1px solid #000; padding: 1px 2px; }
               .sheet-table .name { text-align: left; }
               .sheet-table .jersey { width: 18px; text-align: center; }
