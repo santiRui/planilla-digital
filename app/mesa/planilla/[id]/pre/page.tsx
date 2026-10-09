@@ -189,7 +189,42 @@ export default function PrePlanillaPage() {
 
   useEffect(() => {
     if (typeof window === "undefined") return
-    window.localStorage.setItem(`preplanilla:${matchId}`, JSON.stringify(state))
+    const key = `preplanilla:${matchId}`
+    try {
+      window.localStorage.setItem(key, JSON.stringify(state))
+    } catch (e: any) {
+      // En algunos dispositivos móviles el espacio de localStorage es muy limitado.
+      // Si se excede la cuota, intentamos liberar espacio borrando otras preplanillas
+      // antiguas y reintentamos una única vez.
+      const isQuotaError = e && typeof e === "object" && (e as DOMException).name === "QuotaExceededError"
+      if (isQuotaError) {
+        try {
+          const keysToRemove: string[] = []
+          for (let i = 0; i < window.localStorage.length; i++) {
+            const k = window.localStorage.key(i)
+            if (!k) continue
+            if (k.startsWith("preplanilla:") && k !== key) {
+              keysToRemove.push(k)
+            }
+          }
+          for (const k of keysToRemove) {
+            window.localStorage.removeItem(k)
+          }
+
+          // Reintentar una vez después de limpiar
+          try {
+            window.localStorage.setItem(key, JSON.stringify(state))
+            return
+          } catch (e2) {
+            console.warn("[preplanilla] Reintento de guardado falló tras limpiar claves", e2)
+          }
+        } catch (cleanupError) {
+          console.warn("[preplanilla] Error limpiando claves antiguas", cleanupError)
+        }
+      }
+
+      console.warn("[preplanilla] No se pudo guardar en localStorage", e)
+    }
   }, [state, matchId])
 
   const skipNextAutosaveRef = useRef(false)
@@ -222,7 +257,11 @@ export default function PrePlanillaPage() {
           home: { ...emptyTeamState(), ...(json.homeState ?? {}) },
           away: { ...emptyTeamState(), ...(json.awayState ?? {}) },
         }
-        window.localStorage.setItem(`preplanilla:${matchId}`, JSON.stringify(nextState))
+        try {
+          window.localStorage.setItem(`preplanilla:${matchId}`, JSON.stringify(nextState))
+        } catch (e) {
+          console.warn("[preplanilla] No se pudo inicializar estado en localStorage", e)
+        }
         setState(nextState)
       } catch {
         // si falla, seguimos con estado vacío
