@@ -56,6 +56,10 @@ export default function FasesPage() {
   const [bestOfCuartosInput, setBestOfCuartosInput] = useState<string>("1")
   const [bestOfSemifinalInput, setBestOfSemifinalInput] = useState<string>("1")
   const [bestOfFinalInput, setBestOfFinalInput] = useState<string>("1")
+  // Configuración JO (reutilizamos inputs para no agregar más estado por ahora)
+  const [joTotalInput, setJoTotalInput] = useState<string>("8")
+  const [joFromGInput, setJoFromGInput] = useState<string>("5")
+  const [joFromPInput, setJoFromPInput] = useState<string>("3")
   const [hasPlayoffConfig, setHasPlayoffConfig] = useState(false)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -74,7 +78,7 @@ export default function FasesPage() {
       ] = await Promise.all([
         supabase
           .from("tournaments")
-          .select("id, name, year, branch, status, created_at, category_id")
+          .select("id, name, year, branch, status, created_at, category_id, format")
           .order("created_at", { ascending: false }),
         supabase.auth.getSession(),
       ])
@@ -89,6 +93,7 @@ export default function FasesPage() {
         status: t.status,
         createdAt: t.created_at,
         categoryId: t.category_id,
+        format: (t.format as string | null) ?? "normal",
       })) as Tournament[]
       setTournaments(nextTournaments)
 
@@ -219,6 +224,9 @@ export default function FasesPage() {
         setBestOfCuartosInput(String(cfg.bestOfCuartos ?? 1))
         setBestOfSemifinalInput(String(cfg.bestOfSemifinal ?? 1))
         setBestOfFinalInput(String(cfg.bestOfFinal ?? 1))
+        if (typeof cfg.joPlayoffTotal === "number") setJoTotalInput(String(cfg.joPlayoffTotal))
+        if (typeof cfg.joFromGanadores === "number") setJoFromGInput(String(cfg.joFromGanadores))
+        if (typeof cfg.joFromPerdedores === "number") setJoFromPInput(String(cfg.joFromPerdedores))
         setHasPlayoffConfig(true)
       } else {
         setHasPlayoffConfig(false)
@@ -370,6 +378,16 @@ export default function FasesPage() {
     return "final" as TournamentPhase
   }, [playoffConfig.qualifiedTeams])
 
+  const selectedTournamentObj = tournaments.find((t) => t.id === selectedTournament)
+  const isOlympic = selectedTournamentObj?.format === "juegos_olimpicos"
+  const hasOlympicZones = useMemo(
+    () =>
+      categoryMatches.some(
+        (m) => m.phase === "fase_regular" && (m.zoneCode === "G" || m.zoneCode === "P"),
+      ),
+    [categoryMatches],
+  )
+
   const handleGeneratePhase = async () => {
     if (!selectedTournament) return
 
@@ -378,21 +396,38 @@ export default function FasesPage() {
     const bestOfSemifinal = Number.parseInt(bestOfSemifinalInput, 10)
     const bestOfFinal = Number.parseInt(bestOfFinalInput, 10)
 
-    if (!qualifiedTeamsInput.trim() || !Number.isFinite(qualifiedTeams) || ![2, 4, 8].includes(qualifiedTeams)) {
-      setError("Faltan datos: completá los equipos que clasifican (solo 2, 4 u 8).")
-      return
-    }
-    if (!bestOfCuartosInput.trim() || !Number.isFinite(bestOfCuartos) || bestOfCuartos < 1 || bestOfCuartos > 9) {
-      setError("Faltan datos: completá Cuartos (best-of) entre 1 y 9.")
-      return
-    }
-    if (!bestOfSemifinalInput.trim() || !Number.isFinite(bestOfSemifinal) || bestOfSemifinal < 1 || bestOfSemifinal > 9) {
-      setError("Faltan datos: completá Semifinal (best-of) entre 1 y 9.")
-      return
-    }
-    if (!bestOfFinalInput.trim() || !Number.isFinite(bestOfFinal) || bestOfFinal < 1 || bestOfFinal > 9) {
-      setError("Faltan datos: completá Final (best-of) entre 1 y 9.")
-      return
+    if (!isOlympic) {
+      if (!qualifiedTeamsInput.trim() || !Number.isFinite(qualifiedTeams) || ![2, 4, 8].includes(qualifiedTeams)) {
+        setError("Faltan datos: completá los equipos que clasifican (solo 2, 4 u 8).")
+        return
+      }
+      if (!bestOfCuartosInput.trim() || !Number.isFinite(bestOfCuartos) || bestOfCuartos < 1 || bestOfCuartos > 9) {
+        setError("Faltan datos: completá Cuartos (best-of) entre 1 y 9.")
+        return
+      }
+      if (!bestOfSemifinalInput.trim() || !Number.isFinite(bestOfSemifinal) || bestOfSemifinal < 1 || bestOfSemifinal > 9) {
+        setError("Faltan datos: completá Semifinal (best-of) entre 1 y 9.")
+        return
+      }
+      if (!bestOfFinalInput.trim() || !Number.isFinite(bestOfFinal) || bestOfFinal < 1 || bestOfFinal > 9) {
+        setError("Faltan datos: completá Final (best-of) entre 1 y 9.")
+        return
+      }
+    } else if (isOlympic && hasOlympicZones) {
+      // Validación JO solo en paso Playoffs (cuando ya existen zonas G/P)
+      const joTotal = Number.parseInt(joTotalInput, 10)
+      const joFromG = Number.parseInt(joFromGInput, 10)
+      const joFromP = Number.parseInt(joFromPInput, 10)
+
+      if (!Number.isFinite(joTotal) || !Number.isFinite(joFromG) || !Number.isFinite(joFromP)) {
+        setError("Configurá total, desde Ganadores y desde Perdedores para Juegos Olímpicos.")
+        return
+      }
+
+      if (joFromG + joFromP !== joTotal) {
+        setError("En Juegos Olímpicos: Ganadores + Perdedores debe igualar el total a Playoffs.")
+        return
+      }
     }
 
     setSubmitting(true)
@@ -405,26 +440,88 @@ export default function FasesPage() {
         return
       }
 
-      const saveRes = await fetch(`/api/admin/playoff/config`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          tournamentId: selectedTournament,
-          qualifiedTeams,
-          bestOfCuartos,
-          bestOfSemifinal,
-          bestOfFinal,
-          tiebreakMode: playoffConfig.tiebreakMode,
-        }),
-      })
+      if (!isOlympic) {
+        const saveRes = await fetch(`/api/admin/playoff/config`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            tournamentId: selectedTournament,
+            qualifiedTeams,
+            bestOfCuartos,
+            bestOfSemifinal,
+            bestOfFinal,
+            tiebreakMode: playoffConfig.tiebreakMode,
+          }),
+        })
 
-      const saveJson = (await saveRes.json().catch(() => null)) as any
-      if (!saveRes.ok) {
-        setError(saveJson?.error ?? "No se pudo guardar la configuración")
-        return
+        const saveJson = (await saveRes.json().catch(() => null)) as any
+        if (!saveRes.ok) {
+          setError(saveJson?.error ?? "No se pudo guardar la configuración")
+          return
+        }
+      } else if (isOlympic && hasOlympicZones) {
+        // Guardar configuración de Playoffs JO (total / desde G / desde P)
+        const joTotal = Number.parseInt(joTotalInput, 10)
+        const joFromG = Number.parseInt(joFromGInput, 10)
+        const joFromP = Number.parseInt(joFromPInput, 10)
+
+        const saveRes = await fetch(`/api/admin/playoff/config`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            tournamentId: selectedTournament,
+            // Campos clásicos no se usan en JO, pero se envían con valores por defecto válidos
+            qualifiedTeams: 8,
+            bestOfCuartos: 1,
+            bestOfSemifinal: 1,
+            bestOfFinal: 1,
+            tiebreakMode: playoffConfig.tiebreakMode,
+            joPlayoffTotal: joTotal,
+            joFromGanadores: joFromG,
+            joFromPerdedores: joFromP,
+          }),
+        })
+
+        const saveJson = (await saveRes.json().catch(() => null)) as any
+        if (!saveRes.ok) {
+          setError(saveJson?.error ?? "No se pudo guardar la configuración JO")
+          return
+        }
+      } else if (isOlympic && !hasOlympicZones) {
+        // Paso 1 JO: sólo guardamos cuántos equipos pasan a Zona Ganadores (qualifiedTeams)
+        const totalGanadores = Number.parseInt(qualifiedTeamsInput, 10)
+        if (!Number.isFinite(totalGanadores) || totalGanadores < 1) {
+          setError("Ingresá cuántos equipos pasan a la Zona de Ganadores (al menos 1).")
+          return
+        }
+
+        const saveRes = await fetch(`/api/admin/playoff/config`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            tournamentId: selectedTournament,
+            qualifiedTeams: totalGanadores,
+            bestOfCuartos: 1,
+            bestOfSemifinal: 1,
+            bestOfFinal: 1,
+            tiebreakMode: playoffConfig.tiebreakMode,
+          }),
+        })
+
+        const saveJson = (await saveRes.json().catch(() => null)) as any
+        if (!saveRes.ok) {
+          setError(saveJson?.error ?? "No se pudo guardar la configuración de Zona Ganadores")
+          return
+        }
       }
 
       const res = await fetch("/api/admin/phases/generate", {
@@ -466,6 +563,11 @@ export default function FasesPage() {
         <div>
           <h1 className="text-3xl font-bold">Fases del Torneo</h1>
           <p className="text-muted-foreground mt-1">Administra las fases y genera los cruces de playoff.</p>
+          {selectedTournament && (
+            <p className="text-xs text-muted-foreground mt-1">
+              Formato: {tournaments.find((t) => t.id === selectedTournament)?.format === "juegos_olimpicos" ? "Juegos Olímpicos" : "Normal"}
+            </p>
+          )}
         </div>
         <div className="flex gap-2">
           <Select value={selectedTournament} onValueChange={setSelectedTournament}>
@@ -557,46 +659,74 @@ export default function FasesPage() {
                             <p className="text-center text-muted-foreground py-2">No hay datos de posiciones</p>
                           ) : (
                             <div className="space-y-2">
-                              {zone.standings.map((standing, index) => (
-                                <div
-                                  key={standing.teamId}
-                                  className={`flex items-center justify-between p-3 rounded-lg ${
-                                    perZoneValid && index < perZone
-                                      ? "bg-[var(--color-success)]/10 border border-[var(--color-success)]/20"
-                                      : "bg-muted/50"
-                                  }`}
-                                >
-                                  <div className="flex items-center gap-3">
-                                    <span className="w-6 text-center font-bold text-lg">{index + 1}</span>
-                                    {getTeamLogo(standing.teamId) ? (
-                                      <div
-                                        className="h-8 w-8 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0"
-                                        style={{ borderColor: getTeamColor(standing.teamId) }}
-                                      >
-                                        <img
-                                          src={getTeamLogo(standing.teamId)}
-                                          alt={getTeamName(standing.teamId)}
-                                          className="h-full w-full object-cover"
-                                        />
-                                      </div>
-                                    ) : (
-                                      <div
-                                        className="h-8 w-8 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0"
-                                        style={{ backgroundColor: getTeamColor(standing.teamId) }}
-                                      >
-                                        {getTeamName(standing.teamId).substring(0, 2).toUpperCase()}
-                                      </div>
-                                    )}
-                                    <span className="font-medium">{getTeamName(standing.teamId)}</span>
-                                  </div>
-                                  <div className="flex items-center gap-4 text-sm">
-                                    <span className="text-muted-foreground">
-                                      {standing.won}G - {standing.lost}P
-                                    </span>
-                                    <span className="font-bold">{standing.points} pts</span>
-                                  </div>
+                              {/* Encabezado de columnas para la zona */}
+                              <div className="flex justify-end pr-1">
+                                <div className="grid grid-cols-9 gap-2 min-w-[320px] sm:min-w-[400px] text-[11px] sm:text-xs text-muted-foreground uppercase tracking-wide text-center">
+                                  <span>PJ</span>
+                                  <span>G</span>
+                                  <span>P</span>
+                                  <span>NP</span>
+                                  <span>Pts</span>
+                                  <span>Pts+</span>
+                                  <span>Pts-</span>
+                                  <span>Dif</span>
+                                  <span>Prom</span>
                                 </div>
-                              ))}
+                              </div>
+                              {zone.standings.map((standing, index) => {
+                                const diff = standing.pointsFor - standing.pointsAgainst
+                                const avg =
+                                  standing.played > 0
+                                    ? (standing.pointsFor / standing.played).toFixed(1)
+                                    : "0.0"
+                                return (
+                                  <div
+                                    key={standing.teamId}
+                                    className={`flex items-center justify-between p-3 rounded-lg ${
+                                      perZoneValid && index < perZone
+                                        ? "bg-[var(--color-success)]/10 border border-[var(--color-success)]/20"
+                                        : "bg-muted/50"
+                                    }`}
+                                  >
+                                    <div className="flex items-center gap-3">
+                                      <span className="w-6 text-center font-bold text-lg">{index + 1}</span>
+                                      {getTeamLogo(standing.teamId) ? (
+                                        <div
+                                          className="h-8 w-8 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0"
+                                          style={{ borderColor: getTeamColor(standing.teamId) }}
+                                        >
+                                          <img
+                                            src={getTeamLogo(standing.teamId)}
+                                            alt={getTeamName(standing.teamId)}
+                                            className="h-full w-full object-cover"
+                                          />
+                                        </div>
+                                      ) : (
+                                        <div
+                                          className="h-8 w-8 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0"
+                                          style={{ backgroundColor: getTeamColor(standing.teamId) }}
+                                        >
+                                          {getTeamName(standing.teamId).substring(0, 2).toUpperCase()}
+                                        </div>
+                                      )}
+                                      <span className="font-medium">{getTeamName(standing.teamId)}</span>
+                                    </div>
+                                    <div className="flex justify-end pr-1">
+                                      <div className="grid grid-cols-9 gap-2 min-w-[320px] sm:min-w-[400px] text-xs sm:text-sm text-foreground text-center">
+                                        <span>{standing.played}</span>
+                                        <span>{standing.won}</span>
+                                        <span>{standing.lost}</span>
+                                        <span>{standing.np}</span>
+                                        <span>{standing.points}</span>
+                                        <span>{standing.pointsFor}</span>
+                                        <span>{standing.pointsAgainst}</span>
+                                        <span>{diff > 0 ? `+${diff}` : diff}</span>
+                                        <span>{avg}</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )
+                              })}
                             </div>
                           )}
                         </div>
@@ -705,206 +835,400 @@ export default function FasesPage() {
             <Card>
               <CardHeader>
                 <CardTitle>Generar Siguiente Fase</CardTitle>
-                <CardDescription>Configura y genera los cruces de playoff</CardDescription>
+                <CardDescription>
+                  {isOlympic
+                    ? hasOlympicZones
+                      ? "Formato Juegos Olímpicos: configurá cuántos equipos pasan desde Ganadores y Perdedores a Playoffs."
+                      : "Formato Juegos Olímpicos: elegí cuántos equipos pasan a la Zona de Ganadores."
+                    : "Configura y genera los cruces de playoff"}
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label>Equipos que clasifican</Label>
-                    <Input
-                      type="number"
-                      min={2}
-                      max={32}
-                      value={qualifiedTeamsInput}
-                      onChange={(e) => {
-                        const next = e.target.value
-                        setQualifiedTeamsInput(next)
-                        const n = Number.parseInt(next, 10)
-                        if (Number.isFinite(n) && [2, 4, 8].includes(n)) {
-                          setPlayoffConfig((prev) => ({
-                            ...prev,
-                            qualifiedTeams: n as 2 | 4 | 8,
-                          }))
-                        }
-                      }}
-                    />
-                    {!isQualifiedTeamsValid && (
-                      <p className="text-xs text-destructive">Solo se permiten 2, 4 u 8 equipos.</p>
-                    )}
-                    <p className="text-xs text-muted-foreground">Instancia inicial: {phaseConfig[startPhase].label}</p>
-                  </div>
+                {/* MODO NORMAL */}
+                {!isOlympic ? (
+                  <>
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <Label>Equipos que clasifican</Label>
+                        <Input
+                          type="number"
+                          min={2}
+                          max={32}
+                          value={qualifiedTeamsInput}
+                          onChange={(e) => {
+                            const next = e.target.value
+                            setQualifiedTeamsInput(next)
+                            const n = Number.parseInt(next, 10)
+                            if (Number.isFinite(n) && [2, 4, 8].includes(n)) {
+                              setPlayoffConfig((prev) => ({
+                                ...prev,
+                                qualifiedTeams: n as 2 | 4 | 8,
+                              }))
+                            }
+                          }}
+                        />
+                        {!isQualifiedTeamsValid && (
+                          <p className="text-xs text-destructive">Solo se permiten 2, 4 u 8 equipos.</p>
+                        )}
+                        <p className="text-xs text-muted-foreground">
+                          Instancia inicial: {phaseConfig[startPhase].label}
+                        </p>
+                      </div>
 
-                  <div className="grid gap-4 sm:grid-cols-3">
-                    <div className="space-y-2">
-                      <Label>Cuartos (best-of)</Label>
-                      <Input
-                        type="number"
-                        min={1}
-                        max={9}
-                        value={bestOfCuartosInput}
-                        onChange={(e) => {
-                          const next = e.target.value
-                          setBestOfCuartosInput(next)
-                          const n = Number.parseInt(next, 10)
-                          if (Number.isFinite(n) && n >= 1 && n <= 9) {
+                      <div className="grid gap-4 sm:grid-cols-3">
+                        <div className="space-y-2">
+                          <Label>Cuartos (best-of)</Label>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={9}
+                            value={bestOfCuartosInput}
+                            onChange={(e) => {
+                              const next = e.target.value
+                              setBestOfCuartosInput(next)
+                              const n = Number.parseInt(next, 10)
+                              if (Number.isFinite(n) && n >= 1 && n <= 9) {
+                                setPlayoffConfig((prev) => ({
+                                  ...prev,
+                                  bestOfCuartos: n,
+                                }))
+                              }
+                            }}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Semifinal (best-of)</Label>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={9}
+                            value={bestOfSemifinalInput}
+                            onChange={(e) => {
+                              const next = e.target.value
+                              setBestOfSemifinalInput(next)
+                              const n = Number.parseInt(next, 10)
+                              if (Number.isFinite(n) && n >= 1 && n <= 9) {
+                                setPlayoffConfig((prev) => ({
+                                  ...prev,
+                                  bestOfSemifinal: n,
+                                }))
+                              }
+                            }}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Final (best-of)</Label>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={9}
+                            value={bestOfFinalInput}
+                            onChange={(e) => {
+                              const next = e.target.value
+                              setBestOfFinalInput(next)
+                              const n = Number.parseInt(next, 10)
+                              if (Number.isFinite(n) && n >= 1 && n <= 9) {
+                                setPlayoffConfig((prev) => ({
+                                  ...prev,
+                                  bestOfFinal: n,
+                                }))
+                              }
+                            }}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>Sistema de desempate</Label>
+                        <Select
+                          value={playoffConfig.tiebreakMode}
+                          onValueChange={(v) =>
                             setPlayoffConfig((prev) => ({
                               ...prev,
-                              bestOfCuartos: n,
+                              tiebreakMode: v as PlayoffConfig["tiebreakMode"],
                             }))
                           }
-                        }}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Semifinal (best-of)</Label>
-                      <Input
-                        type="number"
-                        min={1}
-                        max={9}
-                        value={bestOfSemifinalInput}
-                        onChange={(e) => {
-                          const next = e.target.value
-                          setBestOfSemifinalInput(next)
-                          const n = Number.parseInt(next, 10)
-                          if (Number.isFinite(n) && n >= 1 && n <= 9) {
-                            setPlayoffConfig((prev) => ({
-                              ...prev,
-                              bestOfSemifinal: n,
-                            }))
-                          }
-                        }}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Final (best-of)</Label>
-                      <Input
-                        type="number"
-                        min={1}
-                        max={9}
-                        value={bestOfFinalInput}
-                        onChange={(e) => {
-                          const next = e.target.value
-                          setBestOfFinalInput(next)
-                          const n = Number.parseInt(next, 10)
-                          if (Number.isFinite(n) && n >= 1 && n <= 9) {
-                            setPlayoffConfig((prev) => ({
-                              ...prev,
-                              bestOfFinal: n,
-                            }))
-                          }
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Sistema de desempate</Label>
-                    <Select
-                      value={playoffConfig.tiebreakMode}
-                      onValueChange={(v) =>
-                        setPlayoffConfig((prev) => ({
-                          ...prev,
-                          tiebreakMode: v as PlayoffConfig["tiebreakMode"],
-                        }))
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="olimpico_sorteo">Olímpico (con sorteo)</SelectItem>
-                        <SelectItem value="olimpico_sin_sorteo">Olímpico (sin sorteo, por tabla)</SelectItem>
-                        <SelectItem value="labas">LaBaS (por tabla)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                {/* Preview */}
-                <div className="space-y-2">
-                  <Label>Vista Previa de Cruces</Label>
-                  <div className="space-y-2">
-                    {matchups.map((matchup, index) => {
-                      const homeSeed = qualifiedTeams.findIndex((t) => t.teamId === matchup.home) + 1
-                      const awaySeed =
-                        matchup.away != null
-                          ? qualifiedTeams.findIndex((t) => t.teamId === matchup.away) + 1
-                          : null
-
-                      return (
-                        <div
-                          key={index}
-                          className="flex items-center justify-between p-3 rounded-lg border bg-muted/30"
                         >
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-muted-foreground">#{homeSeed || "-"}</span>
-                            {getTeamLogo(matchup.home) ? (
-                              <div
-                                className="h-6 w-6 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0"
-                                style={{ borderColor: getTeamColor(matchup.home) }}
-                              >
-                                <img
-                                  src={getTeamLogo(matchup.home)}
-                                  alt={getTeamName(matchup.home)}
-                                  className="h-full w-full object-cover"
-                                />
-                              </div>
-                            ) : (
-                              <div
-                                className="h-6 w-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold shrink-0"
-                                style={{ backgroundColor: getTeamColor(matchup.home) }}
-                              >
-                                {getTeamName(matchup.home).substring(0, 2).toUpperCase()}
-                              </div>
-                            )}
-                            <span className="font-medium">{getTeamName(matchup.home)}</span>
-                          </div>
-                          <span className="text-muted-foreground">vs</span>
-                          <div className="flex items-center gap-2">
-                            {matchup.isBye || matchup.away == null ? (
-                              <>
-                                <span className="font-medium">Libre</span>
-                                <span className="text-xs text-muted-foreground">(pasa directo)</span>
-                              </>
-                            ) : (
-                              <>
-                                <span className="font-medium">{getTeamName(matchup.away)}</span>
-                                {getTeamLogo(matchup.away) ? (
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="olimpico_sorteo">Olímpico (con sorteo)</SelectItem>
+                            <SelectItem value="olimpico_sin_sorteo">Olímpico (sin sorteo, por tabla)</SelectItem>
+                            <SelectItem value="labas">LaBaS (por tabla)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    {/* Vista previa de cruces normal */}
+                    <div className="space-y-2">
+                      <Label>Vista Previa de Cruces</Label>
+                      <div className="space-y-2">
+                        {matchups.map((matchup, index) => {
+                          const homeSeed = qualifiedTeams.findIndex((t) => t.teamId === matchup.home) + 1
+                          const awaySeed =
+                            matchup.away != null
+                              ? qualifiedTeams.findIndex((t) => t.teamId === matchup.away) + 1
+                              : null
+
+                          return (
+                            <div
+                              key={index}
+                              className="flex items-center justify-between p-3 rounded-lg border bg-muted/30"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-muted-foreground">#{homeSeed || "-"}</span>
+                                {getTeamLogo(matchup.home) ? (
                                   <div
                                     className="h-6 w-6 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0"
-                                    style={{ borderColor: getTeamColor(matchup.away) }}
+                                    style={{ borderColor: getTeamColor(matchup.home) }}
                                   >
                                     <img
-                                      src={getTeamLogo(matchup.away)}
-                                      alt={getTeamName(matchup.away)}
+                                      src={getTeamLogo(matchup.home)}
+                                      alt={getTeamName(matchup.home)}
                                       className="h-full w-full object-cover"
                                     />
                                   </div>
                                 ) : (
                                   <div
                                     className="h-6 w-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold shrink-0"
-                                    style={{ backgroundColor: getTeamColor(matchup.away)} }
+                                    style={{ backgroundColor: getTeamColor(matchup.home) }}
                                   >
-                                    {getTeamName(matchup.away).substring(0, 2).toUpperCase()}
+                                    {getTeamName(matchup.home).substring(0, 2).toUpperCase()}
                                   </div>
                                 )}
-                                <span className="text-xs text-muted-foreground">#{awaySeed || "-"}</span>
-                              </>
-                            )}
-                          </div>
+                                <span className="font-medium">{getTeamName(matchup.home)}</span>
+                              </div>
+                              <span className="text-muted-foreground">vs</span>
+                              <div className="flex items-center gap-2">
+                                {matchup.isBye || matchup.away == null ? (
+                                  <>
+                                    <span className="font-medium">Libre</span>
+                                    <span className="text-xs text-muted-foreground">(pasa directo)</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span className="font-medium">{getTeamName(matchup.away)}</span>
+                                    {getTeamLogo(matchup.away) ? (
+                                      <div
+                                        className="h-6 w-6 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0"
+                                        style={{ borderColor: getTeamColor(matchup.away) }}
+                                      >
+                                        <img
+                                          src={getTeamLogo(matchup.away)}
+                                          alt={getTeamName(matchup.away)}
+                                          className="h-full w-full object-cover"
+                                        />
+                                      </div>
+                                    ) : (
+                                      <div
+                                        className="h-6 w-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold shrink-0"
+                                        style={{ backgroundColor: getTeamColor(matchup.away) }}
+                                      >
+                                        {getTeamName(matchup.away).substring(0, 2).toUpperCase()}
+                                      </div>
+                                    )}
+                                    <span className="text-xs text-muted-foreground">#{awaySeed || "-"}</span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  </>
+                ) : !hasOlympicZones ? (
+                  <>
+                    {/* JO PASO 1: solo cantidad a Ganadores + vista previa de zonas */}
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <Label>Equipos que pasan a Zona de Ganadores</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={32}
+                          value={qualifiedTeamsInput}
+                          onChange={(e) => setQualifiedTeamsInput(e.target.value)}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Este número se repartirá entre Zona A y Zona B. Si es impar, el cupo extra va al mejor
+                          equipo según la tabla (puntos y diferencia).
+                        </p>
+                      </div>
+
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label>Zona de Ganadores (previa)</Label>
+                          {(() => {
+                            const totalGanadores = Number.parseInt(qualifiedTeamsInput || "0", 10)
+                            if (!Number.isFinite(totalGanadores) || totalGanadores <= 0) {
+                              return <p className="text-xs text-muted-foreground">Ingresá cuántos equipos pasan.</p>
+                            }
+
+                            // Aproximación: repartimos basePerZone igual que en el backend
+                            const basePerZone = Math.floor(
+                              totalGanadores / Math.max(1, distinctZones.length),
+                            )
+
+                            const ganadoresFlat = standingsByZone.flatMap((zone) =>
+                              zone.standings.slice(0, basePerZone).map((s) => s.teamId),
+                            )
+
+                            if (ganadoresFlat.length === 0) {
+                              return <p className="text-xs text-muted-foreground">Sin equipos.</p>
+                            }
+
+                            return (
+                              <div className="space-y-1">
+                                {ganadoresFlat.map((teamId, index) => {
+                                  const standing = categoryStandings.find((s) => s.teamId === teamId)
+                                  const diff =
+                                    (standing?.pointsFor ?? 0) - (standing?.pointsAgainst ?? 0)
+                                  return (
+                                    <div
+                                      key={teamId}
+                                      className="flex items-center justify-between p-2 rounded-md bg-muted/60"
+                                    >
+                                      <div className="flex items-center gap-2">
+                                        <span className="w-5 text-center text-xs font-semibold">
+                                          {index + 1}
+                                        </span>
+                                        {getTeamLogo(teamId) ? (
+                                          <div
+                                            className="h-6 w-6 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0"
+                                            style={{ borderColor: getTeamColor(teamId) }}
+                                          >
+                                            <img
+                                              src={getTeamLogo(teamId)}
+                                              alt={getTeamName(teamId)}
+                                              className="h-full w-full object-cover"
+                                            />
+                                          </div>
+                                        ) : (
+                                          <div
+                                            className="h-6 w-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold shrink-0"
+                                            style={{ backgroundColor: getTeamColor(teamId) }}
+                                          >
+                                            {getTeamName(teamId).substring(0, 2).toUpperCase()}
+                                          </div>
+                                        )}
+                                        <span className="text-sm font-medium">{getTeamName(teamId)}</span>
+                                      </div>
+                                      <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+                                        <span>
+                                          {(standing?.won ?? 0)}G - {(standing?.lost ?? 0)}P
+                                        </span>
+                                        <span>{standing?.points ?? 0} pts</span>
+                                        <span>Dif {diff}</span>
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            )
+                          })()}
                         </div>
-                      )
-                    })}
-                  </div>
-                </div>
+
+                        <div className="space-y-2">
+                          <Label>Zona de Perdedores (previa)</Label>
+                          {(() => {
+                            const totalGanadores = Number.parseInt(qualifiedTeamsInput || "0", 10)
+                            if (!Number.isFinite(totalGanadores) || totalGanadores <= 0) {
+                              return <p className="text-xs text-muted-foreground">Ingresá cuántos equipos pasan.</p>
+                            }
+
+                            const basePerZone = Math.floor(
+                              totalGanadores / Math.max(1, distinctZones.length),
+                            )
+
+                            const ganadoresSet = new Set(
+                              standingsByZone.flatMap((zone) =>
+                                zone.standings.slice(0, basePerZone).map((s) => s.teamId),
+                              ),
+                            )
+
+                            const perdedoresFlat = categoryStandings
+                              .map((s) => s.teamId)
+                              .filter((id) => !ganadoresSet.has(id))
+
+                            if (perdedoresFlat.length === 0) {
+                              return <p className="text-xs text-muted-foreground">Sin equipos.</p>
+                            }
+
+                            return (
+                              <div className="space-y-1">
+                                {perdedoresFlat.map((teamId, index) => {
+                                  const standing = categoryStandings.find((s) => s.teamId === teamId)
+                                  const diff =
+                                    (standing?.pointsFor ?? 0) - (standing?.pointsAgainst ?? 0)
+                                  return (
+                                    <div
+                                      key={teamId}
+                                      className="flex items-center justify-between p-2 rounded-md bg-muted/40"
+                                    >
+                                      <div className="flex items-center gap-2">
+                                        <span className="w-5 text-center text-xs font-semibold">
+                                          {index + 1}
+                                        </span>
+                                        {getTeamLogo(teamId) ? (
+                                          <div
+                                            className="h-6 w-6 rounded-full overflow-hidden border bg-muted flex items-center justify-center shrink-0"
+                                            style={{ borderColor: getTeamColor(teamId) }}
+                                          >
+                                            <img
+                                              src={getTeamLogo(teamId)}
+                                              alt={getTeamName(teamId)}
+                                              className="h-full w-full object-cover"
+                                            />
+                                          </div>
+                                        ) : (
+                                          <div
+                                            className="h-6 w-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold shrink-0"
+                                            style={{ backgroundColor: getTeamColor(teamId) }}
+                                          >
+                                            {getTeamName(teamId).substring(0, 2).toUpperCase()}
+                                          </div>
+                                        )}
+                                        <span className="text-sm font-medium">{getTeamName(teamId)}</span>
+                                      </div>
+                                      <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+                                        <span>
+                                          {(standing?.won ?? 0)}G - {(standing?.lost ?? 0)}P
+                                        </span>
+                                        <span>{standing?.points ?? 0} pts</span>
+                                        <span>Dif {diff}</span>
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            )
+                          })()}
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {/* JO PASO 2: aquí mantenés tu UI de total / desde G / desde P para Playoffs JO */}
+                  </>
+                )}
 
                 <Button
                   className="w-full"
                   onClick={() => setShowConfirmDialog(true)}
-                  disabled={qualifiedTeams.length < 2 || !isQualifiedTeamsValid || !isQualifiedTeamsDivisibleByZones}
+                  disabled={
+                    !isOlympic && (qualifiedTeams.length < 2 || !isQualifiedTeamsValid || !isQualifiedTeamsDivisibleByZones)
+                  }
                 >
                   <Trophy className="mr-2 h-4 w-4" />
-                  Generar {phaseConfig[startPhase].label}
+                  {isOlympic
+                    ? hasOlympicZones
+                      ? "Generar Playoffs Juegos Olímpicos"
+                      : "Generar Zonas de Ganadores y Perdedores"
+                    : `Generar ${phaseConfig[startPhase].label}`}
                 </Button>
               </CardContent>
             </Card>
@@ -942,6 +1266,7 @@ type Tournament = {
   status: string
   createdAt: string
   categoryId?: string | null
+  format: "normal" | "juegos_olimpicos"
 }
 
 type Team = {

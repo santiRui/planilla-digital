@@ -103,6 +103,9 @@ add column if not exists scoring_cap int;
 alter table public.tournaments
 add column if not exists category_id uuid references public.categories(id) on delete restrict;
 
+alter table public.tournaments
+add column if not exists format text not null default 'normal';
+
 create index if not exists tournaments_category_id_idx on public.tournaments(category_id);
 
 create table if not exists public.category_templates (

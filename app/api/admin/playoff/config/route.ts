@@ -10,6 +10,10 @@ const configSchema = z.object({
   bestOfSemifinal: z.number().int().min(1).max(9),
   bestOfFinal: z.number().int().min(1).max(9),
   tiebreakMode: z.enum(["olimpico_sorteo", "olimpico_sin_sorteo", "labas"]),
+  // Configuración opcional para formato Juegos Olímpicos
+  joPlayoffTotal: z.number().int().min(0).optional(),
+  joFromGanadores: z.number().int().min(0).optional(),
+  joFromPerdedores: z.number().int().min(0).optional(),
 })
 
 type TiebreakMode = "olimpico_sorteo" | "olimpico_sin_sorteo" | "labas"
@@ -60,10 +64,42 @@ function bestOfForPhase(config: {
 }
 
 async function ensureValidConfig(qualifiedTeams: number, config: any) {
-  // Only validate according to your rule: qualified_teams determines starting phase.
-  // We still store best-of for all phases, but will only use those that are reached.
+  // Validación básica existente
   void phaseFromQualified(qualifiedTeams)
-  void bestOfForPhase(config)
+  void bestOfForPhase({
+    bestOfCuartos: config.bestOfCuartos,
+    bestOfSemifinal: config.bestOfSemifinal,
+    bestOfFinal: config.bestOfFinal,
+  })
+
+  // Validación adicional para configuración Juegos Olímpicos
+  const { joPlayoffTotal, joFromGanadores, joFromPerdedores } = config as {
+    joPlayoffTotal?: number
+    joFromGanadores?: number
+    joFromPerdedores?: number
+  }
+
+  const anyJo =
+    typeof joPlayoffTotal === "number" ||
+    typeof joFromGanadores === "number" ||
+    typeof joFromPerdedores === "number"
+
+  if (anyJo) {
+    if (
+      typeof joPlayoffTotal !== "number" ||
+      typeof joFromGanadores !== "number" ||
+      typeof joFromPerdedores !== "number"
+    ) {
+      throw new Error(
+        "Configuración Juegos Olímpicos incompleta: total, desde Ganadores y desde Perdedores son requeridos juntos.",
+      )
+    }
+    if (joFromGanadores + joFromPerdedores !== joPlayoffTotal) {
+      throw new Error(
+        "Configuración Juegos Olímpicos inválida: joFromGanadores + joFromPerdedores debe igualar joPlayoffTotal.",
+      )
+    }
+  }
 }
 
 export async function GET(req: Request) {
@@ -90,7 +126,7 @@ export async function GET(req: Request) {
 
     const { data, error } = await auth.adminClient
       .from("tournament_playoff_config")
-      .select("tournament_id, qualified_teams, best_of_cuartos, best_of_semifinal, best_of_final, tiebreak_mode")
+      .select("tournament_id, qualified_teams, best_of_cuartos, best_of_semifinal, best_of_final, tiebreak_mode, jo_playoff_total, jo_from_ganadores, jo_from_perdedores")
       .eq("tournament_id", tournamentId)
       .maybeSingle()
 
@@ -111,6 +147,9 @@ export async function GET(req: Request) {
         bestOfSemifinal: data.best_of_semifinal,
         bestOfFinal: data.best_of_final,
         tiebreakMode: data.tiebreak_mode as TiebreakMode,
+        joPlayoffTotal: data.jo_playoff_total,
+        joFromGanadores: data.jo_from_ganadores,
+        joFromPerdedores: data.jo_from_perdedores,
       },
     })
   } catch (e) {
@@ -144,7 +183,17 @@ export async function PUT(req: Request) {
 
     await ensureValidConfig(parsed.data.qualifiedTeams, parsed.data)
 
-    const { tournamentId, qualifiedTeams, bestOfCuartos, bestOfSemifinal, bestOfFinal, tiebreakMode } = parsed.data
+    const {
+      tournamentId,
+      qualifiedTeams,
+      bestOfCuartos,
+      bestOfSemifinal,
+      bestOfFinal,
+      tiebreakMode,
+      joPlayoffTotal,
+      joFromGanadores,
+      joFromPerdedores,
+    } = parsed.data
 
     const { error } = await auth.adminClient.from("tournament_playoff_config").upsert({
       tournament_id: tournamentId,
@@ -153,6 +202,9 @@ export async function PUT(req: Request) {
       best_of_semifinal: bestOfSemifinal,
       best_of_final: bestOfFinal,
       tiebreak_mode: tiebreakMode,
+      jo_playoff_total: joPlayoffTotal ?? null,
+      jo_from_ganadores: joFromGanadores ?? null,
+      jo_from_perdedores: joFromPerdedores ?? null,
     })
 
     if (error) {
@@ -169,6 +221,9 @@ export async function PUT(req: Request) {
         bestOfSemifinal,
         bestOfFinal,
         tiebreakMode,
+        joPlayoffTotal: joPlayoffTotal ?? null,
+        joFromGanadores: joFromGanadores ?? null,
+        joFromPerdedores: joFromPerdedores ?? null,
       },
     })
   } catch (e) {

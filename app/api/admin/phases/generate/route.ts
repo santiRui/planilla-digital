@@ -211,7 +211,7 @@ export async function POST(req: Request) {
 
     const { data: tournament, error: tournamentError } = await auth.adminClient
       .from("tournaments")
-      .select("category_id")
+      .select("category_id, format")
       .eq("id", tournamentId)
       .maybeSingle()
 
@@ -220,6 +220,7 @@ export async function POST(req: Request) {
     }
 
     const categoryId = (tournament as any)?.category_id as string | null
+    const format = ((tournament as any)?.format as string | null) ?? "normal"
     if (!categoryId) {
       return NextResponse.json({ error: "El torneo no tiene categoría asignada" }, { status: 400 })
     }
@@ -266,6 +267,341 @@ export async function POST(req: Request) {
     }
 
     const distinctZones = Array.from(new Set(Array.from(zonesMap.values()))).sort((a, b) => a.localeCompare(b))
+
+    // Formato especial "Juegos Olímpicos": dos pasos
+    if (format === "juegos_olimpicos") {
+      if (distinctZones.length !== 2) {
+        return NextResponse.json(
+          { error: `El formato Juegos Olímpicos requiere exactamente 2 zonas en fase regular (hay ${distinctZones.length}).` },
+          { status: 400 },
+        )
+      }
+
+      // ¿Ya existe fase de Ganadores/Perdedores?
+      const { data: gpAllMatches, error: gpAllError } = await auth.adminClient
+        .from("matches")
+        .select("id, home_team_id, away_team_id, home_score, away_score, status, zone_code, phase")
+        .eq("tournament_id", tournamentId)
+        .eq("phase", "fase_regular")
+        .in("zone_code", ["G", "P"])
+
+      if (gpAllError) {
+        return NextResponse.json({ error: gpAllError.message }, { status: 400 })
+      }
+
+      const hasGpPhase = (gpAllMatches ?? []).length > 0
+
+      // Paso 1: no existe G/P todavía -> generamos Zonas de Ganadores y Perdedores
+      if (!hasGpPhase) {
+        const [zoneA, zoneB] = distinctZones
+
+        const zoneATeams = teamIds.filter((id) => zonesMap.get(id) === zoneA)
+        const zoneBTeams = teamIds.filter((id) => zonesMap.get(id) === zoneB)
+
+        const zoneAMatches = regularMatches.filter((m) => (m.zone_code ?? null) === zoneA)
+        const zoneBMatches = regularMatches.filter((m) => (m.zone_code ?? null) === zoneB)
+
+        const standingsA = computeStandings(zoneATeams, zoneAMatches)
+        const standingsB = computeStandings(zoneBTeams, zoneBMatches)
+
+        if (standingsA.length < 1 || standingsB.length < 1) {
+          return NextResponse.json(
+            { error: "El formato Juegos Olímpicos requiere al menos 1 equipo por zona para formar Ganadores/Perdedores." },
+            { status: 400 },
+          )
+        }
+
+        // Cantidad total a Zona Ganadores: usamos qualified_teams de la config si existe,
+        // si no, por defecto 6 (3 y 3 como antes).
+        const { data: joCfg, error: joCfgError } = await auth.adminClient
+          .from("tournament_playoff_config")
+          .select("qualified_teams")
+          .eq("tournament_id", tournamentId)
+          .maybeSingle()
+
+        if (joCfgError) {
+          return NextResponse.json({ error: joCfgError.message }, { status: 400 })
+        }
+
+        const totalGanadores = Math.max(1, Number((joCfg as any)?.qualified_teams ?? 6))
+
+        // Reparto entre zonas A y B según par/impar
+        let fromA = Math.floor(totalGanadores / 2)
+        let fromB = Math.floor(totalGanadores / 2)
+
+        if (totalGanadores % 2 === 1) {
+          // cupo extra: se lo lleva el siguiente mejor clasificado entre A y B
+          const nextA = standingsA[fromA]
+          const nextB = standingsB[fromB]
+
+          if (nextA && nextB) {
+            // comparamos según el mismo ordenamiento ya aplicado (standings ordenado por computeStandings)
+            // como standings ya están ordenados, simplemente vemos cuál de los dos está "más arriba" en su tabla
+            // normalizamos usando índice: menor índice = mejor posición
+            const idxA = fromA
+            const idxB = fromB
+            if (idxA === idxB) {
+              // Si ambos son, por ejemplo, segundos, comparamos sus stats manualmente
+              const diffA = nextA.pointsFor - nextA.pointsAgainst
+              const diffB = nextB.pointsFor - nextB.pointsAgainst
+              if (nextA.points > nextB.points || (nextA.points === nextB.points && diffA >= diffB)) {
+                fromA += 1
+              } else {
+                fromB += 1
+              }
+            } else if (idxA < idxB) {
+              fromA += 1
+            } else {
+              fromB += 1
+            }
+          } else if (nextA) {
+            fromA += 1
+          } else if (nextB) {
+            fromB += 1
+          }
+        }
+
+        fromA = Math.min(fromA, standingsA.length)
+        fromB = Math.min(fromB, standingsB.length)
+
+        const winnersA = standingsA.slice(0, fromA).map((r) => r.teamId)
+        const winnersB = standingsB.slice(0, fromB).map((r) => r.teamId)
+        const losersA = standingsA
+          .filter((r) => !winnersA.includes(r.teamId))
+          .map((r) => r.teamId)
+        const losersB = standingsB
+          .filter((r) => !winnersB.includes(r.teamId))
+          .map((r) => r.teamId)
+
+        type Pair = { home: string; away: string }
+        const makeCrossPairs = (fromA: string[], fromB: string[]): Pair[] => {
+          const pairs: Pair[] = []
+          for (const a of fromA) {
+            for (const b of fromB) {
+              if (a && b && a !== b) {
+                pairs.push({ home: a, away: b })
+              }
+            }
+          }
+          return pairs
+        }
+
+        const winnerPairs = makeCrossPairs(winnersA, winnersB)
+        const loserPairs = makeCrossPairs(losersA, losersB)
+
+        const buildRowsForZone = (zoneCode: string, pairs: Pair[]) => {
+          return pairs.map((p, idx) => ({
+            tournament_id: tournamentId,
+            home_team_id: p.home,
+            away_team_id: p.away,
+            zone_code: zoneCode,
+            // 3 fechas por grupo (cada equipo juega 3 partidos). Distribuimos redondamente.
+            round: (idx % 3) + 1,
+            phase: "fase_regular",
+            status: "programado",
+            scheduled_at: null,
+            venue_id: null,
+            court_id: null,
+            home_score: null,
+            away_score: null,
+          }))
+        }
+
+        const insertRows = [
+          ...buildRowsForZone("G", winnerPairs),
+          ...buildRowsForZone("P", loserPairs),
+        ]
+
+        if (insertRows.length === 0) {
+          return NextResponse.json({ error: "No hay cruces para generar en Ganadores/Perdedores." }, { status: 400 })
+        }
+
+        const { data: inserted, error: insertError } = await auth.adminClient
+          .from("matches")
+          .insert(insertRows)
+          .select(
+            "id, tournament_id, home_team_id, away_team_id, round, phase, status, scheduled_at, venue_id, court_id, home_score, away_score, zone_code, created_at",
+          )
+          .order("round", { ascending: true })
+          .order("created_at", { ascending: true })
+
+        if (insertError) {
+          return NextResponse.json({ error: insertError.message }, { status: 400 })
+        }
+
+        return NextResponse.json({ matches: inserted ?? [] })
+      }
+
+      // Paso 2: ya existe G/P y queremos generar playoffs de 8 equipos (5 de G + 3 de P)
+      const unfinishedGp = (gpAllMatches ?? []).filter(
+        (m) => m.status !== "finalizado" || m.home_score == null || m.away_score == null,
+      )
+
+      if (unfinishedGp.length > 0) {
+        return NextResponse.json(
+          { error: "Todavía hay partidos de Zonas Ganadores/Perdedores sin finalizar." },
+          { status: 400 },
+        )
+      }
+
+      const gTeamIds = Array.from(
+        new Set(
+          (gpAllMatches ?? [])
+            .filter((m) => m.zone_code === "G")
+            .flatMap((m) => [String(m.home_team_id), String(m.away_team_id)]),
+        ),
+      )
+      const pTeamIds = Array.from(
+        new Set(
+          (gpAllMatches ?? [])
+            .filter((m) => m.zone_code === "P")
+            .flatMap((m) => [String(m.home_team_id), String(m.away_team_id)]),
+        ),
+      )
+
+      if (gTeamIds.length < 5 || pTeamIds.length < 3) {
+        return NextResponse.json(
+          { error: "No hay suficientes equipos en Zonas Ganadores/Perdedores para generar playoffs (se esperan 6 y 6)." },
+          { status: 400 },
+        )
+      }
+
+      const standingsG = computeStandings(gTeamIds, regularMatches)
+      const standingsP = computeStandings(pTeamIds, regularMatches)
+
+      if (standingsG.length < 5 || standingsP.length < 3) {
+        return NextResponse.json(
+          { error: "No hay suficientes equipos clasificados en G/P para generar playoffs (5 de G y 3 de P)." },
+          { status: 400 },
+        )
+      }
+
+      const top5G = standingsG.slice(0, 5)
+      const top3P = standingsP.slice(0, 3)
+
+      const g1 = top5G[0]!.teamId
+      const g2 = top5G[1]!.teamId
+      const g3 = top5G[2]!.teamId
+      const g4 = top5G[3]!.teamId
+      const g5 = top5G[4]!.teamId
+      const p1 = top3P[0]!.teamId
+      const p2 = top3P[1]!.teamId
+      const p3 = top3P[2]!.teamId
+
+      // Config de playoffs para best_of (cuartos) y modo desempate
+      const { data: joConfig, error: joConfigError } = await auth.adminClient
+        .from("tournament_playoff_config")
+        .select("qualified_teams, best_of_cuartos, best_of_semifinal, best_of_final, tiebreak_mode")
+        .eq("tournament_id", tournamentId)
+        .maybeSingle()
+
+      if (joConfigError) {
+        return NextResponse.json({ error: joConfigError.message }, { status: 400 })
+      }
+
+      const bestOfCuartos = joConfig ? bestOfForPhase("cuartos", joConfig) : 1
+
+      // Armar los 4 cruces de cuartos según formato Juegos Olímpicos
+      const joMatchups: Array<{ home: string; away: string; seriesIndex: number }> = []
+
+      // 1° G vs 3° P
+      joMatchups.push({ home: g1, away: p3, seriesIndex: 1 })
+      // 2° G vs 2° P
+      joMatchups.push({ home: g2, away: p2, seriesIndex: 2 })
+      // 3° G vs 1° P
+      joMatchups.push({ home: g3, away: p1, seriesIndex: 3 })
+      // 4° G vs 5° G
+      joMatchups.push({ home: g4, away: g5, seriesIndex: 4 })
+
+      // Borrar cuartos existentes antes de recrearlos
+      const { error: delMatches } = await auth.adminClient
+        .from("matches")
+        .delete()
+        .eq("tournament_id", tournamentId)
+        .eq("phase", "cuartos")
+
+      if (delMatches) {
+        return NextResponse.json({ error: delMatches.message }, { status: 400 })
+      }
+
+      const { error: delSeries } = await auth.adminClient
+        .from("playoff_series")
+        .delete()
+        .eq("tournament_id", tournamentId)
+        .eq("phase", "cuartos")
+
+      if (delSeries) {
+        return NextResponse.json({ error: delSeries.message }, { status: 400 })
+      }
+
+      const seriesRows = joMatchups.map((m) => ({
+        tournament_id: tournamentId,
+        phase: "cuartos" as Phase,
+        series_index: m.seriesIndex,
+        home_team_id: m.home,
+        away_team_id: m.away,
+        best_of: bestOfCuartos,
+        winner_team_id: null,
+        tiebreak_applied: null,
+        random_winner_team_id: null,
+      }))
+
+      const { data: insertedJoSeries, error: insertJoSeriesError } = await auth.adminClient
+        .from("playoff_series")
+        .insert(seriesRows)
+        .select("id, series_index, home_team_id, away_team_id")
+        .order("series_index", { ascending: true })
+
+      if (insertJoSeriesError) {
+        return NextResponse.json({ error: insertJoSeriesError.message }, { status: 400 })
+      }
+
+      const seriesList = (insertedJoSeries ?? []) as Array<{
+        id: string
+        series_index: number
+        home_team_id: string
+        away_team_id: string
+      }>
+
+      const joInsertRows = seriesList.flatMap((s) => {
+        const rows = [] as any[]
+        for (let game = 1; game <= bestOfCuartos; game += 1) {
+          const isEven = game % 2 === 0
+          const homeTeamId = isEven ? s.away_team_id : s.home_team_id
+          const awayTeamId = isEven ? s.home_team_id : s.away_team_id
+          rows.push({
+            tournament_id: tournamentId,
+            home_team_id: homeTeamId,
+            away_team_id: awayTeamId,
+            round: game,
+            phase: "cuartos" as Phase,
+            status: "programado",
+            scheduled_at: null,
+            venue_id: null,
+            court_id: null,
+            home_score: null,
+            away_score: null,
+            playoff_series_id: s.id,
+            series_game_number: game,
+          })
+        }
+        return rows
+      })
+
+      const { data: insertedJoMatches, error: insertJoMatchesError } = await auth.adminClient
+        .from("matches")
+        .insert(joInsertRows)
+        .select(
+          "id, tournament_id, home_team_id, away_team_id, round, phase, status, scheduled_at, venue_id, court_id, home_score, away_score, playoff_series_id, series_game_number, created_at",
+        )
+        .order("created_at", { ascending: true })
+
+      if (insertJoMatchesError) {
+        return NextResponse.json({ error: insertJoMatchesError.message }, { status: 400 })
+      }
+
+      return NextResponse.json({ matches: insertedJoMatches ?? [] })
+    }
 
     const { data: config, error: configError } = await auth.adminClient
       .from("tournament_playoff_config")

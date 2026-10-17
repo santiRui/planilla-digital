@@ -6,6 +6,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server"
 const updateFixtureSchema = z.object({
   tournamentId: z.string().min(1),
   wheelsCount: z.number().int().min(1).max(6).optional(),
+  format: z.enum(["normal", "juegos_olimpicos"]).optional(),
 })
 
 async function assertAdmin(accessToken: string) {
@@ -123,10 +124,11 @@ export async function POST(req: Request) {
 
     const { tournamentId } = parsed.data
     const wheelsCount = Number(parsed.data.wheelsCount ?? 1)
+    const format = parsed.data.format ?? "normal"
 
     const { data: tournament, error: tournamentError } = await auth.adminClient
       .from("tournaments")
-      .select("category_id")
+      .select("category_id, format")
       .eq("id", tournamentId)
       .maybeSingle()
 
@@ -137,6 +139,19 @@ export async function POST(req: Request) {
     const categoryId = (tournament as any)?.category_id as string | null
     if (!categoryId) {
       return NextResponse.json({ error: "El torneo no tiene categoría asignada" }, { status: 400 })
+    }
+
+    // Actualizar el formato del torneo si cambió
+    const currentFormat = ((tournament as any)?.format as string | null) ?? "normal"
+    if (currentFormat !== format) {
+      const { error: updateFormatError } = await auth.adminClient
+        .from("tournaments")
+        .update({ format })
+        .eq("id", tournamentId)
+
+      if (updateFormatError) {
+        return NextResponse.json({ error: updateFormatError.message }, { status: 400 })
+      }
     }
 
     const { data: teamCategoryRows, error: teamsError } = await auth.adminClient

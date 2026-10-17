@@ -35,6 +35,7 @@ export default function FixturePage() {
   const [selectedStageRound, setSelectedStageRound] = useState<number | "all">("all")
   const [zonesCountInput, setZonesCountInput] = useState<string>("1")
   const [wheelsCountInput, setWheelsCountInput] = useState<string>("1")
+  const [format, setFormat] = useState<"normal" | "juegos_olimpicos">("normal")
   const [closedGroups, setClosedGroups] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -55,7 +56,7 @@ export default function FixturePage() {
         await Promise.all([
           supabase
             .from("tournaments")
-            .select("id, name, year, branch, status, created_at, category_id")
+            .select("id, name, year, branch, status, created_at, category_id, format")
             .order("created_at", { ascending: false }),
           supabase.from("venues").select("id, name").order("name", { ascending: true }),
           supabase.auth.getSession(),
@@ -72,6 +73,7 @@ export default function FixturePage() {
         status: t.status,
         createdAt: t.created_at,
         categoryId: t.category_id,
+        format: (t.format as string | null) ?? "normal",
       })) as Tournament[]
       setTournaments(nextTournaments)
 
@@ -82,8 +84,9 @@ export default function FixturePage() {
         })) as Venue[],
       )
 
-      const initialTournamentId = nextTournaments[0]?.id
-      setSelectedTournament((prev) => prev || initialTournamentId || "")
+      const initialTournament = nextTournaments[0]
+      setSelectedTournament((prev) => prev || initialTournament?.id || "")
+      if (initialTournament) setFormat(initialTournament.format)
 
       const token = session.data.session?.access_token
       if (!token) {
@@ -109,6 +112,7 @@ export default function FixturePage() {
 
       const tournament = tournaments.find((t) => t.id === selectedTournament)
       const categoryId = tournament?.categoryId
+      if (tournament) setFormat(tournament.format)
 
       setLoading(true)
       setError(null)
@@ -368,7 +372,7 @@ export default function FixturePage() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ tournamentId: selectedTournament, wheelsCount }),
+        body: JSON.stringify({ tournamentId: selectedTournament, wheelsCount, format }),
       })
 
       const json = (await res.json().catch(() => null)) as any
@@ -487,7 +491,7 @@ export default function FixturePage() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ tournamentId: selectedTournament, zonesCount, wheelsCount }),
+        body: JSON.stringify({ tournamentId: selectedTournament, zonesCount, wheelsCount, format }),
       })
 
       const json = (await res.json().catch(() => null)) as any
@@ -657,6 +661,18 @@ export default function FixturePage() {
                 />
                 <p className="text-xs text-muted-foreground">1 = ida, 2 = ida y vuelta (local/visitante alternado).</p>
               </div>
+              <div className="space-y-2">
+                <div className="text-sm font-medium">Formato</div>
+                <Select value={format} onValueChange={(v) => setFormat(v as "normal" | "juegos_olimpicos")}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Seleccionar formato" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="normal">Formato normal</SelectItem>
+                    <SelectItem value="juegos_olimpicos">Formato Juegos Olímpicos</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
               <AlertDialogFooter>
                 <AlertDialogCancel disabled={submitting}>Cancelar</AlertDialogCancel>
                 <AlertDialogAction onClick={handleGenerateFixture} disabled={submitting}>
@@ -692,6 +708,18 @@ export default function FixturePage() {
                   }}
                 />
                 <p className="text-xs text-muted-foreground">Se respeta lo jugado y se generan los cruces faltantes.</p>
+              </div>
+              <div className="space-y-2">
+                <div className="text-sm font-medium">Formato</div>
+                <Select value={format} onValueChange={(v) => setFormat(v as "normal" | "juegos_olimpicos")}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Seleccionar formato" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="normal">Formato normal</SelectItem>
+                    <SelectItem value="juegos_olimpicos">Formato Juegos Olímpicos</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <AlertDialogFooter>
                 <AlertDialogCancel disabled={submitting}>Cancelar</AlertDialogCancel>
@@ -934,6 +962,7 @@ type Tournament = {
   status: string
   createdAt: string
   categoryId?: string | null
+  format: "normal" | "juegos_olimpicos"
 }
 
 type Team = {
