@@ -907,6 +907,18 @@ export default function PrePlanillaPage() {
                         awayState: state.away,
                       }),
                     })
+
+                    // Iniciar el partido (en_juego) desde mesa, sin depender de un árbitro.
+                    if (match?.status !== "en_juego") {
+                      await fetch(`/api/mesa/matches/${matchId}`, {
+                        method: "PATCH",
+                        headers: {
+                          "content-type": "application/json",
+                          authorization: `Bearer ${token}`,
+                        },
+                        body: JSON.stringify({ status: "en_juego" }),
+                      })
+                    }
                   } catch {
                     // si falla el guardado remoto, igual continuamos usando el estado local
                   }

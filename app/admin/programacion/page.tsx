@@ -65,6 +65,7 @@ export default function ProgramacionPage() {
         supabase
           .from("tournaments")
           .select("id, name, year, branch, status, created_at, category_id")
+          .neq("status", "finalizado")
           .order("created_at", { ascending: false }),
         supabase.auth.getSession(),
       ])
@@ -238,7 +239,6 @@ export default function ProgramacionPage() {
     })
   }, [categoryMatches, homeTeamFilter, awayTeamFilter, teams])
 
-  const referees = officials.filter((o) => o.isReferee)
   const tableOfficialsList = officials.filter((o) => o.isTableOfficial)
 
   const dedupeIds = (ids: string[]) => {
@@ -251,20 +251,11 @@ export default function ProgramacionPage() {
     })
   }
 
-  const refereeOptionsForIndex = (index: number) => {
-    const selectedElsewhere = new Set(
-      formData.refereeIds.filter((id, idx) => Boolean(id) && idx !== index) as string[],
-    )
-    const selectedInTable = new Set(formData.tableOfficialIds.filter(Boolean) as string[])
-    return referees.filter((r) => !selectedElsewhere.has(r.id) && !selectedInTable.has(r.id))
-  }
-
   const tableOfficialOptionsForIndex = (index: number) => {
     const selectedElsewhere = new Set(
       formData.tableOfficialIds.filter((id, idx) => Boolean(id) && idx !== index) as string[],
     )
-    const selectedInReferees = new Set(formData.refereeIds.filter(Boolean) as string[])
-    return tableOfficialsList.filter((o) => !selectedElsewhere.has(o.id) && !selectedInReferees.has(o.id))
+    return tableOfficialsList.filter((o) => !selectedElsewhere.has(o.id))
   }
 
   const openEditDialog = (match: MatchRow) => {
@@ -330,7 +321,7 @@ export default function ProgramacionPage() {
           scheduledTime: formData.scheduledTime || null,
           venueId: formData.venueId || null,
           courtId: null,
-          refereeIds: formData.refereeIds.filter(Boolean),
+          refereeIds: [],
           tableOfficialIds: formData.tableOfficialIds.filter(Boolean),
         }),
       })
@@ -478,7 +469,6 @@ export default function ProgramacionPage() {
                   <TableHead>Partido</TableHead>
                   <TableHead>Día/Hora</TableHead>
                   <TableHead>Sede</TableHead>
-                  <TableHead>Árbitros</TableHead>
                   <TableHead>Mesa</TableHead>
                   <TableHead className="w-[50px]"></TableHead>
                 </TableRow>
@@ -486,7 +476,7 @@ export default function ProgramacionPage() {
               <TableBody>
                 {filteredMatches.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center text-muted-foreground py-6">
+                    <TableCell colSpan={6} className="text-center text-muted-foreground py-6">
                       No hay partidos que coincidan con los filtros aplicados.
                     </TableCell>
                   </TableRow>
@@ -539,15 +529,6 @@ export default function ProgramacionPage() {
                             <div className="flex items-center gap-1">
                               <MapPin className="h-4 w-4 text-muted-foreground" />
                               <span>{getVenueName(match.venueId)}</span>
-                            </div>
-                          ) : (
-                            <span className="text-muted-foreground">-</span>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          {match.refereeIds.length > 0 ? (
-                            <div className="text-sm">
-                              {match.refereeIds.map((id) => getOfficialName(id)).join(", ")}
                             </div>
                           ) : (
                             <span className="text-muted-foreground">-</span>
@@ -653,66 +634,6 @@ export default function ProgramacionPage() {
                   {venues.map((venue) => (
                     <SelectItem key={venue.id} value={venue.id}>
                       {venue.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="grid gap-2">
-              <Label>Árbitros</Label>
-              <Select
-                value={formData.refereeIds[0] || ""}
-                onValueChange={(value) => {
-                  const next = [...formData.refereeIds]
-                  next[0] = value
-                  setFormData({ ...formData, refereeIds: dedupeIds(next) })
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Árbitro principal" />
-                </SelectTrigger>
-                <SelectContent>
-                  {refereeOptionsForIndex(0).map((ref) => (
-                    <SelectItem key={ref.id} value={ref.id}>
-                      {ref.fullName}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select
-                value={formData.refereeIds[1] || ""}
-                onValueChange={(value) => {
-                  const next = [...formData.refereeIds]
-                  next[1] = value
-                  setFormData({ ...formData, refereeIds: dedupeIds(next) })
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Árbitro 2 (opcional)" />
-                </SelectTrigger>
-                <SelectContent>
-                  {refereeOptionsForIndex(1).map((ref) => (
-                    <SelectItem key={ref.id} value={ref.id}>
-                      {ref.fullName}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select
-                value={formData.refereeIds[2] || ""}
-                onValueChange={(value) => {
-                  const next = [...formData.refereeIds]
-                  next[2] = value
-                  setFormData({ ...formData, refereeIds: dedupeIds(next) })
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Árbitro 3 (opcional)" />
-                </SelectTrigger>
-                <SelectContent>
-                  {refereeOptionsForIndex(2).map((ref) => (
-                    <SelectItem key={ref.id} value={ref.id}>
-                      {ref.fullName}
                     </SelectItem>
                   ))}
                 </SelectContent>

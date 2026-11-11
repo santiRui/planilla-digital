@@ -510,16 +510,10 @@ export default function MesaPage() {
                       Ver detalle
                     </Button>
                     {match.assignmentRole === "oficial_mesa" ? (
-                      match.status === "en_juego" ? (
-                        <Button className="w-full sm:w-auto flex-1" size="lg" onClick={() => handleStartSheet(match)}>
-                          <Play className="mr-2 h-5 w-5" />
-                          Iniciar Acta
-                        </Button>
-                      ) : (
-                        <Button className="w-full sm:w-auto flex-1" size="lg" disabled>
-                          Esperando que el árbitro inicie el partido
-                        </Button>
-                      )
+                      <Button className="w-full sm:w-auto flex-1" size="lg" onClick={() => handleStartSheet(match)}>
+                        <Play className="mr-2 h-5 w-5" />
+                        {match.status === "en_juego" ? "Continuar Acta" : "Iniciar Acta"}
+                      </Button>
                     ) : (
                       <Button className="w-full sm:w-auto flex-1" size="lg" disabled>
                         Tu rol en este partido es de Árbitro

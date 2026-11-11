@@ -57,6 +57,7 @@ export default function FixturePage() {
           supabase
             .from("tournaments")
             .select("id, name, year, branch, status, created_at, category_id, format")
+            .neq("status", "finalizado")
             .order("created_at", { ascending: false }),
           supabase.from("venues").select("id, name").order("name", { ascending: true }),
           supabase.auth.getSession(),

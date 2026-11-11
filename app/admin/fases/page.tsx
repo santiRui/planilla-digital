@@ -79,6 +79,7 @@ export default function FasesPage() {
         supabase
           .from("tournaments")
           .select("id, name, year, branch, status, created_at, category_id, format")
+          .neq("status", "finalizado")
           .order("created_at", { ascending: false }),
         supabase.auth.getSession(),
       ])

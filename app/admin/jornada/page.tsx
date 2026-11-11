@@ -46,7 +46,7 @@ export default function JornadaPage() {
       setError(null)
 
       const [tournamentsRes, venuesRes, courtsRes] = await Promise.all([
-        supabase.from("tournaments").select("id, name, year, branch, status, created_at, category_id").order("created_at", { ascending: false }),
+        supabase.from("tournaments").select("id, name, year, branch, status, created_at, category_id").neq("status", "finalizado").order("created_at", { ascending: false }),
         supabase.from("venues").select("id, name").order("name", { ascending: true }),
         supabase.from("courts").select("id, venue_id, name").order("name", { ascending: true }),
       ])

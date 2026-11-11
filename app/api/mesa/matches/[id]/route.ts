@@ -838,11 +838,10 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
 
     if (auth.role !== "admin") {
       if (requestedStatus === "en_juego") {
-        if (auth.role !== "arbitro") {
-          return NextResponse.json({ error: "Prohibido" }, { status: 403 })
-        }
-
-        const ok = await assertAssignedToMatch(auth.adminClient, id, auth.callerId, "arbitro")
+        // Antes solo el árbitro podía iniciar el partido. Ahora también lo puede
+        // hacer el oficial de mesa asignado, para no depender de un árbitro.
+        const neededRole = auth.role === "arbitro" ? "arbitro" : "oficial_mesa"
+        const ok = await assertAssignedToMatch(auth.adminClient, id, auth.callerId, neededRole)
         if (!ok.ok) {
           return NextResponse.json({ error: ok.error }, { status: ok.status })
         }
@@ -863,6 +862,16 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     // Si se está marcando como finalizado, registramos hora de finalización si aún no existe.
     if (requestedStatus === "finalizado" && !existing.finished_at) {
       update.finished_at = new Date().toISOString()
+    }
+
+    // Al iniciar el partido (en_juego), registramos hora de inicio y seteamos
+    // marcadores en 0 si aún no tenían valor.
+    if (requestedStatus === "en_juego") {
+      if (!existing.started_at) {
+        update.started_at = new Date().toISOString()
+      }
+      if (existing.home_score == null) update.home_score = 0
+      if (existing.away_score == null) update.away_score = 0
     }
 
     const { data: updated, error: updateError } = await auth.adminClient
