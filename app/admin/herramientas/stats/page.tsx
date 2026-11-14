@@ -16,6 +16,7 @@ export default function AdminStatsToolsPage() {
   const [fakeHomeScore, setFakeHomeScore] = useState("")
   const [fakeAwayScore, setFakeAwayScore] = useState("")
   const [fakeClearExisting, setFakeClearExisting] = useState(true)
+  const [recalcMatchId, setRecalcMatchId] = useState("")
 
   useEffect(() => {
     const supabase = createSupabaseBrowserClient()
@@ -107,6 +108,45 @@ export default function AdminStatsToolsPage() {
     }
   }
 
+  async function callRecalcOneFromEvents() {
+    try {
+      setLoading("recalc")
+      setMessage(null)
+      setError(null)
+
+      if (!accessToken) {
+        setError("No hay sesión válida. Volvé a iniciar sesión como administrador.")
+        return
+      }
+
+      if (!recalcMatchId.trim()) {
+        setError("Tenés que ingresar el ID del partido.")
+        return
+      }
+
+      const res = await fetch(`/api/admin/matches/${recalcMatchId.trim()}/recalc-from-events`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      })
+
+      const data = await res.json().catch(() => ({}))
+
+      if (!res.ok) {
+        setError(typeof data.error === "string" ? data.error : "Error al recalcular el partido")
+        return
+      }
+
+      setMessage(JSON.stringify(data, null, 2))
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Error desconocido"
+      setError(msg)
+    } finally {
+      setLoading("none")
+    }
+  }
+
   return (
     <main className="min-h-screen bg-background px-4 py-8 flex justify-center">
       <div className="w-full max-w-3xl space-y-6">
@@ -170,6 +210,35 @@ export default function AdminStatsToolsPage() {
               onClick={() => callEndpoint("/api/admin/matches/auto-fix-stats", "autofix")}
             >
               {loading === "autofix" ? "Aplicando auto-fix..." : "Auto-fix estadísticas"}
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Recalcular un partido desde el historial</CardTitle>
+            <CardDescription>
+              Reconstruye las estadísticas por jugador de <strong>un partido puntual</strong> a partir de sus jugadas
+              (match_events) y <strong>sobrescribe</strong> la planilla (match_player_stats_planilla). Soporta tanto
+              el formato nuevo (tiros/libres) como el viejo (puntos). Útil cuando un partido tiene historial pero la
+              tabla por jugador aparece en cero.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="space-y-2">
+              <label className="text-sm font-medium" htmlFor="recalc-match-id">
+                ID del partido (matchId)
+              </label>
+              <input
+                id="recalc-match-id"
+                className="border rounded px-2 py-1 text-sm w-full"
+                value={recalcMatchId}
+                onChange={(e) => setRecalcMatchId(e.target.value)}
+                placeholder="UUID del partido"
+              />
+            </div>
+            <Button variant="default" disabled={loading !== "none"} onClick={callRecalcOneFromEvents}>
+              {loading === "recalc" ? "Recalculando..." : "Recalcular este partido"}
             </Button>
           </CardContent>
         </Card>
