@@ -291,7 +291,7 @@ export default function PlanillaPage() {
           .maybeSingle<TeamRow>(),
         supabase
           .from("players")
-          .select("id, team_id, first_name, last_name, jersey_number, is_federated, photo_url")
+          .select("id, team_id, first_name, last_name, jersey_number, is_federated, federated_category, photo_url")
           .in("team_id", [mappedMatch.homeTeamId, mappedMatch.awayTeamId]),
       ])
 
@@ -329,6 +329,9 @@ export default function PlanillaPage() {
           jerseyNumber: p.jersey_number,
           height: undefined,
           isFederated: Boolean(p.is_federated),
+          federatedCategory: p.federated_category === "mayores" ? "primera"
+            : p.federated_category === "intermedia" ? "segunda"
+            : p.federated_category ?? null,
           photoUrl: p.photo_url ?? undefined,
         }
         return mapped
@@ -2627,6 +2630,11 @@ export default function PlanillaPage() {
     const isCaptain = teamSide === "home" ? captainHomeId === player.id : captainAwayId === player.id
 
     const baseBgColor = teamSide === "home" ? `${homeColor}14` : `${awayColor}14`
+    const federatedCategory = player.federatedCategory === "primera" ? "FP"
+      : player.federatedCategory === "segunda" ? "FD"
+      : player.federatedCategory === "u21" ? "U21"
+      : player.federatedCategory === "u23" ? "U23"
+      : null
 
     return (
       <div
@@ -2738,8 +2746,11 @@ export default function PlanillaPage() {
             </div>
             <div className="flex items-center gap-1 ml-2">
               {player.isFederated && (
-                <span className="rounded-full bg-blue-600 text-xs landscape:text-[10px] font-bold text-white px-2 py-1 landscape:px-1.5 landscape:py-0.5 leading-none">
-                  F
+                <span
+                  className="rounded-full bg-blue-600 px-1.5 py-0.5 text-[10px] font-bold leading-none text-white"
+                  title={`Federado ${player.federatedCategory === "primera" ? "Primera" : player.federatedCategory === "segunda" ? "Segunda" : federatedCategory ?? "sin categoría"}`}
+                >
+                  {federatedCategory ?? "F"}
                 </span>
               )}
               {isCaptain && (

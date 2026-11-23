@@ -63,8 +63,8 @@ export default function JugadoresPage() {
     birthDate: "",
     jerseyNumber: 0,
     teamId: "",
-    isFederated: true,
-    federatedCategory: "mayores" as "mayores" | "intermedia",
+    isFederated: false,
+    federatedCategory: "" as FederatedCategory | "",
     labasSeasons: 0,
   })
   const [jerseyNumberInput, setJerseyNumberInput] = useState<string>("0")
@@ -108,31 +108,78 @@ export default function JugadoresPage() {
       .sort((a, b) => a.localeCompare(b))
   }, [teams, teamLabelFor])
 
+  // Carga de equipos (una sola vez)
+  useEffect(() => {
+    const run = async () => {
+      const { data: teamsData, error: teamsError } = await supabase
+        .from("teams")
+        .select("id, name")
+        .order("created_at", { ascending: true })
+
+      if (teamsError) setError(teamsError.message)
+      setTeams((teamsData ?? []) as TeamOption[])
+    }
+    run()
+  }, [supabase])
+
+  // Carga de jugadores. Si hay un equipo seleccionado, consultamos DIRECTO a la
+  // base filtrando por ese equipo (consulta chica, nunca choca con el tope de 1000).
+  // Si está en "Todos", traemos todos paginando.
+  const PLAYER_COLUMNS =
+    "id, team_id, first_name, last_name, dni, birth_date, jersey_number, height_cm, is_federated, federated_category, labas_seasons, scoring, photo_url, created_at"
+
   useEffect(() => {
     const run = async () => {
       setLoading(true)
       setError(null)
 
-      const [{ data: teamsData, error: teamsError }, { data: playersData, error: playersError }] = await Promise.all([
-        supabase.from("teams").select("id, name").order("created_at", { ascending: true }),
-        supabase
+      // Equipo específico: una sola consulta filtrada por team_id.
+      if (filterTeam !== "all") {
+        const { data, error: playersError } = await supabase
           .from("players")
-          .select(
-            "id, team_id, first_name, last_name, dni, birth_date, jersey_number, height_cm, is_federated, federated_category, labas_seasons, scoring, photo_url, created_at",
-          )
-          .order("jersey_number", { ascending: true }),
-      ])
+          .select(PLAYER_COLUMNS)
+          .eq("team_id", filterTeam)
+          .order("jersey_number", { ascending: true })
 
-      if (teamsError) setError(teamsError.message)
+        if (playersError) setError(playersError.message)
+        setPlayers((data ?? []).map(mapPlayerFromDb) as PlayerRow[])
+        setLoading(false)
+        return
+      }
+
+      // "Todos": traemos TODOS los jugadores paginando, porque Supabase/PostgREST
+      // limita cada consulta a 1000 filas.
+      const pageSize = 1000
+      let from = 0
+      const allPlayers: any[] = []
+      let playersError: any = null
+
+      for (let i = 0; i < 50; i += 1) {
+        const { data: pageData, error: pageError } = await supabase
+          .from("players")
+          .select(PLAYER_COLUMNS)
+          .order("team_id", { ascending: true })
+          .order("jersey_number", { ascending: true })
+          .range(from, from + pageSize - 1)
+
+        if (pageError) {
+          playersError = pageError
+          break
+        }
+
+        const batch = pageData ?? []
+        allPlayers.push(...batch)
+        if (batch.length < pageSize) break
+        from += pageSize
+      }
+
       if (playersError) setError(playersError.message)
-
-      setTeams((teamsData ?? []) as TeamOption[])
-      setPlayers((playersData ?? []).map(mapPlayerFromDb) as PlayerRow[])
+      setPlayers(allPlayers.map(mapPlayerFromDb) as PlayerRow[])
       setLoading(false)
     }
 
     run()
-  }, [supabase])
+  }, [supabase, filterTeam])
 
   const handleSubmit = async () => {
     setFormError(null)
@@ -162,6 +209,10 @@ export default function JugadoresPage() {
           title: "Faltan datos",
           description: "Completá nombre, apellido, DNI, fecha de nacimiento y equipo.",
         })
+        return
+      }
+      if (formData.isFederated && !formData.federatedCategory) {
+        setFormError({ title: "Faltan datos", description: "Seleccioná la categoría federada del jugador." })
         return
       }
 
@@ -223,8 +274,8 @@ export default function JugadoresPage() {
       birthDate: "",
       jerseyNumber: 0,
       teamId: "",
-      isFederated: true,
-      federatedCategory: "mayores",
+      isFederated: false,
+      federatedCategory: "",
       labasSeasons: 0,
     })
     setJerseyNumberInput("0")
@@ -243,7 +294,7 @@ export default function JugadoresPage() {
       jerseyNumber: player.jerseyNumber,
       teamId: player.teamId,
       isFederated: player.isFederated,
-      federatedCategory: player.federatedCategory ?? "mayores",
+      federatedCategory: player.federatedCategory ?? "",
       labasSeasons: player.labasSeasons ?? 0,
     })
     setJerseyNumberInput(String(player.jerseyNumber))
@@ -442,14 +493,16 @@ export default function JugadoresPage() {
                     <Label htmlFor="federatedCategory">Categoría federada</Label>
                     <Select
                       value={formData.federatedCategory}
-                      onValueChange={(v) => setFormData({ ...formData, federatedCategory: v as "mayores" | "intermedia" })}
+                      onValueChange={(v) => setFormData({ ...formData, federatedCategory: v as FederatedCategory })}
                     >
                       <SelectTrigger>
                         <SelectValue placeholder="Seleccionar" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="mayores">Mayores (400)</SelectItem>
-                        <SelectItem value="intermedia">Intermedia (200)</SelectItem>
+                        <SelectItem value="u21">U21 (400)</SelectItem>
+                        <SelectItem value="u23">U23 (400)</SelectItem>
+                        <SelectItem value="primera">Primera (400)</SelectItem>
+                        <SelectItem value="segunda">Segunda (400)</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -632,6 +685,8 @@ type TeamOption = {
   name: string
 }
 
+type FederatedCategory = "u21" | "u23" | "primera" | "segunda"
+
 type PlayerRow = {
   id: string
   teamId: string
@@ -642,7 +697,7 @@ type PlayerRow = {
   jerseyNumber: number
   heightCm?: number | null
   isFederated: boolean
-  federatedCategory?: "mayores" | "intermedia" | null
+  federatedCategory?: FederatedCategory | null
   labasSeasons?: number | null
   scoring: number
   photoUrl?: string | null
@@ -673,7 +728,9 @@ function mapPlayerFromDb(row: any): PlayerRow {
     jerseyNumber: row.jersey_number,
     heightCm: row.height_cm ?? null,
     isFederated: row.is_federated,
-    federatedCategory: (row.federated_category as "mayores" | "intermedia" | null) ?? null,
+    federatedCategory: row.federated_category === "mayores" ? "primera"
+      : row.federated_category === "intermedia" ? "segunda"
+      : (row.federated_category as FederatedCategory | null) ?? null,
     labasSeasons: typeof row.labas_seasons === "number" ? row.labas_seasons : null,
     scoring: typeof row.scoring === "number" ? row.scoring : 0,
     photoUrl: row.photo_url ?? null,

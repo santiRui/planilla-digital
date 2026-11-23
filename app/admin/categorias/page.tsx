@@ -69,6 +69,10 @@ export default function CategoriasPage() {
     branch: "masculino" as Branch,
     ageGroup: "",
     scoringCap: "",
+    federatedU21Limit: "",
+    federatedU23Limit: "",
+    federatedPrimeraLimit: "",
+    federatedSegundaLimit: "",
   })
 
   useEffect(() => {
@@ -79,7 +83,7 @@ export default function CategoriasPage() {
       const [{ data: categoriesData, error: categoriesError }, { data: linkRows, error: linkError }] = await Promise.all([
         supabase
           .from("categories")
-          .select("id, name, age_group, branch, scoring_cap, created_at")
+          .select("id, name, age_group, branch, scoring_cap, federated_u21_limit, federated_u23_limit, federated_primera_limit, federated_segunda_limit, created_at")
           .order("created_at", { ascending: true }),
         supabase.from("team_categories").select("category_id").order("created_at", { ascending: true }),
       ])
@@ -126,6 +130,12 @@ export default function CategoriasPage() {
         setError("Completá nombre y grupo de edad.")
         return
       }
+      const limitFields = ["federatedU21Limit", "federatedU23Limit", "federatedPrimeraLimit", "federatedSegundaLimit"] as const
+      if (limitFields.some((field) => formData[field] !== "" &&
+        (!Number.isSafeInteger(Number(formData[field])) || Number(formData[field]) < 0))) {
+        setError("Los límites de federados deben ser enteros no negativos o quedar vacíos.")
+        return
+      }
 
       const isEditing = Boolean(editingCategory?.id)
       const url = isEditing ? `/api/admin/categories/${editingCategory!.id}` : "/api/admin/categories"
@@ -142,6 +152,10 @@ export default function CategoriasPage() {
           ageGroup: formData.ageGroup,
           branch: formData.branch,
           scoringCap: formData.scoringCap ? Number(formData.scoringCap) : null,
+          federatedU21Limit: formData.federatedU21Limit === "" ? null : Number(formData.federatedU21Limit),
+          federatedU23Limit: formData.federatedU23Limit === "" ? null : Number(formData.federatedU23Limit),
+          federatedPrimeraLimit: formData.federatedPrimeraLimit === "" ? null : Number(formData.federatedPrimeraLimit),
+          federatedSegundaLimit: formData.federatedSegundaLimit === "" ? null : Number(formData.federatedSegundaLimit),
         }),
       })
 
@@ -172,6 +186,10 @@ export default function CategoriasPage() {
       branch: "masculino",
       ageGroup: "",
       scoringCap: "",
+      federatedU21Limit: "",
+      federatedU23Limit: "",
+      federatedPrimeraLimit: "",
+      federatedSegundaLimit: "",
     })
   }
 
@@ -182,6 +200,10 @@ export default function CategoriasPage() {
       branch: category.branch,
       ageGroup: category.age_group,
       scoringCap: category.scoring_cap != null ? String(category.scoring_cap) : "",
+      federatedU21Limit: category.federated_u21_limit != null ? String(category.federated_u21_limit) : "",
+      federatedU23Limit: category.federated_u23_limit != null ? String(category.federated_u23_limit) : "",
+      federatedPrimeraLimit: category.federated_primera_limit != null ? String(category.federated_primera_limit) : "",
+      federatedSegundaLimit: category.federated_segunda_limit != null ? String(category.federated_segunda_limit) : "",
     })
     setIsOpen(true)
   }
@@ -234,7 +256,7 @@ export default function CategoriasPage() {
               Nueva Categoría
             </Button>
           </DialogTrigger>
-          <DialogContent>
+          <DialogContent className="max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>{editingCategory ? "Editar Categoría" : "Crear Nueva Categoría"}</DialogTitle>
               <DialogDescription>
@@ -273,6 +295,26 @@ export default function CategoriasPage() {
                   placeholder="Ej: 500"
                 />
               </div>
+              <p className="text-sm text-muted-foreground">Máximo de federados por equipo (vacío = sin límite)</p>
+              {([
+                ["federatedU21Limit", "U21"],
+                ["federatedU23Limit", "U23"],
+                ["federatedPrimeraLimit", "Primera"],
+                ["federatedSegundaLimit", "Segunda"],
+              ] as const).map(([field, label]) => (
+                <div className="grid gap-2" key={field}>
+                  <Label htmlFor={field}>Federados {label}</Label>
+                  <Input
+                    id={field}
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={formData[field]}
+                    onChange={(e) => setFormData({ ...formData, [field]: e.target.value })}
+                    placeholder="Sin límite"
+                  />
+                </div>
+              ))}
               <div className="grid gap-2">
                 <Label htmlFor="branch">Rama</Label>
                 <Select value={formData.branch} onValueChange={(value: Branch) => setFormData({ ...formData, branch: value })}>
@@ -424,6 +466,11 @@ type Category = {
   name: string
   age_group: string
   branch: Branch
+  scoring_cap: number | null
+  federated_u21_limit: number | null
+  federated_u23_limit: number | null
+  federated_primera_limit: number | null
+  federated_segunda_limit: number | null
   created_at: string
 }
 
@@ -433,6 +480,11 @@ function mapCategoryFromApi(category: any): Category {
     name: category.name,
     age_group: category.age_group,
     branch: category.branch,
+    scoring_cap: category.scoring_cap ?? null,
+    federated_u21_limit: category.federated_u21_limit ?? null,
+    federated_u23_limit: category.federated_u23_limit ?? null,
+    federated_primera_limit: category.federated_primera_limit ?? null,
+    federated_segunda_limit: category.federated_segunda_limit ?? null,
     created_at: category.created_at,
   }
 }

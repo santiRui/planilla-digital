@@ -46,6 +46,7 @@ export interface Player {
   jerseyNumber: number
   height?: number // in cm
   isFederated: boolean
+  federatedCategory?: "u21" | "u23" | "primera" | "segunda" | null
   photoUrl?: string
 }
 

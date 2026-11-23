@@ -12,9 +12,12 @@ const updatePlayerSchema = z.object({
   jerseyNumber: z.number().int().min(0),
   heightCm: z.number().int().min(0).optional().nullable(),
   isFederated: z.boolean(),
-  federatedCategory: z.enum(["mayores", "intermedia"]).optional().nullable(),
+  federatedCategory: z.enum(["u21", "u23", "primera", "segunda"]).optional().nullable(),
   labasSeasons: z.number().int().min(0).optional().default(0),
   photoUrl: z.string().url().optional().nullable(),
+}).refine((player) => !player.isFederated || !!player.federatedCategory, {
+  message: "Seleccioná la categoría federada.",
+  path: ["federatedCategory"],
 })
 
 function computeAgeFromBirthDate(birthDate: string): number | null {
@@ -29,18 +32,102 @@ function computeAgeFromBirthDate(birthDate: string): number | null {
   return age
 }
 
+type FederatedCategory = "u21" | "u23" | "primera" | "segunda"
+
+const FED_LIMIT_COLUMN = {
+  u21: "federated_u21_limit",
+  u23: "federated_u23_limit",
+  primera: "federated_primera_limit",
+  segunda: "federated_segunda_limit",
+} as const satisfies Record<FederatedCategory, string>
+
+const FED_LABEL: Record<FederatedCategory, string> = {
+  u21: "U21",
+  u23: "U23",
+  primera: "Primera",
+  segunda: "Segunda",
+}
+
+async function checkFederatedLimit(params: {
+  adminClient: ReturnType<typeof createSupabaseAdminClient>
+  teamId: string
+  isFederated: boolean
+  federatedCategory: FederatedCategory | null
+  excludePlayerId?: string | null
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { adminClient, teamId, isFederated, federatedCategory, excludePlayerId } = params
+
+  if (!isFederated || !federatedCategory) return { ok: true }
+
+  const limitColumn = FED_LIMIT_COLUMN[federatedCategory]
+
+  const { data: linkRows, error: linkError } = await adminClient
+    .from("team_categories")
+    .select("category_id")
+    .eq("team_id", teamId)
+
+  if (linkError) return { ok: false, error: linkError.message }
+
+  const categoryIds = (linkRows ?? []).map((r) => r.category_id as string).filter(Boolean)
+  if (categoryIds.length === 0) return { ok: true }
+
+  const { data: catRows, error: catError } = await adminClient
+    .from("categories")
+    .select("id, name, federated_u21_limit, federated_u23_limit, federated_primera_limit, federated_segunda_limit")
+    .in("id", categoryIds)
+
+  if (catError) return { ok: false, error: catError.message }
+
+  let effectiveLimit: number | null = null
+  let limitingCategoryName = ""
+  for (const c of catRows ?? []) {
+    const lim = c[limitColumn]
+    if (lim == null) continue
+    if (effectiveLimit == null || Number(lim) < effectiveLimit) {
+      effectiveLimit = Number(lim)
+      limitingCategoryName = String(c.name ?? "")
+    }
+  }
+
+  if (effectiveLimit == null) return { ok: true }
+
+  let countQuery = adminClient
+    .from("players")
+    .select("id", { count: "exact", head: true })
+    .eq("team_id", teamId)
+    .eq("is_federated", true)
+    .eq("federated_category", federatedCategory)
+
+  if (excludePlayerId) {
+    countQuery = countQuery.neq("id", excludePlayerId)
+  }
+
+  const { count, error: countError } = await countQuery
+  if (countError) return { ok: false, error: countError.message }
+
+  const existing = count ?? 0
+  if (existing + 1 > effectiveLimit) {
+    return {
+      ok: false,
+      error: `Se alcanzó el límite de federados ${FED_LABEL[federatedCategory]} (${effectiveLimit}) para la categoría ${limitingCategoryName}.`,
+    }
+  }
+
+  return { ok: true }
+}
+
 function computePlayerScoring(params: {
   birthDate: string
   isFederated: boolean
-  federatedCategory: "mayores" | "intermedia" | null
+  federatedCategory: FederatedCategory | null
   labasSeasons: number
 }): number {
   const age = computeAgeFromBirthDate(params.birthDate)
 
   let base = 0
   if (params.isFederated) {
-    if (params.federatedCategory === "mayores") base = 400
-    else if (params.federatedCategory === "intermedia") base = 200
+    // Por ahora todas las categorías federadas suman 400.
+    base = 400
   } else if (age != null) {
     base = age >= 25 ? 100 : 150
   }
@@ -106,16 +193,43 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     const parsed = updatePlayerSchema.safeParse(body)
 
     if (!parsed.success) {
-      return NextResponse.json({ error: "Datos inválidos", details: parsed.error.flatten() }, { status: 400 })
+      return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Datos inválidos", details: parsed.error.flatten() }, { status: 400 })
     }
 
     const { teamId, firstName, lastName, dni, birthDate, jerseyNumber, heightCm, isFederated, federatedCategory, labasSeasons, photoUrl } =
       parsed.data
 
+    const { data: current, error: currentError } = await auth.adminClient
+      .from("players")
+      .select("team_id, is_federated, federated_category")
+      .eq("id", id)
+      .maybeSingle()
+    if (currentError || !current) {
+      return NextResponse.json({ error: currentError?.message ?? "Jugador no encontrado" }, { status: 404 })
+    }
+
+    const normalizedCategory = isFederated ? federatedCategory ?? null : null
+    const unchangedFederation = current.team_id === teamId && current.is_federated === isFederated &&
+      (current.federated_category === normalizedCategory ||
+        (current.federated_category === "mayores" && normalizedCategory === "primera") ||
+        (current.federated_category === "intermedia" && normalizedCategory === "segunda"))
+    if (!unchangedFederation) {
+      const limitCheck = await checkFederatedLimit({
+        adminClient: auth.adminClient,
+        teamId,
+        isFederated,
+        federatedCategory: normalizedCategory,
+        excludePlayerId: id,
+      })
+      if (!limitCheck.ok) {
+        return NextResponse.json({ error: limitCheck.error }, { status: 400 })
+      }
+    }
+
     const scoring = computePlayerScoring({
       birthDate,
       isFederated,
-      federatedCategory: federatedCategory ?? null,
+      federatedCategory: normalizedCategory,
       labasSeasons,
     })
 
@@ -130,7 +244,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
         jersey_number: jerseyNumber,
         height_cm: heightCm ?? null,
         is_federated: isFederated,
-        federated_category: federatedCategory ?? null,
+        federated_category: normalizedCategory,
         labas_seasons: labasSeasons ?? 0,
         scoring,
         photo_url: photoUrl ?? null,

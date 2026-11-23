@@ -8,6 +8,10 @@ const updateCategorySchema = z.object({
   ageGroup: z.string().min(1),
   branch: z.enum(["masculino", "femenino", "mixto"]),
   scoringCap: z.number().int().min(0).optional().nullable(),
+  federatedU21Limit: z.number().int().min(0).optional().nullable(),
+  federatedU23Limit: z.number().int().min(0).optional().nullable(),
+  federatedPrimeraLimit: z.number().int().min(0).optional().nullable(),
+  federatedSegundaLimit: z.number().int().min(0).optional().nullable(),
 })
 
 async function assertAdmin(accessToken: string) {
@@ -61,7 +65,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       return NextResponse.json({ error: "Datos inválidos", details: parsed.error.flatten() }, { status: 400 })
     }
 
-    const { name, ageGroup, branch, scoringCap } = parsed.data
+    const { name, ageGroup, branch, scoringCap, federatedU21Limit, federatedU23Limit, federatedPrimeraLimit, federatedSegundaLimit } = parsed.data
 
     const { data: category, error } = await auth.adminClient
       .from("categories")
@@ -70,9 +74,13 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
         age_group: ageGroup,
         branch,
         scoring_cap: scoringCap ?? null,
+        federated_u21_limit: federatedU21Limit ?? null,
+        federated_u23_limit: federatedU23Limit ?? null,
+        federated_primera_limit: federatedPrimeraLimit ?? null,
+        federated_segunda_limit: federatedSegundaLimit ?? null,
       })
       .eq("id", id)
-      .select("id, name, age_group, branch, scoring_cap, created_at")
+      .select("id, name, age_group, branch, scoring_cap, federated_u21_limit, federated_u23_limit, federated_primera_limit, federated_segunda_limit, created_at")
       .single()
 
     if (error || !category) {

@@ -39,8 +39,11 @@ export default function EquiposPage() {
   const [editingTeam, setEditingTeam] = useState<Team | null>(null)
   const [search, setSearch] = useState("")
   const [filterBranch, setFilterBranch] = useState<"all" | Branch>("all")
+  const [filterTournament, setFilterTournament] = useState("all")
   const [deleteTarget, setDeleteTarget] = useState<Team | null>(null)
   const [categories, setCategories] = useState<Category[]>([])
+  const [tournaments, setTournaments] = useState<TournamentOption[]>([])
+  const [tournamentRoster, setTournamentRoster] = useState<{ id: string; teamIds: Set<string> | null } | null>(null)
   const [teams, setTeams] = useState<Team[]>([])
   const [teamPlayerCounts, setTeamPlayerCounts] = useState<Record<string, number>>({})
   const [teamScoring, setTeamScoring] = useState<Record<string, number>>({})
@@ -68,6 +71,7 @@ export default function EquiposPage() {
 
       const [
         { data: categoriesData, error: categoriesError },
+        { data: tournamentsData, error: tournamentsError },
         { data: teamsData, error: teamsError },
         { data: teamCategoryRows, error: teamCategoryError },
       ] = await Promise.all([
@@ -76,6 +80,11 @@ export default function EquiposPage() {
           .select("id, name, branch, age_group, scoring_cap")
           .order("created_at", { ascending: true }),
         supabase
+          .from("tournaments")
+          .select("id, name, year, branch, category_id")
+          .neq("status", "finalizado")
+          .order("created_at", { ascending: false }),
+        supabase
           .from("teams")
           .select("id, name, logo_url, primary_color, secondary_color, created_at")
           .order("created_at", { ascending: false }),
@@ -83,6 +92,7 @@ export default function EquiposPage() {
       ])
 
       if (categoriesError) setError(categoriesError.message)
+      if (tournamentsError) setError(tournamentsError.message)
       if (teamsError) setError(teamsError.message)
       if (teamCategoryError) setError(teamCategoryError.message)
 
@@ -95,6 +105,7 @@ export default function EquiposPage() {
           scoringCap: typeof c.scoring_cap === "number" ? c.scoring_cap : null,
         })) as Category[],
       )
+      setTournaments((tournamentsData ?? []) as TournamentOption[])
 
       const categoryIdsByTeamId: Record<string, string[]> = {}
       ;(teamCategoryRows ?? []).forEach((r: any) => {
@@ -162,6 +173,44 @@ export default function EquiposPage() {
 
     run()
   }, [supabase])
+
+  useEffect(() => {
+    if (filterTournament === "all") return
+    let active = true
+    const loadRoster = async () => {
+      const { data: zones, error: zonesError } = await supabase
+        .from("tournament_team_zones")
+        .select("team_id")
+        .eq("tournament_id", filterTournament)
+      if (!active) return
+      if (zonesError) {
+        setError(zonesError.message)
+        setTournamentRoster({ id: filterTournament, teamIds: new Set() })
+        return
+      }
+      if (zones?.length) {
+        setTournamentRoster({ id: filterTournament, teamIds: new Set((zones as { team_id: string }[]).map((row) => row.team_id)) })
+        return
+      }
+
+      // Antes de generar el fixture no hay zonas: los equipos disponibles son los de su categoría.
+      const { data: matches, error: matchesError } = await supabase
+        .from("matches")
+        .select("home_team_id, away_team_id")
+        .eq("tournament_id", filterTournament)
+      if (!active) return
+      if (matchesError) {
+        setError(matchesError.message)
+        setTournamentRoster({ id: filterTournament, teamIds: new Set() })
+        return
+      }
+      const teamIds = (matches as { home_team_id: string; away_team_id: string }[] | null)
+        ?.flatMap((match) => [match.home_team_id, match.away_team_id]) ?? []
+      setTournamentRoster({ id: filterTournament, teamIds: teamIds.length ? new Set(teamIds) : null })
+    }
+    loadRoster()
+    return () => { active = false }
+  }, [supabase, filterTournament])
 
   const handleSubmit = async () => {
     setError(null)
@@ -341,13 +390,18 @@ export default function EquiposPage() {
 
   const filteredTeams = useMemo(() => {
     const q = search.trim().toLowerCase()
+    const tournamentCategoryId = tournaments.find((t) => t.id === filterTournament)?.category_id
     return teams.filter((t) => {
-      const branch = categoryById[t.categoryId]?.branch
-      if (filterBranch !== "all" && branch !== filterBranch) return false
+      if (filterTournament !== "all" && (tournamentRoster?.id === filterTournament && tournamentRoster.teamIds
+        ? !tournamentRoster.teamIds.has(t.id)
+        : !tournamentCategoryId || !t.categoryIds.includes(tournamentCategoryId))) return false
+      if (filterBranch !== "all" && !(filterTournament === "all"
+        ? t.categoryIds.some((id) => categoryById[id]?.branch === filterBranch)
+        : categoryById[tournamentCategoryId ?? ""]?.branch === filterBranch)) return false
       if (!q) return true
       return t.name.toLowerCase().includes(q)
     })
-  }, [teams, search, filterBranch, categoryById])
+  }, [teams, search, filterBranch, filterTournament, tournaments, tournamentRoster, categoryById])
 
   const teamNameOptions = useMemo(() => {
     return Array.from(new Set(teams.map((t) => t.name).filter(Boolean))).sort((a, b) => a.localeCompare(b))
@@ -537,7 +591,7 @@ export default function EquiposPage() {
 
       <Card>
         <CardContent className="p-4">
-          <div className="grid gap-3 lg:grid-cols-2">
+          <div className="grid gap-3 lg:grid-cols-3">
             <div>
               <Label htmlFor="team-search">Buscar</Label>
               <AutocompleteInput
@@ -563,11 +617,27 @@ export default function EquiposPage() {
                 </SelectContent>
               </Select>
             </div>
+            <div>
+              <Label htmlFor="team-tournament-filter">Torneo</Label>
+              <Select value={filterTournament} onValueChange={setFilterTournament}>
+                <SelectTrigger id="team-tournament-filter">
+                  <SelectValue placeholder="Todos los torneos" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos los torneos</SelectItem>
+                  {tournaments.map((tournament) => (
+                    <SelectItem key={tournament.id} value={tournament.id}>
+                      {tournament.name} ({tournament.year}) - {tournament.branch}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </CardContent>
       </Card>
 
-      {loading ? (
+      {loading || (filterTournament !== "all" && tournamentRoster?.id !== filterTournament) ? (
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">Cargando equipos...</CardContent>
         </Card>
@@ -683,6 +753,14 @@ type Category = {
   branch: Branch
   ageGroup: string
   scoringCap: number | null
+}
+
+type TournamentOption = {
+  id: string
+  name: string
+  year: number
+  branch: Branch
+  category_id: string | null
 }
 
 type TeamPlayerRow = {

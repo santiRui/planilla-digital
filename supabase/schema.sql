@@ -92,6 +92,10 @@ create table if not exists public.categories (
   branch public.branch not null,
   age_group text not null,
   scoring_cap int,
+  federated_u21_limit int check (federated_u21_limit >= 0),
+  federated_u23_limit int check (federated_u23_limit >= 0),
+  federated_primera_limit int check (federated_primera_limit >= 0),
+  federated_segunda_limit int check (federated_segunda_limit >= 0),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (name, branch, age_group)
@@ -99,6 +103,12 @@ create table if not exists public.categories (
 
 alter table public.categories
 add column if not exists scoring_cap int;
+
+alter table public.categories
+  add column if not exists federated_u21_limit int check (federated_u21_limit >= 0),
+  add column if not exists federated_u23_limit int check (federated_u23_limit >= 0),
+  add column if not exists federated_primera_limit int check (federated_primera_limit >= 0),
+  add column if not exists federated_segunda_limit int check (federated_segunda_limit >= 0);
 
 alter table public.tournaments
 add column if not exists category_id uuid references public.categories(id) on delete restrict;
@@ -157,13 +167,33 @@ create table if not exists public.players (
   birth_date date not null,
   jersey_number int not null,
   height_cm int,
-  is_federated boolean not null default true,
+  is_federated boolean not null default false,
+  federated_category text,
+  labas_seasons int not null default 0,
+  scoring int,
   photo_url text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (team_id, jersey_number),
   unique (dni)
 );
+
+alter table public.players
+  add column if not exists federated_category text,
+  add column if not exists labas_seasons int not null default 0,
+  add column if not exists scoring int;
+
+alter table public.players alter column is_federated set default false;
+
+update public.players
+set federated_category = case federated_category
+  when 'mayores' then 'primera'
+  when 'intermedia' then 'segunda'
+  else federated_category
+end,
+scoring = case when federated_category = 'intermedia' and is_federated
+  then scoring + 200 else scoring end
+where federated_category in ('mayores', 'intermedia');
 
 create table if not exists public.coaching_staff (
   id uuid primary key default gen_random_uuid(),
