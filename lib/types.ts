@@ -103,7 +103,7 @@ export interface Match {
 export interface MatchEvent {
   id: string
   matchId: string
-  playerId: string
+  playerId: string | null
   teamId: string
   type:
     | "points"

@@ -52,13 +52,26 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
     const events: unknown[] = []
     const pageSize = 500
     for (let offset = 0; ; offset += pageSize) {
-      const { data, error } = await auth.adminClient
+      let { data, error } = await auth.adminClient
         .from("match_events")
-        .select("id, match_id, team_id, player_id, type, points, period, game_time, occurred_at, shot_type, made, x, y, rebound_type, foul_type, victim_team_id, victim_player_id")
+        .select("id, match_id, team_id, player_id, actor_code, type, points, period, game_time, occurred_at, shot_type, made, x, y, rebound_type, foul_type, victim_team_id, victim_player_id")
         .eq("match_id", matchId)
         .order("occurred_at", { ascending: true })
         .order("id", { ascending: true })
         .range(offset, offset + pageSize - 1)
+      // Durante el despliegue, la migración puede llegar después del código:
+      // mantener la lectura de jugadas anteriores disponible mientras tanto.
+      if (error && /actor_code/.test(error.message)) {
+        const fallback = await auth.adminClient
+          .from("match_events")
+          .select("id, match_id, team_id, player_id, type, points, period, game_time, occurred_at, shot_type, made, x, y, rebound_type, foul_type, victim_team_id, victim_player_id")
+          .eq("match_id", matchId)
+          .order("occurred_at", { ascending: true })
+          .order("id", { ascending: true })
+          .range(offset, offset + pageSize - 1)
+        data = fallback.data as typeof data
+        error = fallback.error
+      }
       if (error) return NextResponse.json({ error: error.message }, { status: 400 })
       events.push(...(data ?? []))
       if ((data ?? []).length < pageSize) break
@@ -147,6 +160,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       return NextResponse.json({ error: "matchId no coincide" }, { status: 400 })
     }
 
+    const actorCode = ev.type === "foul" && typeof ev.playerId === "string" &&
+      ["tech", "assist", "bench"].some((kind) => ev.playerId === `${kind}-${ev.teamId}`)
+      ? ev.playerId : null
+    if (ev.type === "foul" && typeof ev.playerId === "string" &&
+        /^(tech|assist|bench)-/.test(ev.playerId) && !actorCode) {
+      return NextResponse.json({ error: "Personal técnico de otro equipo" }, { status: 400 })
+    }
+
     const occurredAt = ev.timestamp ? new Date(ev.timestamp) : new Date()
 
     const insertRow: any = {
@@ -155,7 +176,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       id: isUuid(ev.id) ? ev.id : undefined,
       match_id: ev.matchId,
       team_id: ev.teamId,
-      player_id: ev.playerId,
+      // Tiempos muertos viejos usaban teamId como playerId y fallaban el FK de players.
+      // Normalizarlos también permite reintentar los eventos ya pendientes.
+      player_id: ev.type === "timeout" || actorCode ? null : ev.playerId ?? null,
       type: ev.type,
       points: ev.points ?? null,
       period: ev.period,
@@ -171,23 +194,23 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       victim_team_id: ev.victimTeamId ?? null,
       victim_player_id: ev.victimPlayerId ?? null,
     }
+    if (actorCode) insertRow.actor_code = actorCode
 
     if (insertRow.id === undefined) {
       delete insertRow.id
     }
 
+    const selectColumns = actorCode
+      ? "id, match_id, team_id, player_id, actor_code, type, points, period, game_time, occurred_at, created_by, shot_type, made, x, y, rebound_type, foul_type, victim_team_id, victim_player_id"
+      : "id, match_id, team_id, player_id, type, points, period, game_time, occurred_at, created_by, shot_type, made, x, y, rebound_type, foul_type, victim_team_id, victim_player_id"
     const { data, error } = insertRow.id
       ? await (auth.adminClient.from("match_events") as any)
           .upsert(insertRow, { onConflict: "id" })
-          .select(
-            "id, match_id, team_id, player_id, type, points, period, game_time, occurred_at, created_by, shot_type, made, x, y, rebound_type, foul_type, victim_team_id, victim_player_id",
-          )
+          .select(selectColumns)
           .single()
       : await (auth.adminClient.from("match_events") as any)
           .insert(insertRow)
-          .select(
-            "id, match_id, team_id, player_id, type, points, period, game_time, occurred_at, created_by, shot_type, made, x, y, rebound_type, foul_type, victim_team_id, victim_player_id",
-          )
+          .select(selectColumns)
           .single()
 
     if (error || !data) {

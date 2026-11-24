@@ -24,19 +24,21 @@ export default function EstadisticasPage() {
     const stats: Record<string, { points: number; fouls: number; games: Set<string> }> = {}
 
     matchEvents.forEach((event) => {
-      const player = players.find((p) => p.id === event.playerId)
+      const playerId = event.playerId
+      if (!playerId) return
+      const player = players.find((p) => p.id === playerId)
       if (!player || !categoryTeamIds.includes(player.teamId)) return
 
-      if (!stats[event.playerId]) {
-        stats[event.playerId] = { points: 0, fouls: 0, games: new Set() }
+      if (!stats[playerId]) {
+        stats[playerId] = { points: 0, fouls: 0, games: new Set() }
       }
 
-      stats[event.playerId].games.add(event.matchId)
+      stats[playerId].games.add(event.matchId)
 
       if (event.type === "points" && event.points) {
-        stats[event.playerId].points += event.points
+        stats[playerId].points += event.points
       } else if (event.type === "foul") {
-        stats[event.playerId].fouls += 1
+        stats[playerId].fouls += 1
       }
     })
 

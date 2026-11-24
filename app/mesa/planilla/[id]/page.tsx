@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Textarea } from "@/components/ui/textarea"
 import { useAppStore } from "@/lib/store"
+import { eventsToBackUp } from "@/lib/planilla-local-backup"
+import { coachEjectedByTechnicals, isStaffActorId } from "@/lib/mesa-foul-rules"
 import {
   ArrowLeft,
   Undo2,
@@ -550,7 +552,8 @@ export default function PlanillaPage() {
   })
   const [isOnline, setIsOnline] = useState(true)
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("synced")
-  const [storageError, setStorageError] = useState(false)
+  const [storageError, setStorageError] = useState<string | null>(null)
+  const lastStorageErrorRef = useRef<string | null>(null)
   const [leaveError, setLeaveError] = useState<string | null>(null)
   const [leaving, setLeaving] = useState(false)
   const [showEndDialog, setShowEndDialog] = useState(false)
@@ -564,6 +567,8 @@ export default function PlanillaPage() {
   const [selectedFreeThrowFoulId, setSelectedFreeThrowFoulId] = useState<string | null>(null)
   const [localEvents, setLocalEvents] = useState<MatchEvent[]>([])
   const [pendingEventIds, setPendingEventIds] = useState<string[]>([])
+  const confirmedEventIdsRef = useRef<Set<string>>(new Set())
+  const [confirmedRevision, setConfirmedRevision] = useState(0)
   const [mainTab, setMainTab] = useState<"cancha" | "historial" | "otros" | "configuracion" | "estadisticas">("cancha")
   // Sustituciones: jugadores en cancha y diálogo
   const [onCourtPlayers, setOnCourtPlayers] = useState<{ home: string[]; away: string[] }>({ home: [], away: [] })
@@ -670,6 +675,8 @@ export default function PlanillaPage() {
 
         if (!res.ok) return false
 
+        confirmedEventIdsRef.current.add(event.id)
+        setConfirmedRevision((revision) => revision + 1)
         return true
       } catch {
         // Si falla, dejamos que la persistencia local sea la fuente de verdad
@@ -946,7 +953,9 @@ export default function PlanillaPage() {
       pendingAssistScorerId,
       pendingFreeThrow,
       lastScoreFlash,
-      localEvents,
+      localEvents: storeMatch
+        ? localEvents
+        : eventsToBackUp(localEvents, confirmedEventIdsRef.current, pendingEventIds),
       mainTab,
       onCourtPlayers,
       timeoutDialogTeamSide,
@@ -962,12 +971,29 @@ export default function PlanillaPage() {
       playerSeconds,
     }
 
+    let serialized: string | undefined
     try {
-      window.localStorage.setItem(`planilla-state:${matchId}`, JSON.stringify(payload))
-      setStorageError((previous) => previous ? false : previous)
+      serialized = JSON.stringify(payload)
+      window.localStorage.setItem(`planilla-state:${matchId}`, serialized)
+      if (lastStorageErrorRef.current) {
+        lastStorageErrorRef.current = null
+        setStorageError(null)
+      }
     } catch (error) {
-      console.warn("[planilla] No se pudo guardar el estado local", error)
-      setStorageError((previous) => previous ? previous : true)
+      const name = error instanceof Error ? error.name : "Error desconocido"
+      const message = /quota|NS_ERROR_DOM_QUOTA_REACHED/i.test(name)
+        ? "El almacenamiento de este sitio está lleno en el teléfono. No cierres el acta con jugadas pendientes; comprobá que se sincronicen antes de liberar espacio."
+        : name === "SecurityError"
+          ? "Este navegador impide guardar la copia local. No cierres el acta con jugadas pendientes; después de sincronizar, abrí el sitio en Chrome."
+          : `No se pudo guardar la copia local (${name}). No cierres el acta con jugadas pendientes.`
+      if (lastStorageErrorRef.current !== message) {
+        console.warn("[planilla] Falló el almacenamiento local", {
+          error, bytesApprox: serialized?.length, eventsInMemory: localEvents.length,
+          eventsInBackup: payload.localEvents.length, pendingEvents: pendingEventIds.length,
+        })
+        lastStorageErrorRef.current = message
+        setStorageError(message)
+      }
     }
   }, [
     matchId,
@@ -1001,6 +1027,8 @@ export default function PlanillaPage() {
     pendingEventIds,
     pendingDeleteEventIds,
     playerSeconds,
+    confirmedRevision,
+    storeMatch,
   ])
 
   // Reintentar subir eventos pendientes cuando volvemos a estar online
@@ -1131,7 +1159,7 @@ export default function PlanillaPage() {
           id: r.id,
           matchId: r.match_id,
           teamId: r.team_id,
-          playerId: r.player_id,
+          playerId: r.actor_code ?? r.player_id,
           type: r.type,
           points: r.points ?? undefined,
           period: r.period,
@@ -1146,6 +1174,7 @@ export default function PlanillaPage() {
           victimTeamId: r.victim_team_id ?? undefined,
           victimPlayerId: r.victim_player_id ?? undefined,
         }))
+        confirmedEventIdsRef.current = new Set(remoteEvents.map((event) => event.id))
         const local = localStateRef.current
         const remoteIds = new Set(remoteEvents.map((event) => event.id))
         const deletedIds = new Set(local?.pendingDeleteEventIds ?? [])
@@ -1466,6 +1495,7 @@ export default function PlanillaPage() {
 
     const fouls = localEvents.filter((e) => {
       if (e.type !== "foul") return false
+      if (isStaffActorId(e.playerId)) return false
       if (period <= 3) return e.period === period
       // Desde el 4º cuarto en adelante, contamos todas las faltas desde el período 4
       return e.period >= 4
@@ -1551,7 +1581,7 @@ export default function PlanillaPage() {
 
   // Función para verificar si una entidad (jugador, técnico, asistente o banca) está descalificada
   const isEntityDisqualified = (entityId: string): boolean => {
-    const isStaff = entityId.startsWith("tech-") || entityId.startsWith("assist-") || entityId.startsWith("bench-")
+    const isStaff = isStaffActorId(entityId)
 
     // Jugadores: reglas estándar de 5 faltas y combinaciones especiales
     if (!isStaff) {
@@ -1604,9 +1634,7 @@ export default function PlanillaPage() {
     // Head coach: 2 técnicas propias, o descalificante/reyerta, o
     // 3 técnicas a la banca, o 2 a la banca + 1 al técnico (regla combinada)
     if (kind === "tech") {
-      const baseEject = coachTechs >= 2 || coachDisq >= 1 || coachFight >= 1
-      const benchCombo = benchTechs >= 3 || (benchTechs >= 2 && coachTechs >= 1)
-      return baseEject || benchCombo
+      return coachEjectedByTechnicals(coachTechs, benchTechs) || coachDisq >= 1 || coachFight >= 1
     }
 
     // Banca: se considera "agotada" al llegar a 3 técnicas o a la combinación con el DT
@@ -1921,8 +1949,7 @@ export default function PlanillaPage() {
       const event: MatchEvent = {
         id: newEventId(),
         matchId,
-        // Para tiempos muertos no hay jugador asociado; usamos el teamId como identificador neutro.
-        playerId: teamId,
+        playerId: null,
         teamId,
         type: "timeout",
         period,
@@ -2035,8 +2062,9 @@ export default function PlanillaPage() {
       }
 
       // Verificar si el equipo entra en infracción con esta falta
+      const isStaffFoul = isStaffActorId(playerId)
       const currentTeamFouls = teamFoulsInPeriod[teamSide] + 1
-      if (currentTeamFouls === 4) {
+      if (!isStaffFoul && currentTeamFouls === 4) {
         // El equipo acaba de entrar en infracción
         console.log(`Equipo ${teamSide} entra en infracción (4 faltas)`)
       }
@@ -2060,7 +2088,7 @@ export default function PlanillaPage() {
         disqualifyingFouls >= 1 ||
         fightFouls >= 1
 
-      if (nowDisqualified) {
+      if (nowDisqualified && !isStaffFoul) {
         // Sacar al jugador de la cancha si estaba en onCourtPlayers
         const currentOnCourt = onCourtPlayers[teamSide].filter((id) => id !== playerId)
         if (currentOnCourt.length !== onCourtPlayers[teamSide].length) {
@@ -2138,7 +2166,8 @@ export default function PlanillaPage() {
 
     // Deshacer una falta que podía haber descalificado al jugador: si al quitarla ya no está descalificado,
     // permitir que vuelva a estar en cancha (si no fue sustituido después).
-    if (teamSideForEvent && lastEvent.type === "foul" && lastEvent.playerId) {
+    if (teamSideForEvent && lastEvent.type === "foul" && lastEvent.playerId &&
+        !isStaffActorId(lastEvent.playerId)) {
       const remainingFouls = localEvents
         .slice(0, -1)
         .filter((e) => e.playerId === lastEvent.playerId && e.type === "foul")
@@ -3108,7 +3137,7 @@ export default function PlanillaPage() {
       )}
       {storageError && (
         <div role="alert" className="bg-destructive px-3 py-2 text-center text-xs text-destructive-foreground">
-          No se pudo guardar la planilla en este dispositivo. No cierres la página; liberá espacio y comprobá la conexión.
+          {storageError}
         </div>
       )}
       <header className="sticky top-0 z-20 border-b bg-card">
@@ -3655,9 +3684,9 @@ export default function PlanillaPage() {
                             </Fragment>
                           )
                         } else {
-                          if (e.foulType === "technical" && e.playerId.startsWith("tech-")) {
+                          if (e.foulType === "technical" && e.playerId?.startsWith("tech-")) {
                             personName = "Técnico"
-                          } else if (e.foulType === "technical" && e.playerId.startsWith("assist-")) {
+                          } else if (e.foulType === "technical" && e.playerId?.startsWith("assist-")) {
                             personName = "Asistente"
                           } else if (player) {
                             personName = `${player.lastName.toUpperCase()}, ${player.firstName}`
