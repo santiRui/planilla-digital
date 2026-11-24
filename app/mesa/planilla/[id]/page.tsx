@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from "react"
-import { useParams, useRouter } from "next/navigation"
+import { useParams, useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -72,6 +72,7 @@ type TeamRow = {
 }
 
 type PersistedMatchState = {
+  savedAt?: string
   homeScore: number
   awayScore: number
   period: number
@@ -125,7 +126,9 @@ type PersistedMatchState = {
 export default function PlanillaPage() {
   const params = useParams()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const matchId = params.id as string
+  const resumeFromServer = searchParams.get("resume") === "1"
 
   const supabase = useMemo(() => createSupabaseBrowserClient(), [])
 
@@ -134,22 +137,47 @@ export default function PlanillaPage() {
 
   const newEventId = () => {
     try {
-      if (typeof crypto !== "undefined" && typeof (crypto as any).randomUUID === "function") {
-        return (crypto as any).randomUUID() as string
-      }
+      if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID()
     } catch {
-      // ignore
+      // En HTTP local, randomUUID puede no estar disponible.
     }
-    return `ev-${Date.now()}-${Math.random().toString(16).slice(2)}`
+    const bytes = new Uint8Array(16)
+    if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+      crypto.getRandomValues(bytes)
+    } else {
+      for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256)
+    }
+    bytes[6] = (bytes[6]! & 0x0f) | 0x40
+    bytes[8] = (bytes[8]! & 0x3f) | 0x80
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
   }
 
-  const { matches, teams, players, updateMatch, addMatchEvent, removeLastMatchEvent, matchEvents } = useAppStore()
+  const { matches, teams, players, updateMatch, addMatchEvent: addStoreMatchEvent, removeLastMatchEvent: removeStoreLastMatchEvent } = useAppStore()
 
   const storeMatch = matches.find((m) => m.id === matchId)
+  // Los partidos reales ya guardan jugadas en localEvents y Supabase. Duplicarlas en
+  // el store persistido puede agotar localStorage y cortar el handler antes de cerrar diálogos.
+  const addMatchEvent = useCallback((event: MatchEvent) => {
+    if (!storeMatch) return
+    try {
+      addStoreMatchEvent(event)
+    } catch (error) {
+      console.warn("[planilla] No se pudo guardar el evento del partido de prueba en el store", error)
+    }
+  }, [storeMatch, addStoreMatchEvent])
+  const removeLastMatchEvent = useCallback((id: string) => {
+    if (!storeMatch) return
+    try {
+      removeStoreLastMatchEvent(id)
+    } catch (error) {
+      console.warn("[planilla] No se pudo actualizar el store del partido de prueba", error)
+    }
+  }, [storeMatch, removeStoreLastMatchEvent])
   const storeHomeTeam = teams.find((t) => t.id === storeMatch?.homeTeamId)
   const storeAwayTeam = teams.find((t) => t.id === storeMatch?.awayTeamId)
-  const storeHomePlayers = players.filter((p) => p.teamId === storeMatch?.homeTeamId)
-  const storeAwayPlayers = players.filter((p) => p.teamId === storeMatch?.awayTeamId)
+  const storeHomePlayers = useMemo(() => players.filter((p) => p.teamId === storeMatch?.homeTeamId), [players, storeMatch?.homeTeamId])
+  const storeAwayPlayers = useMemo(() => players.filter((p) => p.teamId === storeMatch?.awayTeamId), [players, storeMatch?.awayTeamId])
 
   const [dbLoading, setDbLoading] = useState(false)
   const [dbError, setDbError] = useState<string | null>(null)
@@ -166,42 +194,81 @@ export default function PlanillaPage() {
   // Para evitar registrar múltiples veces la hora de inicio desde la mesa en esta sesión
   const [startRegisteredFromMesa, setStartRegisteredFromMesa] = useState(false)
 
-  // Función para obtener datos de la pre planilla
-  const getPrePlanillaData = () => {
+  const [remotePrePlanillaData, setRemotePrePlanillaData] = useState<any>(null)
+  const [prePlanillaReady, setPrePlanillaReady] = useState(false)
+  // Mantener estable la selección evita volver a cargar staff en cada segundo del reloj.
+  const localPrePlanillaData = useMemo(() => {
+    if (resumeFromServer) return null
     if (typeof window === "undefined") return null
-    const raw = window.localStorage.getItem(`preplanilla:${matchId}`)
-    if (!raw) return null
     try {
-      return JSON.parse(raw)
+      const raw = window.localStorage.getItem(`preplanilla:${matchId}`)
+      return raw ? JSON.parse(raw) : null
     } catch {
       return null
     }
-  }
+  }, [matchId, resumeFromServer])
+  const prePlanillaData = localPrePlanillaData ?? remotePrePlanillaData
+
+  useEffect(() => {
+    if (localPrePlanillaData || storeMatch) {
+      setPrePlanillaReady(true)
+      return
+    }
+    let cancelled = false
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 15000)
+    const loadPrePlanilla = async () => {
+      try {
+        const { data } = await supabase.auth.getSession()
+        const token = data.session?.access_token
+        if (!token) throw new Error("Iniciá sesión nuevamente para cargar la planilla.")
+        const res = await fetch(`/api/mesa/matches/${matchId}/preplanilla`, {
+          headers: { authorization: `Bearer ${token}` },
+          signal: controller.signal,
+        })
+        if (res.status === 404) {
+          if (resumeFromServer) throw new Error("No hay una preplanilla guardada para continuar el acta.")
+          return
+        }
+        if (!res.ok) throw new Error("No se pudo recuperar la preplanilla del partido.")
+        const json = await res.json()
+        if (!json?.homeState || !json?.awayState) throw new Error("La preplanilla guardada está incompleta.")
+        if (!cancelled) setRemotePrePlanillaData({ home: json.homeState, away: json.awayState })
+      } catch (error) {
+        if (!cancelled) setDbError(controller.signal.aborted
+          ? "La conexión tardó demasiado al cargar la preplanilla. Actualizá la página para reintentar."
+          : error instanceof Error ? error.message : "No se pudo cargar la preplanilla.")
+      } finally {
+        clearTimeout(timer)
+        if (!cancelled) setPrePlanillaReady(true)
+      }
+    }
+    void loadPrePlanilla()
+    return () => { cancelled = true; controller.abort(); clearTimeout(timer) }
+  }, [localPrePlanillaData, storeMatch, supabase, matchId, resumeFromServer])
 
   // Función para obtener el staff seleccionado de la pre planilla
   const getSelectedStaff = () => {
-    const prePlanilla = getPrePlanillaData()
-    if (!prePlanilla) return { homeStaff: [], awayStaff: [] }
+    if (!prePlanillaData) return { homeStaff: [], awayStaff: [] }
     
     // Aquí deberíamos cargar los datos del staff de la base de datos
     // y filtrar según los IDs seleccionados en la pre planilla
     return { 
-      homeStaff: prePlanilla.home.staffIds || [], 
-      awayStaff: prePlanilla.away.staffIds || [] 
+      homeStaff: prePlanillaData.home.staffIds || [],
+      awayStaff: prePlanillaData.away.staffIds || [],
     }
   }
 
   // Cargar capitán de cada equipo desde la pre planilla, si existe
   useEffect(() => {
-    const prePlanilla = getPrePlanillaData()
-    if (!prePlanilla) return
+    if (!prePlanillaData) return
 
-    const homeCaptain = prePlanilla.home?.captainId ?? null
-    const awayCaptain = prePlanilla.away?.captainId ?? null
+    const homeCaptain = prePlanillaData.home?.captainId ?? null
+    const awayCaptain = prePlanillaData.away?.captainId ?? null
 
     setCaptainHomeId(typeof homeCaptain === "string" ? homeCaptain : null)
     setCaptainAwayId(typeof awayCaptain === "string" ? awayCaptain : null)
-  }, [matchId])
+  }, [prePlanillaData])
 
   // Cargar datos del staff de la base de datos
   const [staffData, setStaffData] = useState<Record<string, any>>({})
@@ -366,9 +433,6 @@ export default function PlanillaPage() {
   const homeTeam = storeHomeTeam ?? (dbHomeTeam as any)
   const awayTeam = storeAwayTeam ?? (dbAwayTeam as any)
   
-  // Obtener datos de la pre planilla
-  const prePlanillaData = getPrePlanillaData()
-  
   // Jugadores disponibles para el partido (titulares + banco) según pre planilla,
   // aplicando también los dorsales modificados (jerseyByPlayerId) de la pre planilla.
   const homePlayers = useMemo(() => {
@@ -420,7 +484,9 @@ export default function PlanillaPage() {
 
   const [homeScore, setHomeScore] = useState(0)
   const [awayScore, setAwayScore] = useState(0)
-  const [restoredFromStorage, setRestoredFromStorage] = useState(false)
+  const [localRestoreDone, setLocalRestoreDone] = useState(false)
+  const [actaReady, setActaReady] = useState(false)
+  const localStateRef = useRef<PersistedMatchState | null>(null)
   const [period, setPeriod] = useState(1)
   const [gameTime, setGameTime] = useState(() => {
     if (typeof window === "undefined") return 10 * 60
@@ -484,6 +550,9 @@ export default function PlanillaPage() {
   })
   const [isOnline, setIsOnline] = useState(true)
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("synced")
+  const [storageError, setStorageError] = useState(false)
+  const [leaveError, setLeaveError] = useState<string | null>(null)
+  const [leaving, setLeaving] = useState(false)
   const [showEndDialog, setShowEndDialog] = useState(false)
   const [showAdvanceDialog, setShowAdvanceDialog] = useState(false)
   const [showFreeThrowDialog, setShowFreeThrowDialog] = useState(false)
@@ -647,6 +716,7 @@ export default function PlanillaPage() {
 
   // Inicializar jugadores en cancha desde pre planilla o primeros 5
   useEffect(() => {
+    if (!actaReady) return
     if (!homePlayers.length && !awayPlayers.length) return
 
     setOnCourtPlayers((prev) => {
@@ -670,26 +740,25 @@ export default function PlanillaPage() {
         away: awayInitial,
       }
     })
-  }, [homePlayers, awayPlayers, prePlanillaData])
+  }, [homePlayers, awayPlayers, prePlanillaData, actaReady])
 
   // Restaurar estado del partido desde localStorage (si existe)
   useEffect(() => {
-    if (typeof window === "undefined") return
-    const raw = window.localStorage.getItem(`planilla-state:${matchId}`)
-    if (!raw) return
-
     try {
+      const raw = window.localStorage.getItem(`planilla-state:${matchId}`)
+      if (!raw) return
       const data = JSON.parse(raw) as PersistedMatchState
+      localStateRef.current = data
 
       // Primero restauramos directamente los scores persistidos
-      setHomeScore(data.homeScore)
-      setAwayScore(data.awayScore)
-      setPeriod(data.period)
-      setGameTime(data.gameTime)
-      setIsRunning(data.isRunning)
-      setSelectedTeam(data.selectedTeam)
-      setSelectedPlayerId(data.selectedPlayerId)
-      setPendingReboundTeamId(data.pendingReboundTeamId)
+      if (typeof data.homeScore === "number") setHomeScore(data.homeScore)
+      if (typeof data.awayScore === "number") setAwayScore(data.awayScore)
+      if (typeof data.period === "number") setPeriod(data.period)
+      if (typeof data.gameTime === "number") setGameTime(data.gameTime)
+      setIsRunning(false)
+      setSelectedTeam(data.selectedTeam ?? "home")
+      setSelectedPlayerId(data.selectedPlayerId ?? null)
+      setPendingReboundTeamId(data.pendingReboundTeamId ?? null)
       // pendingPersonalFoul en localStorage no tenía foulType antes; por compatibilidad, asumimos "personal".
       setPendingPersonalFoul(
         data.pendingPersonalFoul
@@ -699,12 +768,12 @@ export default function PlanillaPage() {
             }
           : null,
       )
-      setPendingBlock(data.pendingBlock)
-      setPendingTurnover(data.pendingTurnover)
-      setPendingAssistTeamId(data.pendingAssistTeamId)
-      setPendingAssistScorerId(data.pendingAssistScorerId)
-      setPendingFreeThrow(data.pendingFreeThrow)
-      setLastScoreFlash(data.lastScoreFlash)
+      setPendingBlock(data.pendingBlock ?? null)
+      setPendingTurnover(data.pendingTurnover ?? null)
+      setPendingAssistTeamId(data.pendingAssistTeamId ?? null)
+      setPendingAssistScorerId(data.pendingAssistScorerId ?? null)
+      setPendingFreeThrow(data.pendingFreeThrow ?? null)
+      setLastScoreFlash(data.lastScoreFlash ?? null)
 
       const restoredEvents = (data.localEvents ?? []).map((e) => ({
         ...e,
@@ -717,54 +786,22 @@ export default function PlanillaPage() {
         setPlayerSeconds(data.playerSeconds)
       }
 
-      // Recalcular marcador a partir del historial por si los campos de score no son fiables.
-      // Para evitar asignar todo al visitante cuando todavía no se conocen los equipos,
-      // solo hacemos este recálculo si podemos determinar los IDs de local y visitante.
-      const homeId = homeTeam?.id ?? match?.homeTeamId
-      const awayId = awayTeam?.id ?? match?.awayTeamId
-
-      if (restoredEvents.length > 0 && homeId && awayId) {
-        let restoredHomeScore = 0
-        let restoredAwayScore = 0
-
-        restoredEvents.forEach((ev) => {
-          const isHome = ev.teamId === homeId
-
-          if (ev.type === "points" && ev.points) {
-            if (isHome) restoredHomeScore += ev.points
-            else restoredAwayScore += ev.points
-          }
-
-          if (ev.type === "shot" && ev.made && ev.shotType) {
-            if (isHome) restoredHomeScore += ev.shotType
-            else restoredAwayScore += ev.shotType
-          }
-
-          if (ev.type === "free_throw" && ev.made) {
-            if (isHome) restoredHomeScore += 1
-            else restoredAwayScore += 1
-          }
-        })
-
-        setHomeScore(restoredHomeScore)
-        setAwayScore(restoredAwayScore)
-      }
-
-      setMainTab(data.mainTab)
-      setOnCourtPlayers(data.onCourtPlayers)
-      setTimeoutDialogTeamSide(data.timeoutDialogTeamSide)
-      setTimeoutTeamSide(data.timeoutTeamSide)
-      setTimeoutCountdown(data.timeoutCountdown)
-      setTimeoutMinimized(data.timeoutMinimized)
-      setHomeColorOverride(data.homeColorOverride)
-      setAwayColorOverride(data.awayColorOverride)
-      setShowClockEditor(data.showClockEditor)
-      setFlipSides((data as any).flipSides ?? false)
-      setRestoredFromStorage(true)
-    } catch {
-      // Si hay datos corruptos, los ignoramos
+      setMainTab(data.mainTab ?? "cancha")
+      if (data.onCourtPlayers) setOnCourtPlayers(data.onCourtPlayers)
+      setTimeoutDialogTeamSide(data.timeoutDialogTeamSide ?? null)
+      setTimeoutTeamSide(data.timeoutTeamSide ?? null)
+      setTimeoutCountdown(data.timeoutCountdown ?? null)
+      setTimeoutMinimized(data.timeoutMinimized ?? false)
+      setHomeColorOverride(data.homeColorOverride ?? null)
+      setAwayColorOverride(data.awayColorOverride ?? null)
+      setShowClockEditor(data.showClockEditor ?? false)
+      setFlipSides(data.flipSides ?? false)
+    } catch (error) {
+      console.warn("[planilla] No se pudo restaurar la copia local", error)
+    } finally {
+      setLocalRestoreDone(true)
     }
-  }, [matchId, match?.homeTeamId, match?.awayTeamId, homeTeam?.id, awayTeam?.id])
+  }, [matchId])
 
   // Cargar arancel de sede y pagos previos (solo desde el backend, una vez que tenemos matchId y authToken)
   useEffect(() => {
@@ -889,34 +926,11 @@ export default function PlanillaPage() {
     }
   }
 
-  // Ajustar el reloj visible al tiempo del último evento registrado en el historial
-  // Solo lo hacemos en la inicialización: cuando el reloj sigue en su valor base (10 minutos) y no está corriendo.
-  useEffect(() => {
-    if (!localEvents.length) return
-    if (isRunning) return
-
-    setGameTime((current) => {
-      // Solo tocar el reloj si sigue en el valor inicial por defecto (10:00)
-      if (current !== 10 * 60) return current
-
-      const lastEvent = localEvents[localEvents.length - 1]
-      if (!lastEvent.gameTime) return current
-
-      const parts = lastEvent.gameTime.split(":")
-      if (parts.length !== 2) return current
-      const minutes = Number(parts[0])
-      const seconds = Number(parts[1])
-      if (!Number.isFinite(minutes) || !Number.isFinite(seconds)) return current
-
-      const totalSeconds = minutes * 60 + seconds
-      return totalSeconds
-    })
-  }, [localEvents, isRunning])
-
   // Guardar estado del partido en localStorage en cada cambio relevante
   useEffect(() => {
-    if (typeof window === "undefined") return
+    if (typeof window === "undefined" || !actaReady) return
     const payload: PersistedMatchState = {
+      savedAt: new Date().toISOString(),
       homeScore,
       awayScore,
       period,
@@ -950,11 +964,14 @@ export default function PlanillaPage() {
 
     try {
       window.localStorage.setItem(`planilla-state:${matchId}`, JSON.stringify(payload))
-    } catch {
-      // Ignorar errores de almacenamiento (p.ej. quota excedida)
+      setStorageError((previous) => previous ? false : previous)
+    } catch (error) {
+      console.warn("[planilla] No se pudo guardar el estado local", error)
+      setStorageError((previous) => previous ? previous : true)
     }
   }, [
     matchId,
+    actaReady,
     homeScore,
     awayScore,
     period,
@@ -980,15 +997,22 @@ export default function PlanillaPage() {
     homeColorOverride,
     awayColorOverride,
     showClockEditor,
+    flipSides,
     pendingEventIds,
+    pendingDeleteEventIds,
+    playerSeconds,
   ])
 
   // Reintentar subir eventos pendientes cuando volvemos a estar online
   useEffect(() => {
-    if (!isOnline) return
+    if (!actaReady || !isOnline) return
     if (!pendingEventIds.length) return
+    let retrying = false
 
     const retryPending = async () => {
+      if (retrying) return
+      retrying = true
+      try {
       console.log("[events] Retry pending events start", { pendingEventIds })
       const eventsToRetry = localEvents.filter((e) => pendingEventIds.includes(e.id))
       if (!eventsToRetry.length) {
@@ -1016,6 +1040,9 @@ export default function PlanillaPage() {
         console.log("[events] Retry succeeded for some events, removing from queue", { succeeded })
         setPendingEventIds((prev) => prev.filter((id) => !succeeded.includes(id)))
       }
+      } finally {
+        retrying = false
+      }
     }
 
     void retryPending()
@@ -1025,11 +1052,11 @@ export default function PlanillaPage() {
     }, 2000)
 
     return () => clearInterval(interval)
-  }, [isOnline, pendingEventIds, localEvents, sendEventToServer])
+  }, [actaReady, isOnline, pendingEventIds, localEvents, sendEventToServer])
 
   // Reintentar borrar eventos deshechos cuando volvemos a estar online
   useEffect(() => {
-    if (!isOnline) return
+    if (!actaReady || !isOnline) return
     if (!pendingDeleteEventIds.length) return
 
     const processDeletes = async () => {
@@ -1070,28 +1097,37 @@ export default function PlanillaPage() {
     }
 
     void processDeletes()
-  }, [isOnline, pendingDeleteEventIds, supabase, matchId])
+  }, [actaReady, isOnline, pendingDeleteEventIds, supabase, matchId])
 
-  // Hidratar historial y marcador desde Supabase si no hay historial local significativo
+  // Recuperar TODOS los eventos y el estado de cancha antes de habilitar la carga.
   useEffect(() => {
-    // Si ya restauramos desde localStorage y hay eventos, no pisamos nada
-    if (restoredFromStorage && localEvents.length > 0) return
-    if (!matchId) return
-    if (!homeTeam || !awayTeam) return
+    if (!localRestoreDone || !prePlanillaReady || !homeTeam || !awayTeam || !match) return
+    if (storeMatch) {
+      setActaReady(true)
+      return
+    }
+    let cancelled = false
 
-    const loadEventsFromDb = async () => {
+    const loadActa = async () => {
       try {
-        const { data: rows, error } = await supabase
-          .from("match_events")
-          .select(
-            "id, match_id, team_id, player_id, type, points, period, game_time, occurred_at, shot_type, made, x, y, rebound_type, foul_type, victim_team_id, victim_player_id",
-          )
-          .eq("match_id", matchId)
-          .order("occurred_at", { ascending: true })
+        const { data: sessionData } = await supabase.auth.getSession()
+        const token = sessionData.session?.access_token
+        if (!token) throw new Error("Iniciá sesión nuevamente para recuperar el acta.")
+        const headers = { authorization: `Bearer ${token}` }
+        const [liveResponse, eventsResponse] = await Promise.all([
+          fetch(`/api/mesa/matches/${matchId}/live`, { headers, cache: "no-store" }),
+          fetch(`/api/mesa/matches/${matchId}/events`, { headers, cache: "no-store" }),
+        ])
+        if (!liveResponse.ok || !eventsResponse.ok) {
+          const failed = !eventsResponse.ok ? eventsResponse : liveResponse
+          const result = await failed.json().catch(() => null)
+          throw new Error(result?.error ?? "No se pudieron recuperar todos los datos del acta.")
+        }
+        const [{ live }, { events: rows }] = await Promise.all([liveResponse.json(), eventsResponse.json()])
+        if (cancelled) return
+        if (!Array.isArray(rows)) throw new Error("El historial del partido llegó incompleto.")
 
-        if (error || !rows || rows.length === 0) return
-
-        const mapped: MatchEvent[] = rows.map((r: any) => ({
+        const remoteEvents: MatchEvent[] = rows.map((r: any) => ({
           id: r.id,
           matchId: r.match_id,
           teamId: r.team_id,
@@ -1110,82 +1146,185 @@ export default function PlanillaPage() {
           victimTeamId: r.victim_team_id ?? undefined,
           victimPlayerId: r.victim_player_id ?? undefined,
         }))
+        const local = localStateRef.current
+        const remoteIds = new Set(remoteEvents.map((event) => event.id))
+        const deletedIds = new Set(local?.pendingDeleteEventIds ?? [])
+        const missingLocal = (local?.localEvents ?? [])
+          .filter((event) => !remoteIds.has(event.id) && !deletedIds.has(event.id))
+          .map((event) => ({ ...event, timestamp: new Date(event.timestamp) }))
+        const merged = [...remoteEvents.filter((event) => !deletedIds.has(event.id)), ...missingLocal]
+          .sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+        setLocalEvents(merged)
+        // Un reintento con el mismo UUID no duplica el evento en Supabase.
+        setPendingEventIds(Array.from(new Set([
+          ...(local?.pendingEventIds ?? []),
+          ...missingLocal.filter((event) => /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(event.id)).map((event) => event.id),
+        ])))
 
-        setLocalEvents(mapped)
-
-        // Recalcular marcador desde los eventos de BD
-        let restoredHomeScore = 0
-        let restoredAwayScore = 0
-
-        mapped.forEach((ev) => {
-          const isHome = ev.teamId === homeTeam?.id
-
-          if (ev.type === "points" && ev.points) {
-            if (isHome) restoredHomeScore += ev.points
-            else restoredAwayScore += ev.points
+        const snapshot = live?.live_state as Partial<PersistedMatchState> | null
+        const localIsNewer = Boolean(local?.savedAt && live?.live_updated_at &&
+          Date.parse(local.savedAt) > Date.parse(live.live_updated_at))
+        const preferLocal = Boolean(local && ((local.pendingEventIds?.length ?? 0) > 0 || localIsNewer))
+        if (!preferLocal) {
+          setHomeScore(live?.live_home_score ?? live?.home_score ?? 0)
+          setAwayScore(live?.live_away_score ?? live?.away_score ?? 0)
+          setPeriod(live?.live_period ?? 1)
+          setGameTime(live?.live_game_time ?? 600)
+          if (snapshot) {
+            if (snapshot.onCourtPlayers?.home && snapshot.onCourtPlayers?.away) {
+              setOnCourtPlayers(snapshot.onCourtPlayers)
+            }
+            if (snapshot.playerSeconds) setPlayerSeconds(snapshot.playerSeconds)
+            if (snapshot.selectedTeam) setSelectedTeam(snapshot.selectedTeam)
+            setSelectedPlayerId(snapshot.selectedPlayerId ?? null)
+            setPendingReboundTeamId(snapshot.pendingReboundTeamId ?? null)
+            setPendingPersonalFoul(snapshot.pendingPersonalFoul
+              ? { ...snapshot.pendingPersonalFoul, foulType: (snapshot.pendingPersonalFoul as any).foulType ?? "personal" }
+              : null)
+            setPendingBlock(snapshot.pendingBlock ?? null)
+            setPendingTurnover(snapshot.pendingTurnover ?? null)
+            setPendingAssistTeamId(snapshot.pendingAssistTeamId ?? null)
+            setPendingAssistScorerId(snapshot.pendingAssistScorerId ?? null)
+            setPendingFreeThrow(snapshot.pendingFreeThrow ?? null)
+          } else if (merged.length) {
+            const court = {
+              home: prePlanillaData?.home?.starters?.length ? [...prePlanillaData.home.starters] : homePlayers.slice(0, 5).map((p) => p.id),
+              away: prePlanillaData?.away?.starters?.length ? [...prePlanillaData.away.starters] : awayPlayers.slice(0, 5).map((p) => p.id),
+            }
+            for (const event of merged) {
+              const side = event.teamId === homeTeam.id ? "home" : event.teamId === awayTeam.id ? "away" : null
+              if (!side || !event.playerId) continue
+              if (event.type === "substitution_out") court[side] = court[side].filter((id: string) => id !== event.playerId)
+              if (event.type === "substitution_in" && !court[side].includes(event.playerId)) court[side].push(event.playerId)
+            }
+            setOnCourtPlayers(court)
           }
-
-          if (ev.type === "shot" && ev.made && ev.shotType) {
-            if (isHome) restoredHomeScore += ev.shotType
-            else restoredAwayScore += ev.shotType
-          }
-
-          if (ev.type === "free_throw" && ev.made) {
-            if (isHome) restoredHomeScore += 1
-            else restoredAwayScore += 1
-          }
-        })
-
-        setHomeScore(restoredHomeScore)
-        setAwayScore(restoredAwayScore)
-      } catch {
-        // Si falla, mantenemos la fuente local
+        }
+        setActaReady(true)
+      } catch (error) {
+        if (!cancelled) setDbError(error instanceof Error ? error.message : "No se pudo recuperar el acta.")
       }
     }
 
-    void loadEventsFromDb()
-  }, [matchId, supabase, restoredFromStorage, localEvents.length, homeTeam, awayTeam])
+    void loadActa()
+    return () => { cancelled = true }
+  }, [matchId, supabase, localRestoreDone, prePlanillaReady, homeTeam?.id, awayTeam?.id, match?.id, prePlanillaData, storeMatch])
 
-  useEffect(() => {
-    if (!match) return
-    // Si ya restauramos desde localStorage, no pisamos el marcador
-    if (restoredFromStorage) return
-    setHomeScore(match.homeScore ?? 0)
-    setAwayScore(match.awayScore ?? 0)
-  }, [match?.homeScore, match?.awayScore, match?.id, restoredFromStorage])
-
-  // Sincronizar estado vivo (score, período, tiempo) en Supabase vía API protegida,
-  // pero con frecuencia limitada para no saturar la BD.
-  useEffect(() => {
-    if (!matchId) return
-    if (match?.status !== "en_juego") return
-
-    const timeout = setTimeout(async () => {
+  const livePayloadRef = useRef({
+    homeScore,
+    awayScore,
+    period,
+    gameTime,
+    state: {
+      onCourtPlayers,
+      playerSeconds,
+      selectedTeam,
+      selectedPlayerId,
+      pendingReboundTeamId,
+      pendingPersonalFoul,
+      pendingBlock,
+      pendingTurnover,
+      pendingAssistTeamId,
+      pendingAssistScorerId,
+      pendingFreeThrow,
+    },
+  })
+  livePayloadRef.current = {
+    homeScore, awayScore, period, gameTime: Math.floor(gameTime),
+    state: {
+      onCourtPlayers, playerSeconds, selectedTeam, selectedPlayerId,
+      pendingReboundTeamId, pendingPersonalFoul, pendingBlock, pendingTurnover,
+      pendingAssistTeamId, pendingAssistScorerId, pendingFreeThrow,
+    },
+  }
+  const liveRequestRef = useRef<Promise<boolean> | null>(null)
+  const lastUploadedRef = useRef("")
+  const pendingIdsRef = useRef(pendingEventIds)
+  pendingIdsRef.current = pendingEventIds
+  const sendLiveSnapshot = useCallback(async (): Promise<boolean> => {
+    if (liveRequestRef.current) {
+      await liveRequestRef.current
+      if (liveRequestRef.current) return liveRequestRef.current
+    }
+    const payload = livePayloadRef.current
+    const signature = JSON.stringify(payload)
+    if (lastUploadedRef.current === signature) {
+      if (pendingIdsRef.current.length === 0) setSyncStatus("synced")
+      return true
+    }
+    const request = (async () => {
       try {
         const { data: sessionData } = await supabase.auth.getSession()
         const token = sessionData.session?.access_token
-        if (!token) return
-
-        await fetch(`/api/mesa/matches/${matchId}/live`, {
+        if (!token) throw new Error("Sesión expirada")
+        const response = await fetch(`/api/mesa/matches/${matchId}/live`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            homeScore,
-            awayScore,
-            period,
-            gameTime: Math.floor(gameTime),
-          }),
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: signature,
+          keepalive: true,
         })
-      } catch {
-        // Si falla, mantenemos el estado local y se puede reintentar más tarde
+        if (!response.ok) throw new Error(`No se pudo sincronizar el acta (${response.status})`)
+        lastUploadedRef.current = signature
+        if (pendingIdsRef.current.length === 0) setSyncStatus("synced")
+        return true
+      } catch (error) {
+        console.warn("[planilla] Estado vivo pendiente de sincronizar", error)
+        setSyncStatus("error")
+        return false
+      } finally {
+        liveRequestRef.current = null
       }
-    }, 5000) // enviar como máximo cada 5 segundos
+    })()
+    liveRequestRef.current = request
+    return request
+  }, [matchId, supabase])
 
-    return () => clearTimeout(timeout)
-  }, [supabase, matchId, match?.status, homeScore, awayScore, period, gameTime])
+  // Un intervalo fijo envía el estado aun cuando el reloj cambia cada segundo.
+  useEffect(() => {
+    if (!actaReady || !isOnline || storeMatch || match?.status !== "en_juego") return
+    void sendLiveSnapshot()
+    const interval = setInterval(() => { void sendLiveSnapshot() }, 3000)
+    return () => clearInterval(interval)
+  }, [actaReady, isOnline, storeMatch, match?.status, sendLiveSnapshot])
+
+  useEffect(() => {
+    if (!actaReady || storeMatch || match?.status !== "en_juego") return
+    const onHide = () => { void sendLiveSnapshot() }
+    const onVisibility = () => { if (document.visibilityState === "hidden") onHide() }
+    window.addEventListener("pagehide", onHide)
+    document.addEventListener("visibilitychange", onVisibility)
+    return () => {
+      window.removeEventListener("pagehide", onHide)
+      document.removeEventListener("visibilitychange", onVisibility)
+    }
+  }, [actaReady, storeMatch, match?.status, sendLiveSnapshot])
+
+  const leaveActa = async () => {
+    if (leaving) return
+    if (storeMatch || match?.status !== "en_juego") {
+      router.push("/mesa")
+      return
+    }
+    setLeaving(true)
+    setLeaveError(null)
+    try {
+      if (!isOnline) throw new Error("Estás sin conexión: no cierres el acta hasta sincronizarla.")
+      // Reenviar pendientes y últimas jugadas con UUID: los reintentos son idempotentes.
+      const recent = new Set(localEvents.slice(-5).map((event) => event.id))
+      const toFlush = localEvents.filter((event) =>
+        pendingEventIds.includes(event.id) || (recent.has(event.id) && /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(event.id)))
+      for (const event of toFlush) {
+        if (!await sendEventToServer(event)) throw new Error("Quedan jugadas sin subir. Revisá la conexión e intentá nuevamente.")
+      }
+      setPendingEventIds((previous) => previous.filter((id) => !toFlush.some((event) => event.id === id)))
+      if (!await sendLiveSnapshot()) throw new Error("No se pudo subir el marcador y la formación actual. Intentá nuevamente.")
+      router.push("/mesa")
+    } catch (error) {
+      setLeaveError(error instanceof Error ? error.message : "No se pudo sincronizar el acta.")
+    } finally {
+      setLeaving(false)
+    }
+  }
 
   // Online status
   useEffect(() => {
@@ -2157,11 +2296,13 @@ export default function PlanillaPage() {
       statusReason = trimmedObservations
     }
 
-    updateMatch(matchId, {
-      status: "finalizado",
-      homeScore,
-      awayScore,
-    })
+    if (storeMatch) {
+      try {
+        updateMatch(matchId, { status: "finalizado", homeScore, awayScore })
+      } catch (error) {
+        console.warn("[planilla] No se pudo actualizar el partido de prueba en el store", error)
+      }
+    }
     setSyncStatus("syncing")
 
     // 1) Persistir resultado del partido en la API existente, incluyendo protesta/observaciones
@@ -2237,28 +2378,35 @@ export default function PlanillaPage() {
 
   // Sync simulation
   useEffect(() => {
+    if (!storeMatch) return
     if (match?.status === "en_juego" && syncStatus === "pending" && isOnline) {
       const timer = setTimeout(() => {
-        // Solo actualizamos el store local; los datos se envían a la base recién al finalizar el partido.
-        updateMatch(matchId, { homeScore, awayScore })
-        setSyncStatus("synced")
+        // El store es solo para partidos de prueba; los reales se sincronizan por las APIs.
+        if (storeMatch) {
+          try {
+            updateMatch(matchId, { homeScore, awayScore })
+          } catch (error) {
+            console.warn("[planilla] No se pudo actualizar el partido de prueba en el store", error)
+          }
+        }
+        if (pendingEventIds.length === 0) setSyncStatus("synced")
       }, 1000)
       return () => clearTimeout(timer)
     }
-  }, [syncStatus, isOnline, matchId, homeScore, awayScore, updateMatch, persistMatch])
-
-  if (dbLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <p className="text-muted-foreground">Cargando partido...</p>
-      </div>
-    )
-  }
+  }, [syncStatus, isOnline, match?.status, matchId, homeScore, awayScore, updateMatch, storeMatch, pendingEventIds.length])
 
   if (dbError) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <p className="text-muted-foreground">{dbError}</p>
+      </div>
+    )
+  }
+
+  if (dbLoading || !prePlanillaReady || !actaReady) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <p className="text-muted-foreground">Recuperando acta completa...</p>
       </div>
     )
   }
@@ -2573,7 +2721,7 @@ export default function PlanillaPage() {
       const stealerTeam = getPlayerTeam(stealerId)
       if (stealerTeam) {
         events.push({
-          id: `ev-${Date.now()}-st`,
+          id: newEventId(),
           matchId,
           playerId: stealerId,
           teamId: stealerTeam.teamId,
@@ -2952,10 +3100,21 @@ export default function PlanillaPage() {
 
   return (
     <div className="min-h-screen bg-background flex flex-col overflow-hidden">
+      {leaveError && <div role="alert" className="bg-destructive px-3 py-2 text-center text-xs text-destructive-foreground">{leaveError}</div>}
+      {pendingEventIds.length > 0 && (
+        <div role="status" className="bg-amber-100 px-3 py-1 text-center text-xs text-amber-900">
+          {pendingEventIds.length} jugadas pendientes de subir. No cierres este dispositivo hasta sincronizar.
+        </div>
+      )}
+      {storageError && (
+        <div role="alert" className="bg-destructive px-3 py-2 text-center text-xs text-destructive-foreground">
+          No se pudo guardar la planilla en este dispositivo. No cierres la página; liberá espacio y comprobá la conexión.
+        </div>
+      )}
       <header className="sticky top-0 z-20 border-b bg-card">
         <div className="flex items-center justify-between px-3 py-2 gap-2">
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" onClick={() => router.push("/mesa")} aria-label="Volver">
+            <Button variant="ghost" size="icon" onClick={() => void leaveActa()} disabled={leaving} aria-label="Sincronizar y volver">
               <ArrowLeft className="h-5 w-5" />
             </Button>
             <div className="hidden sm:flex flex-col items-start gap-0.5">
@@ -4575,7 +4734,7 @@ export default function PlanillaPage() {
         open={showFreeThrowDialog}
         onOpenChange={(open) => {
           if (!open) {
-            if (pendingFreeThrow && Object.keys(freeThrowAttempts).length === 0) {
+            if (pendingFreeThrow && !Object.values(freeThrowAttempts).some(Boolean)) {
               setPendingFreeThrow(null)
             }
             setShowFreeThrowDialog(false)
@@ -4727,7 +4886,7 @@ export default function PlanillaPage() {
                 sequence.forEach((s, idx) => {
                   const made = s === "made"
                   const ev: MatchEvent = {
-                    id: `ev-${Date.now()}-${idx}`,
+                    id: newEventId(),
                     matchId,
                     playerId: freeThrowDialogPlayer.id,
                     teamId: playerTeam.teamId,
@@ -4803,7 +4962,7 @@ export default function PlanillaPage() {
           </DialogHeader>
           <div className="space-y-3">
             <p className="text-xs text-muted-foreground">
-              Tocá los jugadores para ponerlos o sacarlos de la cancha. Máximo 5 en cancha.
+              Tocá los jugadores para ponerlos o sacarlos de la cancha. Entre 2 y 5 en cancha.
             </p>
             <div className="flex flex-wrap gap-2">
               {(subsDialogTeamSide === "home" ? homePlayers : awayPlayers)
@@ -4854,6 +5013,9 @@ export default function PlanillaPage() {
               })}
             </div>
           </div>
+          {subsSelection.filter((id) => !isEntityDisqualified(id)).length < 2 && (
+            <p className="text-xs text-destructive">Seleccioná al menos 2 jugadores antes de aplicar los cambios.</p>
+          )}
           <DialogFooter>
             <Button
               variant="outline"
@@ -4873,6 +5035,7 @@ export default function PlanillaPage() {
               Limpiar
             </Button>
             <Button
+              disabled={subsSelection.filter((id) => !isEntityDisqualified(id)).length < 2}
               onClick={() => {
                 const teamSide = subsDialogTeamSide
                 // Jugadores que consideramos actualmente en cancha: excluir descalificados por seguridad
@@ -4888,7 +5051,7 @@ export default function PlanillaPage() {
                   .filter((id) => !after.includes(id))
                   .forEach((playerId) => {
                     events.push({
-                      id: `ev-${Date.now()}-out-${playerId}`,
+                      id: newEventId(),
                       matchId,
                       playerId,
                       teamId,
@@ -4904,7 +5067,7 @@ export default function PlanillaPage() {
                   .filter((id) => !before.includes(id))
                   .forEach((playerId) => {
                     events.push({
-                      id: `ev-${Date.now()}-in-${playerId}`,
+                      id: newEventId(),
                       matchId,
                       playerId,
                       teamId,

@@ -34,6 +34,8 @@ export default function MesaPage() {
   const [courts, setCourts] = useState<CourtRow[]>([])
 
   const [resumeMatch, setResumeMatch] = useState<MatchRow | null>(null)
+  const [resumeLoading, setResumeLoading] = useState(false)
+  const [resumeError, setResumeError] = useState<string | null>(null)
   const [detailMatch, setDetailMatch] = useState<MatchRow | null>(null)
 
   const [isOnline, setIsOnline] = useState(true)
@@ -591,7 +593,10 @@ export default function MesaPage() {
       <Dialog
         open={!!resumeMatch}
         onOpenChange={(open) => {
-          if (!open) setResumeMatch(null)
+          if (!open) {
+            setResumeMatch(null)
+            setResumeError(null)
+          }
         }}
       >
         <DialogContent>
@@ -602,6 +607,7 @@ export default function MesaPage() {
               nueva acta desde cero.
             </DialogDescription>
           </DialogHeader>
+          {resumeError && <p role="alert" className="text-sm text-destructive">{resumeError}</p>}
           <DialogFooter className="flex flex-col sm:flex-row sm:justify-end gap-2">
             <Button
               variant="outline"
@@ -635,40 +641,49 @@ export default function MesaPage() {
               Empezar acta nueva
             </Button>
             <Button
+              disabled={resumeLoading}
               onClick={async () => {
                 if (!resumeMatch) return
                 const id = resumeMatch.id
 
+                setResumeLoading(true)
+                setResumeError(null)
                 try {
                   const { data: sessionData } = await supabase.auth.getSession()
                   const token = sessionData.session?.access_token
-
-                  if (token) {
-                    const res = await fetch(`/api/mesa/matches/${id}/preplanilla`, {
-                      headers: {
-                        authorization: `Bearer ${token}`,
-                      },
-                    })
-
-                    if (res.ok) {
-                      const json = await res.json().catch(() => null)
-                      if (json && json.homeState && json.awayState && typeof window !== "undefined") {
-                        window.localStorage.setItem(
-                          `preplanilla:${id}`,
-                          JSON.stringify({ home: json.homeState, away: json.awayState }),
-                        )
-                      }
+                  if (!token) throw new Error("Iniciá sesión nuevamente para cargar el acta.")
+                  const res = await fetch(`/api/mesa/matches/${id}/preplanilla`, {
+                    headers: { authorization: `Bearer ${token}` },
+                    cache: "no-store",
+                  })
+                  if (res.ok) {
+                    const json = await res.json()
+                    if (!json?.homeState || !json?.awayState) throw new Error("La preplanilla guardada está incompleta.")
+                    try {
+                      window.localStorage.setItem(
+                        `preplanilla:${id}`,
+                        JSON.stringify({ home: json.homeState, away: json.awayState }),
+                      )
+                    } catch {
+                      // La cancha recuperará la preplanilla directamente del servidor.
                     }
+                  } else {
+                    const json = await res.json().catch(() => null)
+                    throw new Error(res.status === 404
+                      ? "Este partido no tiene una preplanilla guardada. Debés completarla antes de cargar el acta."
+                      : json?.error ?? "No se pudo recuperar la preplanilla.")
                   }
-                } catch {
-                  // si falla, continuamos igualmente a la planilla con el estado local existente
-                }
 
-                setResumeMatch(null)
-                router.push(`/mesa/planilla/${id}`)
+                  setResumeMatch(null)
+                  router.push(`/mesa/planilla/${id}?resume=1`)
+                } catch (error) {
+                  setResumeError(error instanceof Error ? error.message : "No se pudo cargar el acta. Intentá de nuevo.")
+                } finally {
+                  setResumeLoading(false)
+                }
               }}
             >
-              Cargar acta iniciada
+              {resumeLoading ? "Cargando..." : "Cargar acta iniciada"}
             </Button>
           </DialogFooter>
         </DialogContent>

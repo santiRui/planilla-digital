@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 import { createSupabaseAdminClient } from "@/lib/supabase/admin"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
+import { validateTeamSelection } from "@/lib/preplanilla-state"
 
 const teamStateSchema = z.object({
   staffIds: z.array(z.string()),
@@ -86,19 +87,43 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     }
 
     const { homeState, awayState } = parsed.data
+    const { data: matchRow, error: matchError } = await auth.adminClient
+      .from("matches")
+      .select("home_team_id, away_team_id")
+      .eq("id", matchId)
+      .maybeSingle()
+    if (matchError || !matchRow) {
+      return NextResponse.json({ error: matchError?.message ?? "Partido no encontrado" }, { status: 404 })
+    }
 
-    const { error: upsertError } = await auth.adminClient
+    const { data: players, error: playersError } = await auth.adminClient
+      .from("players")
+      .select("id, team_id, jersey_number")
+      .in("team_id", [matchRow.home_team_id, matchRow.away_team_id])
+    if (playersError) return NextResponse.json({ error: playersError.message }, { status: 400 })
+    const rosterById = new Map((players ?? []).map((player) => [player.id, player]))
+
+    for (const [label, teamId, teamState] of [
+      ["local", matchRow.home_team_id, homeState],
+      ["visitante", matchRow.away_team_id, awayState],
+    ] as const) {
+      const invalid = validateTeamSelection(teamState, teamId, label, rosterById)
+      if (invalid) return NextResponse.json({ error: invalid.error }, { status: invalid.status })
+    }
+
+    const { data: saved, error: upsertError } = await auth.adminClient
       .from("match_preplanilla_state")
       .upsert({
         match_id: matchId,
         home_state: homeState,
         away_state: awayState,
         updated_at: new Date().toISOString(),
-      })
-      .eq("match_id", matchId)
+      }, { onConflict: "match_id" })
+      .select("match_id")
+      .single()
 
-    if (upsertError) {
-      return NextResponse.json({ error: upsertError.message }, { status: 400 })
+    if (upsertError || !saved) {
+      return NextResponse.json({ error: upsertError?.message ?? "No se pudo guardar la preplanilla" }, { status: 400 })
     }
 
     return NextResponse.json({ ok: true })
@@ -143,7 +168,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
     return NextResponse.json({
       homeState: (data as any).home_state,
       awayState: (data as any).away_state,
-    })
+    }, { headers: { "Cache-Control": "no-store" } })
   } catch (e) {
     const message = e instanceof Error ? e.message : "Error interno"
     console.error("GET /api/mesa/matches/[id]/preplanilla failed:", e)

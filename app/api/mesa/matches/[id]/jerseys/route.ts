@@ -21,7 +21,7 @@ async function assertMesaJerseyRole(accessToken: string, matchId: string) {
 
   const { data: callerProfile, error: callerProfileError } = await adminClient
     .from("profiles")
-    .select("role")
+    .select("role, is_table_official")
     .eq("id", callerId)
     .maybeSingle()
 
@@ -34,24 +34,7 @@ async function assertMesaJerseyRole(accessToken: string, matchId: string) {
     return { ok: true as const, adminClient, callerId, role }
   }
 
-  if (role !== "oficial_mesa" && role !== "arbitro") {
-    return { ok: false as const, status: 403, error: "Prohibido" }
-  }
-
-  // Solo oficial de mesa asignado al partido puede modificar dorsales
-  const { data: assignment, error: assignmentError } = await adminClient
-    .from("match_official_assignments")
-    .select("id")
-    .eq("match_id", matchId)
-    .eq("user_id", callerId)
-    .eq("role", "oficial_mesa")
-    .maybeSingle()
-
-  if (assignmentError) {
-    return { ok: false as const, status: 400, error: assignmentError.message }
-  }
-
-  if (!assignment) {
+  if (role !== "oficial_mesa" && !(role === "arbitro" && callerProfile?.is_table_official)) {
     return { ok: false as const, status: 403, error: "Prohibido" }
   }
 
@@ -112,16 +95,22 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       return NextResponse.json({ error: "Jugador no pertenece a este partido" }, { status: 400 })
     }
 
-    const { error: updateError } = await auth.adminClient
+    const { data: updated, error: updateError } = await auth.adminClient
       .from("players")
       .update({ jersey_number: jerseyNumber })
       .eq("id", playerId)
+      .eq("team_id", teamId)
+      .select("id, jersey_number")
+      .single()
 
-    if (updateError) {
-      return NextResponse.json({ error: updateError.message }, { status: 400 })
+    if (updateError || !updated) {
+      if (updateError?.code === "23505") {
+        return NextResponse.json({ error: "Ese número ya pertenece a otro jugador del equipo" }, { status: 409 })
+      }
+      return NextResponse.json({ error: updateError?.message ?? "No se pudo actualizar el dorsal" }, { status: 400 })
     }
 
-    return NextResponse.json({ ok: true })
+    return NextResponse.json({ ok: true, jerseyNumber: updated.jersey_number })
   } catch (e) {
     const message = e instanceof Error ? e.message : "Error interno"
     console.error("POST /api/mesa/matches/[id]/jerseys failed:", e)

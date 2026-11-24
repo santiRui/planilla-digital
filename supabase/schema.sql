@@ -244,6 +244,7 @@ create table if not exists public.matches (
   court_id uuid references public.courts(id) on delete set null,
   home_score int,
   away_score int,
+  live_state jsonb,
   playoff_series_id uuid,
   series_game_number int,
   created_at timestamptz not null default now(),
@@ -256,6 +257,9 @@ add column if not exists playoff_series_id uuid;
 
 alter table public.matches
 add column if not exists series_game_number int;
+
+alter table public.matches
+add column if not exists live_state jsonb;
 
 alter table public.matches
 add column if not exists zone_code text;

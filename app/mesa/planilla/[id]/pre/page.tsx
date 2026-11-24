@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
+import { useEffect, useMemo, useState, type ChangeEvent } from "react"
 import { useParams, useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -16,6 +16,7 @@ import { Label } from "@/components/ui/label"
 import { Checkbox } from "@/components/ui/checkbox"
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser"
 import type { Player } from "@/lib/types"
+import { snapshotTeamNumbers } from "@/lib/preplanilla-state"
 import { ArrowLeft, CheckCircle2, Circle, Play } from "lucide-react"
 
 type Side = "home" | "away"
@@ -77,6 +78,19 @@ const defaultState = (): PrePlanillaState => ({
   away: emptyTeamState(),
 })
 
+async function fetchWithTimeout(url: string, options: RequestInit) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 15000)
+  try {
+    return await fetch(url, { ...options, signal: controller.signal })
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error("La conexión tardó demasiado. Revisá internet e intentá de nuevo.")
+    throw error
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export default function PrePlanillaPage() {
   const params = useParams()
   const router = useRouter()
@@ -111,12 +125,14 @@ export default function PrePlanillaPage() {
   const [sendSubmitting, setSendSubmitting] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
   const [sendSuccess, setSendSuccess] = useState(false)
+  const [storageError, setStorageError] = useState(false)
+  const [preplanillaLoaded, setPreplanillaLoaded] = useState(false)
 
   const [state, setState] = useState<PrePlanillaState>(() => {
     if (typeof window === "undefined") return defaultState()
-    const raw = window.localStorage.getItem(`preplanilla:${matchId}`)
-    if (!raw) return defaultState()
     try {
+      const raw = window.localStorage.getItem(`preplanilla:${matchId}`)
+      if (!raw) return defaultState()
       const parsed = JSON.parse(raw)
 
       const migrateTeam = (team: any): PrePlanillaTeamState => {
@@ -188,71 +204,55 @@ export default function PrePlanillaPage() {
   }
 
   useEffect(() => {
-    if (typeof window === "undefined") return
+    if (typeof window === "undefined" || !preplanillaLoaded) return
     const key = `preplanilla:${matchId}`
     try {
       window.localStorage.setItem(key, JSON.stringify(state))
-    } catch (e: any) {
-      // En algunos dispositivos móviles el espacio de localStorage es muy limitado.
-      // Si se excede la cuota, intentamos liberar espacio borrando otras preplanillas
-      // antiguas y reintentamos una única vez.
-      const isQuotaError = e && typeof e === "object" && (e as DOMException).name === "QuotaExceededError"
-      if (isQuotaError) {
-        try {
-          const keysToRemove: string[] = []
-          for (let i = 0; i < window.localStorage.length; i++) {
-            const k = window.localStorage.key(i)
-            if (!k) continue
-            if (k.startsWith("preplanilla:") && k !== key) {
-              keysToRemove.push(k)
-            }
-          }
-          for (const k of keysToRemove) {
-            window.localStorage.removeItem(k)
-          }
-
-          // Reintentar una vez después de limpiar
-          try {
-            window.localStorage.setItem(key, JSON.stringify(state))
-            return
-          } catch (e2) {
-            console.warn("[preplanilla] Reintento de guardado falló tras limpiar claves", e2)
-          }
-        } catch (cleanupError) {
-          console.warn("[preplanilla] Error limpiando claves antiguas", cleanupError)
-        }
-      }
-
+      setStorageError((previous) => previous ? false : previous)
+    } catch (e) {
       console.warn("[preplanilla] No se pudo guardar en localStorage", e)
+      setStorageError((previous) => previous ? previous : true)
     }
-  }, [state, matchId])
-
-  const skipNextAutosaveRef = useRef(false)
+  }, [state, matchId, preplanillaLoaded])
 
   // Si no hay estado local, intentar cargar el remoto al entrar en la pre-planilla.
   // Esto permite continuar desde otro dispositivo.
   useEffect(() => {
     const run = async () => {
       if (typeof window === "undefined") return
-      const raw = window.localStorage.getItem(`preplanilla:${matchId}`)
-      if (raw) return
+      let raw: string | null = null
+      try {
+        raw = window.localStorage.getItem(`preplanilla:${matchId}`)
+        if (raw) {
+          const parsed = JSON.parse(raw)
+          if (parsed?.home && parsed?.away) {
+            setPreplanillaLoaded(true)
+            return
+          }
+        }
+      } catch {
+        // El estado local no está disponible; intentamos recuperar el remoto.
+      }
 
       try {
         const { data: sessionData } = await supabase.auth.getSession()
         const token = sessionData.session?.access_token
-        if (!token) return
+        if (!token) throw new Error("Iniciá sesión nuevamente para cargar la preplanilla.")
 
-        const res = await fetch(`/api/mesa/matches/${matchId}/preplanilla`, {
+        const res = await fetchWithTimeout(`/api/mesa/matches/${matchId}/preplanilla`, {
           headers: {
             authorization: `Bearer ${token}`,
           },
         })
 
-        if (!res.ok) return
+        if (res.status === 404) {
+          setPreplanillaLoaded(true)
+          return
+        }
+        if (!res.ok) throw new Error("No se pudo recuperar la preplanilla. Actualizá la página para reintentar.")
         const json = (await res.json().catch(() => null)) as any
-        if (!json?.homeState || !json?.awayState) return
+        if (!json?.homeState || !json?.awayState) throw new Error("La preplanilla guardada está incompleta.")
 
-        skipNextAutosaveRef.current = true
         const nextState: PrePlanillaState = {
           home: { ...emptyTeamState(), ...(json.homeState ?? {}) },
           away: { ...emptyTeamState(), ...(json.awayState ?? {}) },
@@ -261,73 +261,86 @@ export default function PrePlanillaPage() {
           window.localStorage.setItem(`preplanilla:${matchId}`, JSON.stringify(nextState))
         } catch (e) {
           console.warn("[preplanilla] No se pudo inicializar estado en localStorage", e)
+          setStorageError(true)
         }
         setState(nextState)
-      } catch {
-        // si falla, seguimos con estado vacío
+        setPreplanillaLoaded(true)
+      } catch (error) {
+        setError(error instanceof Error ? error.message : "No se pudo recuperar la preplanilla.")
       }
     }
 
     run()
   }, [supabase, matchId])
 
+  const persistPreplanilla = async (token: string, selection: PrePlanillaState) => {
+    const snapshot: PrePlanillaState = {
+      home: snapshotTeamNumbers(selection.home, homePlayers),
+      away: snapshotTeamNumbers(selection.away, awayPlayers),
+    }
+
+    for (const side of ["home", "away"] as const) {
+      const roster = side === "home" ? homePlayers : awayPlayers
+      for (const [playerId, jerseyNumber] of Object.entries(snapshot[side].jerseyByPlayerId)) {
+        const player = roster.find((candidate) => candidate.id === playerId)
+        if (!player) throw new Error("Hay un dorsal asignado a un jugador que no pertenece al equipo.")
+        if (player.jerseyNumber === jerseyNumber) continue
+        const jerseyResponse = await fetchWithTimeout(`/api/mesa/matches/${matchId}/jerseys`, {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+          body: JSON.stringify({ playerId, jerseyNumber }),
+        })
+        if (!jerseyResponse.ok) {
+          const result = await jerseyResponse.json().catch(() => null)
+          throw new Error(result?.error ?? `No se pudo guardar el dorsal de ${player.lastName}.`)
+        }
+        if (side === "home") setHomePlayers((previous) =>
+          previous.map((candidate) => candidate.id === playerId ? { ...candidate, jerseyNumber } : candidate))
+        else setAwayPlayers((previous) =>
+          previous.map((candidate) => candidate.id === playerId ? { ...candidate, jerseyNumber } : candidate))
+      }
+    }
+
+    const response = await fetchWithTimeout(`/api/mesa/matches/${matchId}/preplanilla`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ homeState: snapshot.home, awayState: snapshot.away }),
+    })
+    if (!response.ok) {
+      const result = await response.json().catch(() => null)
+      throw new Error(result?.error ?? "No se pudo guardar la preplanilla completa.")
+    }
+    setState(snapshot)
+    return snapshot
+  }
+
   const sendData = async () => {
+    if (sendSubmitting) return
     setSendError(null)
     setSendSuccess(false)
+    if (!state.home.confirmed || !state.away.confirmed) {
+      setSendError("Confirmá los cinco iniciales de ambos equipos antes de enviar los datos.")
+      return
+    }
     setSendSubmitting(true)
     try {
       const { data: sessionData } = await supabase.auth.getSession()
       const token = sessionData.session?.access_token
-      if (!token) {
-        setSendError("No se pudo enviar: sesión no iniciada. Volvé a iniciar sesión e intentá nuevamente.")
-        setSendSubmitting(false)
-        return
-      }
-
-      const res = await fetch(`/api/mesa/matches/${matchId}/preplanilla`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          homeState: state.home,
-          awayState: state.away,
-        }),
-      })
-
-      if (!res.ok) {
-        const json = (await res.json().catch(() => null)) as any
-        const backendMsg = typeof json?.error === "string" ? json.error : ""
-
-        if (res.status === 401) {
-          setSendError("No se pudo enviar: sesión expirada o no autorizada. Volvé a iniciar sesión.")
-        } else if (res.status === 403) {
-          setSendError(
-            "No se pudo enviar: no tenés permisos (403). Verificá que tu cuenta tenga rol de Mesa o sea Admin.",
-          )
-        } else if (res.status === 404) {
-          setSendError("No se pudo enviar: no hay pre-planilla asociada o el recurso no existe (404).")
-        } else if (res.status === 400) {
-          setSendError(
-            backendMsg
-              ? `No se pudo enviar: ${backendMsg}`
-              : "No se pudo enviar: datos inválidos. Revisá la selección de jugadores/iniciales y probá nuevamente.",
-          )
-        } else {
-          setSendError(backendMsg ? `No se pudieron enviar los datos: ${backendMsg}` : "No se pudieron enviar los datos")
-        }
-
-        setSendSubmitting(false)
-        return
+      if (!token) throw new Error("Sesión expirada. Volvé a iniciar sesión.")
+      const saved = await persistPreplanilla(token, state)
+      try {
+        window.localStorage.setItem(`preplanilla:${matchId}`, JSON.stringify(saved))
+        setStorageError(false)
+      } catch {
+        setStorageError(true)
       }
 
       setSendSuccess(true)
       setTimeout(() => {
         setSendSuccess(false)
       }, 2500)
-    } catch {
-      setSendError("No se pudieron enviar los datos: error de conexión. Revisá tu internet e intentá nuevamente.")
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : "No se pudieron enviar los datos.")
     } finally {
       setSendSubmitting(false)
     }
@@ -575,6 +588,7 @@ export default function PrePlanillaPage() {
   const [jerseyDialogPlayer, setJerseyDialogPlayer] = useState<Player | null>(null)
   const [jerseyDialogValue, setJerseyDialogValue] = useState("")
   const [jerseyDialogError, setJerseyDialogError] = useState<string | null>(null)
+  const [jerseySaving, setJerseySaving] = useState(false)
 
   const openJerseyDialog = (player: Player) => {
     setJerseyDialogPlayer(player)
@@ -584,12 +598,12 @@ export default function PrePlanillaPage() {
   }
 
   const commitJerseyChange = async () => {
-    if (!jerseyDialogPlayer) return
+    if (!jerseyDialogPlayer || jerseySaving) return
     const raw = jerseyDialogValue.trim()
     const next = Number(raw)
 
-    if (!raw || Number.isNaN(next) || next < 0) {
-      setJerseyDialogError("Número inválido")
+    if (!raw || !Number.isInteger(next) || next < 0 || next > 999) {
+      setJerseyDialogError("Ingresá un número entero entre 0 y 999")
       return
     }
 
@@ -603,41 +617,49 @@ export default function PrePlanillaPage() {
       return
     }
 
-    setState((prev: PrePlanillaState) => ({
-      ...prev,
-      [activeSide]: {
-        ...prev[activeSide],
-        jerseyByPlayerId: {
-          ...prev[activeSide].jerseyByPlayerId,
-          [jerseyDialogPlayer.id]: next,
-        },
-      },
-    }))
-
+    const playerId = jerseyDialogPlayer.id
+    const side = activeSide
+    setJerseySaving(true)
+    setJerseyDialogError(null)
     try {
       const { data: sessionData } = await supabase.auth.getSession()
       const token = sessionData.session?.access_token
-      if (!token) throw new Error("No autorizado")
+      if (!token) throw new Error("Sesión expirada. Volvé a iniciar sesión.")
 
-      const res = await fetch(`/api/mesa/matches/${matchId}/jerseys`, {
+      const res = await fetchWithTimeout(`/api/mesa/matches/${matchId}/jerseys`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ playerId: jerseyDialogPlayer.id, jerseyNumber: next }),
+        body: JSON.stringify({ playerId, jerseyNumber: next }),
       })
 
       if (!res.ok) {
         const json = (await res.json().catch(() => null)) as any
         throw new Error(json?.error ?? "No se pudo guardar el dorsal")
       }
-    } catch {
-      // Si falla la persistencia en BD, mantenemos el cambio local
-    }
+      const saved = await res.json()
+      if (saved.jerseyNumber !== next) throw new Error("La base de datos devolvió otro dorsal. Intentá nuevamente.")
 
-    setJerseyDialogOpen(false)
-    setJerseyDialogPlayer(null)
+      setState((prev: PrePlanillaState) => ({
+        ...prev,
+        [side]: {
+          ...prev[side],
+          jerseyByPlayerId: { ...prev[side].jerseyByPlayerId, [playerId]: next },
+        },
+      }))
+      const updatePlayer = (players: Player[]) =>
+        players.map((player) => player.id === playerId ? { ...player, jerseyNumber: next } : player)
+      setHomePlayers(updatePlayer)
+      setAwayPlayers(updatePlayer)
+      setJerseyDialogOpen(false)
+      setJerseyDialogPlayer(null)
+    } catch (error) {
+      setJerseyDialogError(error instanceof Error ? error.message : "No se pudo guardar el dorsal.")
+    } finally {
+      setJerseySaving(false)
+    }
   }
 
   const togglePlayerSelected = (playerId: string) => {
@@ -699,6 +721,7 @@ export default function PrePlanillaPage() {
       const cur = prev[activeSide]
       if (!cur.selectedPlayerIds.includes(playerId)) return prev
       const exists = cur.starters.includes(playerId)
+      if (!exists && cur.starters.length >= 5) return prev
       const nextStarters = exists
         ? cur.starters.filter((id: string) => id !== playerId)
         : [...cur.starters, playerId]
@@ -711,6 +734,7 @@ export default function PrePlanillaPage() {
     setState((prev: PrePlanillaState) => {
       const cur = prev[activeSide]
       if (!cur.selectedPlayerIds.includes(playerId)) return prev
+      if (!cur.starters.includes(playerId) && cur.starters.length >= 5) return prev
       const nextStarters = cur.starters.includes(playerId) ? cur.starters : [...cur.starters, playerId]
       return { ...prev, [activeSide]: { ...cur, starters: nextStarters, captainId: playerId } }
     })
@@ -718,7 +742,7 @@ export default function PrePlanillaPage() {
 
   const canContinueRoster = () => {
     if (!activeTeam) return false
-    if (activeState.selectedPlayerIds.length < 3) return false
+    if (activeState.selectedPlayerIds.length < 5) return false
 
     const selectedIds = new Set(activeState.selectedPlayerIds)
     const jerseys = activePlayers
@@ -758,7 +782,7 @@ export default function PrePlanillaPage() {
   }
 
   const canContinueStarters = () => {
-    if (activeState.starters.length < 3) return false
+    if (activeState.starters.length !== 5) return false
     if (!activeState.captainId) return false
     if (!activeState.starters.includes(activeState.captainId)) return false
     return true
@@ -772,7 +796,7 @@ export default function PrePlanillaPage() {
     return "Confirmar local"
   })()
 
-  if (loading) {
+  if (loading || (!preplanillaLoaded && !error)) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <p className="text-muted-foreground">Cargando...</p>
@@ -800,6 +824,11 @@ export default function PrePlanillaPage() {
 
   return (
     <div className="min-h-screen bg-background">
+      {storageError && (
+        <div role="alert" className="bg-destructive px-3 py-2 text-center text-xs text-destructive-foreground">
+          No se pudo guardar la preplanilla en este dispositivo. No cierres la página; liberá espacio y volvé a intentarlo.
+        </div>
+      )}
       <header className="sticky top-0 z-10 border-b bg-card">
         <div className="flex items-center justify-between p-3">
           <Button variant="ghost" size="icon" onClick={() => router.push("/mesa")}
@@ -875,7 +904,7 @@ export default function PrePlanillaPage() {
             <Button variant="outline" onClick={() => setNoShowDialogOpen(true)}>
               Finalizar por no presentación
             </Button>
-            <Button variant="outline" onClick={sendData} disabled={sendSubmitting}>
+            <Button variant="outline" onClick={sendData} disabled={sendSubmitting || !bothConfirmed || !preplanillaLoaded}>
               Enviar datos
             </Button>
           </div>
@@ -888,29 +917,29 @@ export default function PrePlanillaPage() {
               <Button
                 size="lg"
                 className="h-16 w-16 rounded-full"
+                disabled={sendSubmitting || !preplanillaLoaded}
                 onClick={async () => {
+                  if (sendSubmitting) return
+                  setSendSubmitting(true)
+                  setSendError(null)
                   try {
                     const { data: sessionData } = await supabase.auth.getSession()
                     const token = sessionData.session?.access_token
-                    if (!token) {
-                      return
-                    }
+                    if (!token) throw new Error("La sesión expiró. Volvé a iniciar sesión.")
 
-                    await fetch(`/api/mesa/matches/${matchId}/preplanilla`, {
-                      method: "POST",
-                      headers: {
-                        "content-type": "application/json",
-                        authorization: `Bearer ${token}`,
-                      },
-                      body: JSON.stringify({
-                        homeState: state.home,
-                        awayState: state.away,
-                      }),
-                    })
+                    const saved = await persistPreplanilla(token, state)
+
+                    // La cancha utiliza esta selección para titulares, dorsales y capitán.
+                    // No avanzar si el dispositivo no puede conservarla localmente.
+                    try {
+                      window.localStorage.setItem(`preplanilla:${matchId}`, JSON.stringify(saved))
+                    } catch {
+                      throw new Error("No hay espacio para guardar la preplanilla en este dispositivo. Liberá almacenamiento e intentá de nuevo.")
+                    }
 
                     // Iniciar el partido (en_juego) desde mesa, sin depender de un árbitro.
                     if (match?.status !== "en_juego") {
-                      await fetch(`/api/mesa/matches/${matchId}`, {
+                      const startResponse = await fetchWithTimeout(`/api/mesa/matches/${matchId}`, {
                         method: "PATCH",
                         headers: {
                           "content-type": "application/json",
@@ -918,12 +947,18 @@ export default function PrePlanillaPage() {
                         },
                         body: JSON.stringify({ status: "en_juego" }),
                       })
+                      if (!startResponse.ok) {
+                        const result = await startResponse.json().catch(() => null)
+                        throw new Error(result?.error ?? "No se pudo iniciar el partido.")
+                      }
                     }
-                  } catch {
-                    // si falla el guardado remoto, igual continuamos usando el estado local
-                  }
 
-                  router.push(`/mesa/planilla/${matchId}`)
+                    router.push(`/mesa/planilla/${matchId}`)
+                  } catch (error) {
+                    setSendError(error instanceof Error ? error.message : "Error de conexión. Intentá de nuevo.")
+                  } finally {
+                    setSendSubmitting(false)
+                  }
                 }}
               >
                 <Play className="h-6 w-6" />
@@ -1109,7 +1144,7 @@ export default function PrePlanillaPage() {
             Seleccionar jugadores para el partido
           </Button>
 
-          <Dialog open={jerseyDialogOpen} onOpenChange={setJerseyDialogOpen}>
+          <Dialog open={jerseyDialogOpen} onOpenChange={(open) => { if (!jerseySaving) setJerseyDialogOpen(open) }}>
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>Cambiar Dorsal</DialogTitle>
@@ -1125,10 +1160,10 @@ export default function PrePlanillaPage() {
                 {jerseyDialogError && <p className="text-sm text-destructive">{jerseyDialogError}</p>}
               </div>
               <DialogFooter>
-                <Button variant="outline" onClick={() => setJerseyDialogOpen(false)}>
+                <Button variant="outline" onClick={() => setJerseyDialogOpen(false)} disabled={jerseySaving}>
                   Cancelar
                 </Button>
-                <Button onClick={commitJerseyChange}>Cambiar</Button>
+                <Button onClick={commitJerseyChange} disabled={jerseySaving}>{jerseySaving ? "Guardando..." : "Cambiar"}</Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
@@ -1163,7 +1198,7 @@ export default function PrePlanillaPage() {
           </div>
 
           <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-            <div>Seleccionados: {activeState.starters.length}</div>
+            <div>Iniciales: {activeState.starters.length}/5</div>
             <div>Capitán: {activeState.captainId ? "OK" : "Falta"}</div>
           </div>
 

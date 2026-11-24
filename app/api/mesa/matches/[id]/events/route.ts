@@ -41,6 +41,35 @@ function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
 }
 
+export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  try {
+    const { id: matchId } = await ctx.params
+    const accessToken = req.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1]
+    if (!accessToken) return NextResponse.json({ error: "No autorizado" }, { status: 401 })
+    const auth = await assertMesaEventsRole(accessToken, matchId)
+    if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status })
+
+    const events: unknown[] = []
+    const pageSize = 500
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await auth.adminClient
+        .from("match_events")
+        .select("id, match_id, team_id, player_id, type, points, period, game_time, occurred_at, shot_type, made, x, y, rebound_type, foul_type, victim_team_id, victim_player_id")
+        .eq("match_id", matchId)
+        .order("occurred_at", { ascending: true })
+        .order("id", { ascending: true })
+        .range(offset, offset + pageSize - 1)
+      if (error) return NextResponse.json({ error: error.message }, { status: 400 })
+      events.push(...(data ?? []))
+      if ((data ?? []).length < pageSize) break
+    }
+    return NextResponse.json({ events }, { headers: { "Cache-Control": "no-store" } })
+  } catch (e) {
+    console.error("GET /api/mesa/matches/[id]/events failed:", e)
+    return NextResponse.json({ error: "No se pudo cargar el historial completo" }, { status: 500 })
+  }
+}
+
 async function assertMesaEventsRole(accessToken: string, matchId: string) {
   const adminClient = createSupabaseAdminClient()
   const userClient = createSupabaseServerClient(accessToken)
