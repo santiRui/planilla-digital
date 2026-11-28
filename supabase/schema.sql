@@ -4,7 +4,7 @@ create type public.user_role as enum ('admin', 'arbitro', 'oficial_mesa');
 create type public.branch as enum ('masculino', 'femenino', 'mixto');
 create type public.tournament_status as enum ('activo', 'finalizado', 'pendiente');
 create type public.match_status as enum ('programado', 'en_juego', 'finalizado');
-create type public.tournament_phase as enum ('fase_regular', 'playoff', 'cuartos', 'semifinal', 'final');
+create type public.tournament_phase as enum ('fase_regular', 'playoff', 'octavos', 'cuartos', 'semifinal', 'final');
 create type public.match_event_type as enum ('points', 'foul', 'substitution_in', 'substitution_out');
 create type public.match_official_role as enum ('arbitro', 'oficial_mesa');
 
@@ -280,17 +280,25 @@ create index if not exists matches_tournament_phase_zone_round_idx on public.mat
 create table if not exists public.tournament_playoff_config (
   tournament_id uuid primary key references public.tournaments(id) on delete cascade,
   qualified_teams int not null,
+  best_of_octavos int not null default 1,
   best_of_cuartos int not null default 1,
   best_of_semifinal int not null default 1,
   best_of_final int not null default 1,
   tiebreak_mode public.tiebreak_mode not null default 'olimpico_sorteo',
+  jo_playoff_total int,
+  jo_from_ganadores int,
+  jo_from_perdedores int,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint tournament_playoff_config_qualified_teams_check check (qualified_teams in (2,4,8)),
+  constraint tournament_playoff_config_best_of_octavos_check check (best_of_octavos between 1 and 9),
   constraint tournament_playoff_config_best_of_check check (
     best_of_cuartos >= 1 and best_of_semifinal >= 1 and best_of_final >= 1
   )
 );
+
+alter table public.tournament_playoff_config
+add column if not exists jo_bracket_version integer not null default 1;
 
 create table if not exists public.playoff_series (
   id uuid primary key default gen_random_uuid(),
@@ -305,7 +313,9 @@ create table if not exists public.playoff_series (
   random_winner_team_id uuid references public.teams(id) on delete set null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  constraint playoff_series_distinct_teams check (home_team_id <> away_team_id),
+  constraint playoff_series_distinct_teams check (
+    home_team_id <> away_team_id or (winner_team_id = home_team_id and tiebreak_applied = 'bye')
+  ),
   constraint playoff_series_best_of_check check (best_of >= 1),
   unique (tournament_id, phase, series_index)
 );

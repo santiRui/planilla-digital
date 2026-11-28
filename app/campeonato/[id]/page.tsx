@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Activity, Calendar, Trophy, Users, ArrowLeft } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser"
+import { SERIES_RESOLVED_REASON } from "@/lib/playoff-series"
 
 type Branch = "masculino" | "femenino" | "mixto"
 
@@ -93,7 +94,7 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
   // Pestaña activa en los Tabs (fechas, en_vivo, tabla, equipos)
   const [activeTab, setActiveTab] = useState<"fechas" | "en_vivo" | "tabla" | "equipos">("fechas")
   // Filtro de fase para el fixture (fase_regular, cuartos, semifinal, final)
-  const [phaseFilter, setPhaseFilter] = useState<"fase_regular" | "cuartos" | "semifinal" | "final">("fase_regular")
+  const [phaseFilter, setPhaseFilter] = useState<"fase_regular" | "octavos" | "cuartos" | "semifinal" | "final">("fase_regular")
   // Estado colapsado/expandido por grupo de fecha
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
 
@@ -208,7 +209,7 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
       const { data: matchRowsRaw, error: mError } = (await supabase
         .from("matches")
         .select(
-          "id, round, status, scheduled_at, home_score, away_score, live_home_score, live_away_score, live_period, live_game_time, home_team_id, away_team_id, phase, zone_code, created_at",
+          "id, round, status, status_reason, scheduled_at, home_score, away_score, live_home_score, live_away_score, live_period, live_game_time, home_team_id, away_team_id, phase, zone_code, created_at",
         )
         .eq("tournament_id", id)) as any
 
@@ -223,7 +224,7 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
 
       console.log("[ChampionshipPage] matchRows", matchRowsRaw)
 
-      let matchRows = matchRowsRaw ?? []
+      let matchRows = (matchRowsRaw ?? []).filter((row: any) => row.status_reason !== SERIES_RESOLVED_REASON)
 
       const loadFinalScores = async (matchIds: string[]) => {
         if (matchIds.length === 0) return
@@ -429,6 +430,9 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
               if (!matchId) return
 
               setMatches((current) => {
+                if (updated.status_reason === SERIES_RESOLVED_REASON) {
+                  return current.filter((m) => m.id !== matchId)
+                }
                 const exists = current.some((m) => m.id === matchId)
                 if (!exists) return current
 
@@ -755,6 +759,15 @@ export default function ChampionshipPage({ params }: ChampionshipPageProps) {
               >
                 Fase de grupos
               </Button>
+              {matches.some((m) => m.phase === "octavos") && (
+                <Button
+                  size="sm"
+                  variant={phaseFilter === "octavos" ? "default" : "outline"}
+                  onClick={() => setPhaseFilter("octavos")}
+                >
+                  Octavos de final
+                </Button>
+              )}
               {matches.some((m) => m.phase === "cuartos") && (
                 <Button
                   size="sm"

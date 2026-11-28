@@ -6,14 +6,15 @@ import { createSupabaseServerClient } from "@/lib/supabase/server"
 const configSchema = z.object({
   tournamentId: z.string().min(1),
   qualifiedTeams: z.number().int().refine((v) => [2, 4, 8].includes(v), "Clasificados inválidos"),
+  bestOfOctavos: z.number().int().min(1).max(9).optional(),
   bestOfCuartos: z.number().int().min(1).max(9),
   bestOfSemifinal: z.number().int().min(1).max(9),
   bestOfFinal: z.number().int().min(1).max(9),
   tiebreakMode: z.enum(["olimpico_sorteo", "olimpico_sin_sorteo", "labas"]),
   // Configuración opcional para formato Juegos Olímpicos
-  joPlayoffTotal: z.number().int().min(0).optional(),
-  joFromGanadores: z.number().int().min(0).optional(),
-  joFromPerdedores: z.number().int().min(0).optional(),
+  joPlayoffTotal: z.number().int().min(2).max(16).optional(),
+  joFromGanadores: z.number().int().min(0).max(16).optional(),
+  joFromPerdedores: z.number().int().min(0).max(16).optional(),
 })
 
 type TiebreakMode = "olimpico_sorteo" | "olimpico_sin_sorteo" | "labas"
@@ -124,11 +125,22 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Falta tournamentId" }, { status: 400 })
     }
 
-    const { data, error } = await auth.adminClient
+    const columns = "tournament_id, qualified_teams, best_of_cuartos, best_of_semifinal, best_of_final, tiebreak_mode, jo_playoff_total, jo_from_ganadores, jo_from_perdedores"
+    let { data, error } = await auth.adminClient
       .from("tournament_playoff_config")
-      .select("tournament_id, qualified_teams, best_of_cuartos, best_of_semifinal, best_of_final, tiebreak_mode, jo_playoff_total, jo_from_ganadores, jo_from_perdedores")
+      .select(`${columns}, best_of_octavos`)
       .eq("tournament_id", tournamentId)
       .maybeSingle()
+
+    if (error && (error.code === "42703" || error.code === "PGRST204")) {
+      const legacy = await auth.adminClient
+        .from("tournament_playoff_config")
+        .select(columns)
+        .eq("tournament_id", tournamentId)
+        .maybeSingle()
+      data = legacy.data ? { ...legacy.data, best_of_octavos: 1 } : null
+      error = legacy.error
+    }
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 400 })
@@ -143,6 +155,7 @@ export async function GET(req: Request) {
         tournamentId: data.tournament_id,
         qualifiedTeams: data.qualified_teams,
         startPhase: phaseFromQualified(data.qualified_teams),
+        bestOfOctavos: (data as any).best_of_octavos ?? 1,
         bestOfCuartos: data.best_of_cuartos,
         bestOfSemifinal: data.best_of_semifinal,
         bestOfFinal: data.best_of_final,
@@ -186,6 +199,7 @@ export async function PUT(req: Request) {
     const {
       tournamentId,
       qualifiedTeams,
+      bestOfOctavos,
       bestOfCuartos,
       bestOfSemifinal,
       bestOfFinal,
@@ -194,6 +208,15 @@ export async function PUT(req: Request) {
       joFromGanadores,
       joFromPerdedores,
     } = parsed.data
+
+    if (joPlayoffTotal != null) {
+      const { data: existing, error: existingError } = await auth.adminClient
+        .from("playoff_series").select("id").eq("tournament_id", tournamentId).limit(1)
+      if (existingError) return NextResponse.json({ error: existingError.message }, { status: 400 })
+      if (existing?.length) {
+        return NextResponse.json({ error: "Ya hay playoffs generados. No se pueden cambiar los cupos." }, { status: 409 })
+      }
+    }
 
     const { error } = await auth.adminClient.from("tournament_playoff_config").upsert({
       tournament_id: tournamentId,
@@ -205,10 +228,15 @@ export async function PUT(req: Request) {
       jo_playoff_total: joPlayoffTotal ?? null,
       jo_from_ganadores: joFromGanadores ?? null,
       jo_from_perdedores: joFromPerdedores ?? null,
+      ...(joPlayoffTotal != null ? { jo_bracket_version: 2, best_of_octavos: bestOfOctavos ?? 1 } : {}),
     })
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 400 })
+      return NextResponse.json({
+        error: joPlayoffTotal != null && (error.code === "42703" || error.code === "PGRST204")
+          ? "Falta aplicar las migraciones de playoffs olímpicos en Supabase."
+          : error.message,
+      }, { status: 400 })
     }
 
     return NextResponse.json({
@@ -217,6 +245,7 @@ export async function PUT(req: Request) {
         tournamentId,
         qualifiedTeams,
         startPhase: phaseFromQualified(qualifiedTeams),
+        bestOfOctavos: bestOfOctavos ?? 1,
         bestOfCuartos,
         bestOfSemifinal,
         bestOfFinal,

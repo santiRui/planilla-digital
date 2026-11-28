@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import type { MatchStatus, TournamentPhase } from "@/lib/types"
+import { SERIES_RESOLVED_REASON } from "@/lib/playoff-series"
 
 export default function FixturePage() {
   const [tournaments, setTournaments] = useState<Tournament[]>([])
@@ -175,7 +176,8 @@ export default function FixturePage() {
         setMatches([])
         setError(json?.error ?? "No se pudieron cargar los partidos")
       } else {
-        setMatches((json.matches ?? []).map(mapMatchFromDb) as MatchRow[])
+        setMatches((json.matches ?? []).filter((match: any) =>
+          match.status_reason !== SERIES_RESOLVED_REASON).map(mapMatchFromDb) as MatchRow[])
       }
 
       setLoading(false)
@@ -186,6 +188,7 @@ export default function FixturePage() {
 
   const stageLabel = (phase: TournamentPhase) => {
     if (phase === "fase_regular") return "Fase Regular"
+    if (phase === "octavos") return "Octavos"
     if (phase === "cuartos") return "Cuartos"
     if (phase === "semifinal") return "Semifinal"
     if (phase === "final") return "Final"
@@ -249,9 +252,10 @@ export default function FixturePage() {
     const phaseOrder: Record<TournamentPhase, number> = {
       fase_regular: 0,
       playoff: 1,
-      cuartos: 2,
-      semifinal: 3,
-      final: 4,
+      octavos: 2,
+      cuartos: 3,
+      semifinal: 4,
+      final: 5,
     }
 
     list.sort((a, b) => {
@@ -301,9 +305,10 @@ export default function FixturePage() {
     const order: Record<TournamentPhase, number> = {
       fase_regular: 0,
       playoff: 1,
-      cuartos: 2,
-      semifinal: 3,
-      final: 4,
+      octavos: 2,
+      cuartos: 3,
+      semifinal: 4,
+      final: 5,
     }
     return phases.sort((a, b) => (order[a] ?? 99) - (order[b] ?? 99))
   }, [matches])

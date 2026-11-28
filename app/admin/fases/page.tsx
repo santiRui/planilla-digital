@@ -20,14 +20,22 @@ import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import type { TournamentPhase } from "@/lib/types"
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser"
+import { selectOlympicPlayoffTeams, sortOlympicStandings, splitOlympicZones, type ZoneMatch } from "@/lib/olympic-zones"
+import { seededBracket, startingKnockoutPhase } from "@/lib/olympic-playoffs"
+import { normalOpeningSeries } from "@/lib/playoff-series"
 
 const phaseConfig: Record<TournamentPhase, { label: string; teamsNeeded: number }> = {
   fase_regular: { label: "Fase Regular", teamsNeeded: 0 },
   playoff: { label: "Playoff (8 equipos)", teamsNeeded: 8 },
+  octavos: { label: "Octavos de Final", teamsNeeded: 16 },
   cuartos: { label: "Cuartos de Final", teamsNeeded: 8 },
   semifinal: { label: "Semifinal", teamsNeeded: 4 },
   final: { label: "Final", teamsNeeded: 2 },
 }
+
+const knockoutPhases = ["octavos", "cuartos", "semifinal", "final"] as const
+const validBestOf = (value: string) =>
+  value.trim() !== "" && Number.isInteger(Number(value)) && Number(value) >= 1 && Number(value) <= 9
 
 type PlayoffConfig = {
   qualifiedTeams: 2 | 4 | 8
@@ -45,6 +53,10 @@ export default function FasesPage() {
 
   const [selectedTournament, setSelectedTournament] = useState<string>("")
   const [showConfirmDialog, setShowConfirmDialog] = useState(false)
+  const [showReconcileDialog, setShowReconcileDialog] = useState(false)
+  const [reconciling, setReconciling] = useState(false)
+  const [reconcileNotice, setReconcileNotice] = useState<string | null>(null)
+  const [refreshVersion, setRefreshVersion] = useState(0)
   const [playoffConfig, setPlayoffConfig] = useState<PlayoffConfig>({
     qualifiedTeams: 8 as 2 | 4 | 8,
     bestOfCuartos: 1,
@@ -53,11 +65,10 @@ export default function FasesPage() {
     tiebreakMode: "olimpico_sorteo",
   })
   const [qualifiedTeamsInput, setQualifiedTeamsInput] = useState<string>("8")
+  const [bestOfOctavosInput, setBestOfOctavosInput] = useState<string>("1")
   const [bestOfCuartosInput, setBestOfCuartosInput] = useState<string>("1")
   const [bestOfSemifinalInput, setBestOfSemifinalInput] = useState<string>("1")
   const [bestOfFinalInput, setBestOfFinalInput] = useState<string>("1")
-  // Configuración JO (reutilizamos inputs para no agregar más estado por ahora)
-  const [joTotalInput, setJoTotalInput] = useState<string>("8")
   const [joFromGInput, setJoFromGInput] = useState<string>("5")
   const [joFromPInput, setJoFromPInput] = useState<string>("3")
   const [hasPlayoffConfig, setHasPlayoffConfig] = useState(false)
@@ -176,7 +187,7 @@ export default function FasesPage() {
         }
       }
 
-      const res = await fetch(`/api/admin/matches?tournamentId=${encodeURIComponent(selectedTournament)}`, {
+      const res = await fetch(`/api/admin/matches?tournamentId=${encodeURIComponent(selectedTournament)}&officialScores=true`, {
         headers: { Authorization: `Bearer ${token}` },
       })
 
@@ -222,22 +233,36 @@ export default function FasesPage() {
           tiebreakMode: (cfg.tiebreakMode as PlayoffConfig["tiebreakMode"]) ?? prev.tiebreakMode,
         }))
         setQualifiedTeamsInput(String(cfg.qualifiedTeams ?? 8))
+        setBestOfOctavosInput(String(cfg.bestOfOctavos ?? 1))
         setBestOfCuartosInput(String(cfg.bestOfCuartos ?? 1))
         setBestOfSemifinalInput(String(cfg.bestOfSemifinal ?? 1))
         setBestOfFinalInput(String(cfg.bestOfFinal ?? 1))
-        if (typeof cfg.joPlayoffTotal === "number") setJoTotalInput(String(cfg.joPlayoffTotal))
         if (typeof cfg.joFromGanadores === "number") setJoFromGInput(String(cfg.joFromGanadores))
         if (typeof cfg.joFromPerdedores === "number") setJoFromPInput(String(cfg.joFromPerdedores))
         setHasPlayoffConfig(true)
       } else {
         setHasPlayoffConfig(false)
+        setPlayoffConfig({
+          qualifiedTeams: 8,
+          bestOfCuartos: 1,
+          bestOfSemifinal: 1,
+          bestOfFinal: 1,
+          tiebreakMode: "olimpico_sorteo",
+        })
+        setQualifiedTeamsInput(tournament?.format === "juegos_olimpicos" ? "6" : "8")
+        setJoFromGInput("5")
+        setJoFromPInput("3")
+        setBestOfOctavosInput("1")
+        setBestOfCuartosInput("1")
+        setBestOfSemifinalInput("1")
+        setBestOfFinalInput("1")
       }
 
       setLoading(false)
     }
 
     run()
-  }, [selectedTournament, supabase, tournaments])
+  }, [selectedTournament, supabase, tournaments, refreshVersion])
 
   const categoryMatches = matches
   const categoryTeams = teams
@@ -254,20 +279,96 @@ export default function FasesPage() {
     return computeProjectedStandings(categoryTeams, regularMatches)
   }, [categoryMatches, categoryTeams])
 
+  const selectedTournamentObj = tournaments.find((t) => t.id === selectedTournament)
+  const isOlympic = selectedTournamentObj?.format === "juegos_olimpicos"
+  const hasOlympicZones = categoryMatches.some(
+    (m) => m.phase === "fase_regular" && (m.zoneCode === "G" || m.zoneCode === "P"),
+  )
+  const olympicZonesPending = categoryMatches.some(
+    (m) => m.phase === "fase_regular" && (m.zoneCode === "G" || m.zoneCode === "P") &&
+      (m.status !== "finalizado" || m.homeScore == null || m.awayScore == null),
+  )
+  const zoneMatches: ZoneMatch[] = categoryMatches
+    .filter((m) => m.phase === "fase_regular")
+    .map((m) => ({
+      homeTeamId: m.homeTeamId,
+      awayTeamId: m.awayTeamId,
+      homeScore: m.homeScore,
+      awayScore: m.awayScore,
+      status: m.status,
+    }))
+
   const distinctZones = useMemo(() => {
     const zones = Array.from(new Set(Object.values(teamZones))).filter(Boolean)
     return zones.sort((a, b) => a.localeCompare(b))
   }, [teamZones])
 
   const standingsByZone = useMemo(() => {
+    if (isOlympic && hasOlympicZones) {
+      return (["G", "P"] as const).map((zoneCode) => {
+        const ids = new Set(categoryMatches
+          .filter((m) => m.phase === "fase_regular" && m.zoneCode === zoneCode)
+          .flatMap((m) => [m.homeTeamId, m.awayTeamId]))
+        return {
+          zoneCode,
+          standings: sortOlympicStandings(categoryStandings.filter((r) => ids.has(r.teamId)), zoneMatches),
+        }
+      })
+    }
     const out: Array<{ zoneCode: string; standings: StandingRow[] }> = []
     for (const z of distinctZones) {
       const zoneTeams = categoryTeams.filter((t) => teamZones[t.id] === z)
       const zoneMatches = categoryMatches.filter((m) => m.phase === "fase_regular" && (m.zoneCode ?? null) === z)
-      out.push({ zoneCode: z, standings: computeProjectedStandings(zoneTeams, zoneMatches) })
+      const standings = isOlympic
+        ? sortOlympicStandings(computeStandings(zoneTeams, zoneMatches), zoneMatches.map((m) => ({
+            homeTeamId: m.homeTeamId, awayTeamId: m.awayTeamId,
+            homeScore: m.homeScore, awayScore: m.awayScore, status: m.status,
+          })))
+        : computeProjectedStandings(zoneTeams, zoneMatches)
+      out.push({ zoneCode: z, standings })
     }
     return out
-  }, [categoryMatches, categoryTeams, distinctZones, teamZones])
+  }, [categoryMatches, categoryTeams, distinctZones, teamZones, isOlympic, hasOlympicZones, categoryStandings])
+
+  const olympicClassification = useMemo(() => {
+    if (!isOlympic || hasOlympicZones) return null
+    try {
+      return splitOlympicZones(
+        standingsByZone.map((z) => z.standings),
+        Number(qualifiedTeamsInput),
+        zoneMatches,
+      )
+    } catch {
+      return null
+    }
+  }, [isOlympic, hasOlympicZones, standingsByZone, qualifiedTeamsInput, categoryMatches])
+
+  const olympicPlayoffPreview = useMemo(() => {
+    if (!isOlympic || !hasOlympicZones || !joFromGInput.trim() || !joFromPInput.trim()) return null
+    const fromG = Number(joFromGInput)
+    const fromP = Number(joFromPInput)
+    const winners = standingsByZone.find((zone) => zone.zoneCode === "G")?.standings ?? []
+    const losers = standingsByZone.find((zone) => zone.zoneCode === "P")?.standings ?? []
+    try {
+      const qualified = selectOlympicPlayoffTeams(winners, losers, fromG, fromP)
+      return { fromG, fromP, phase: startingKnockoutPhase(qualified.length),
+        seeds: qualified.map((row) => row.teamId),
+        bracket: seededBracket(qualified.map((row) => row.teamId)) }
+    } catch {
+      return null
+    }
+  }, [isOlympic, hasOlympicZones, joFromGInput, joFromPInput, standingsByZone, categoryMatches])
+
+  const bestOfInputs = {
+    octavos: bestOfOctavosInput,
+    cuartos: bestOfCuartosInput,
+    semifinal: bestOfSemifinalInput,
+    final: bestOfFinalInput,
+  }
+  const activeOlympicPhases = olympicPlayoffPreview
+    ? knockoutPhases.slice(knockoutPhases.indexOf(olympicPlayoffPreview.phase))
+    : []
+  const olympicBestOfValid = activeOlympicPhases.every((phase) => validBestOf(bestOfInputs[phase]))
 
   // Equipos clasificados según la tabla oficial (no proyectada), para generar playoff.
   const qualifiedTeams = useMemo(() => {
@@ -292,6 +393,8 @@ export default function FasesPage() {
 
   // Determine current phase
   const phases = [...new Set(categoryMatches.map((m) => m.phase))]
+  const hasKnockout = phases.some((phase) => phase !== "fase_regular")
+  const hasOctavos = phases.includes("octavos")
   const hasPlayoff = phases.includes("playoff") || phases.includes("cuartos")
   const hasSemifinal = phases.includes("semifinal")
   const hasFinal = phases.includes("final")
@@ -302,7 +405,7 @@ export default function FasesPage() {
       ? "semifinal"
       : hasPlayoff
         ? "cuartos"
-        : "fase_regular"
+        : hasOctavos ? "octavos" : "fase_regular"
 
   const getTeamName = (id: string) => teams.find((t) => t.id === id)?.name || "TBD"
   const getTeamColor = (id: string) => teams.find((t) => t.id === id)?.primaryColor || "#666"
@@ -327,8 +430,8 @@ export default function FasesPage() {
   }, [categoryMatches])
 
   const isQualifiedTeamsValid = useMemo(() => {
-    return [2, 4, 8].includes(playoffConfig.qualifiedTeams)
-  }, [playoffConfig.qualifiedTeams])
+    return qualifiedTeamsInput.trim() !== "" && [2, 4, 8].includes(Number(qualifiedTeamsInput))
+  }, [qualifiedTeamsInput])
 
   const isQualifiedTeamsDivisibleByZones = useMemo(() => {
     if (distinctZones.length < 2) return true
@@ -339,96 +442,70 @@ export default function FasesPage() {
   // Regla: si hay menos equipos clasificados que los cupos configurados (ej. 7 para 8),
   // los primeros quedan libres (bye). En la vista se muestran como "#1 Equipo vs Libre".
   const generateMatchups = () => {
-    const matchups: { home: string; away: string | null; isBye?: boolean }[] = []
-
-    if (!qualifiedTeams.length) return matchups
-
-    const expected = playoffConfig.qualifiedTeams
-    const total = qualifiedTeams.length
-
-    // Cantidad de "libres": diferencia entre cupos configurados y equipos reales, acotada al total.
-    const initialByes = Math.max(0, expected - total)
-    const byes = Math.min(initialByes, total)
-
-    // Primero agregamos filas explícitas de libres para los mejores sembrados
-    for (let i = 0; i < byes; i++) {
-      const team = qualifiedTeams[i]
-      if (!team) continue
-      matchups.push({ home: team.teamId, away: null, isBye: true })
+    try {
+      return normalOpeningSeries(
+        qualifiedTeams.map((team) => team.teamId),
+        playoffConfig.qualifiedTeams,
+      ).map((series) => ({
+        home: series.home,
+        away: series.away,
+        isBye: !series.away,
+      }))
+    } catch {
+      return []
     }
-
-    // Equipos que efectivamente juegan esta fase (sin los libres de arriba de la tabla)
-    const active = qualifiedTeams.slice(byes)
-    const half = Math.floor(active.length / 2)
-
-    for (let i = 0; i < half; i++) {
-      matchups.push({
-        home: active[i]?.teamId || "",
-        away: active[active.length - 1 - i]?.teamId || "",
-      })
-    }
-
-    return matchups
   }
 
   const matchups = generateMatchups()
 
   const startPhase = useMemo(() => {
-    if (playoffConfig.qualifiedTeams === 8) return "cuartos" as TournamentPhase
-    if (playoffConfig.qualifiedTeams === 4) return "semifinal" as TournamentPhase
-    return "final" as TournamentPhase
-  }, [playoffConfig.qualifiedTeams])
+    if (Number(qualifiedTeamsInput) === 2) return "final" as TournamentPhase
+    if (Number(qualifiedTeamsInput) === 4) return "semifinal" as TournamentPhase
+    return "cuartos" as TournamentPhase
+  }, [qualifiedTeamsInput])
 
-  const selectedTournamentObj = tournaments.find((t) => t.id === selectedTournament)
-  const isOlympic = selectedTournamentObj?.format === "juegos_olimpicos"
-  const hasOlympicZones = useMemo(
-    () =>
-      categoryMatches.some(
-        (m) => m.phase === "fase_regular" && (m.zoneCode === "G" || m.zoneCode === "P"),
-      ),
-    [categoryMatches],
-  )
 
   const handleGeneratePhase = async () => {
     if (!selectedTournament) return
 
-    const qualifiedTeams = Number.parseInt(qualifiedTeamsInput, 10)
-    const bestOfCuartos = Number.parseInt(bestOfCuartosInput, 10)
-    const bestOfSemifinal = Number.parseInt(bestOfSemifinalInput, 10)
-    const bestOfFinal = Number.parseInt(bestOfFinalInput, 10)
+    const qualifiedTeams = Number(qualifiedTeamsInput)
+    const bestOfCuartos = startPhase === "cuartos" ? Number(bestOfCuartosInput) : 1
+    const bestOfSemifinal = startPhase !== "final" ? Number(bestOfSemifinalInput) : 1
+    const bestOfFinal = Number(bestOfFinalInput)
 
     if (!isOlympic) {
-      if (!qualifiedTeamsInput.trim() || !Number.isFinite(qualifiedTeams) || ![2, 4, 8].includes(qualifiedTeams)) {
+      if (!qualifiedTeamsInput.trim() || ![2, 4, 8].includes(qualifiedTeams)) {
         setError("Faltan datos: completá los equipos que clasifican (solo 2, 4 u 8).")
         return
       }
-      if (!bestOfCuartosInput.trim() || !Number.isFinite(bestOfCuartos) || bestOfCuartos < 1 || bestOfCuartos > 9) {
+      if (startPhase === "cuartos" && !validBestOf(bestOfCuartosInput)) {
         setError("Faltan datos: completá Cuartos (best-of) entre 1 y 9.")
         return
       }
-      if (!bestOfSemifinalInput.trim() || !Number.isFinite(bestOfSemifinal) || bestOfSemifinal < 1 || bestOfSemifinal > 9) {
+      if (startPhase !== "final" && !validBestOf(bestOfSemifinalInput)) {
         setError("Faltan datos: completá Semifinal (best-of) entre 1 y 9.")
         return
       }
-      if (!bestOfFinalInput.trim() || !Number.isFinite(bestOfFinal) || bestOfFinal < 1 || bestOfFinal > 9) {
+      if (!validBestOf(bestOfFinalInput)) {
         setError("Faltan datos: completá Final (best-of) entre 1 y 9.")
         return
       }
     } else if (isOlympic && hasOlympicZones) {
-      // Validación JO solo en paso Playoffs (cuando ya existen zonas G/P)
-      const joTotal = Number.parseInt(joTotalInput, 10)
-      const joFromG = Number.parseInt(joFromGInput, 10)
-      const joFromP = Number.parseInt(joFromPInput, 10)
-
-      if (!Number.isFinite(joTotal) || !Number.isFinite(joFromG) || !Number.isFinite(joFromP)) {
-        setError("Configurá total, desde Ganadores y desde Perdedores para Juegos Olímpicos.")
+      if (olympicZonesPending) {
+        setError("Finalizá todos los partidos de Ganadores y Perdedores antes de generar playoffs.")
         return
       }
-
-      if (joFromG + joFromP !== joTotal) {
-        setError("En Juegos Olímpicos: Ganadores + Perdedores debe igualar el total a Playoffs.")
+      if (!olympicPlayoffPreview) {
+        setError("Elegí entre 2 y 16 clasificados sin superar los equipos disponibles por zona.")
         return
       }
+      if (!olympicBestOfValid) {
+        setError("Configurá el mejor de cada fase con un número entero entre 1 y 9.")
+        return
+      }
+    } else if (!olympicClassification || distinctZones.length !== 2) {
+      setError("Elegí una cantidad válida: debe haber dos zonas y quedar equipos tanto en Ganadores como en Perdedores.")
+      return
     }
 
     setSubmitting(true)
@@ -464,10 +541,7 @@ export default function FasesPage() {
           return
         }
       } else if (isOlympic && hasOlympicZones) {
-        // Guardar configuración de Playoffs JO (total / desde G / desde P)
-        const joTotal = Number.parseInt(joTotalInput, 10)
-        const joFromG = Number.parseInt(joFromGInput, 10)
-        const joFromP = Number.parseInt(joFromPInput, 10)
+        const { fromG, fromP } = olympicPlayoffPreview!
 
         const saveRes = await fetch(`/api/admin/playoff/config`, {
           method: "PUT",
@@ -479,13 +553,14 @@ export default function FasesPage() {
             tournamentId: selectedTournament,
             // Campos clásicos no se usan en JO, pero se envían con valores por defecto válidos
             qualifiedTeams: 8,
-            bestOfCuartos: 1,
-            bestOfSemifinal: 1,
-            bestOfFinal: 1,
+            bestOfOctavos: activeOlympicPhases.includes("octavos") ? Number(bestOfOctavosInput) : 1,
+            bestOfCuartos: activeOlympicPhases.includes("cuartos") ? Number(bestOfCuartosInput) : 1,
+            bestOfSemifinal: activeOlympicPhases.includes("semifinal") ? Number(bestOfSemifinalInput) : 1,
+            bestOfFinal,
             tiebreakMode: playoffConfig.tiebreakMode,
-            joPlayoffTotal: joTotal,
-            joFromGanadores: joFromG,
-            joFromPerdedores: joFromP,
+            joPlayoffTotal: fromG + fromP,
+            joFromGanadores: fromG,
+            joFromPerdedores: fromP,
           }),
         })
 
@@ -494,37 +569,9 @@ export default function FasesPage() {
           setError(saveJson?.error ?? "No se pudo guardar la configuración JO")
           return
         }
-      } else if (isOlympic && !hasOlympicZones) {
-        // Paso 1 JO: sólo guardamos cuántos equipos pasan a Zona Ganadores (qualifiedTeams)
-        const totalGanadores = Number.parseInt(qualifiedTeamsInput, 10)
-        if (!Number.isFinite(totalGanadores) || totalGanadores < 1) {
-          setError("Ingresá cuántos equipos pasan a la Zona de Ganadores (al menos 1).")
-          return
-        }
-
-        const saveRes = await fetch(`/api/admin/playoff/config`, {
-          method: "PUT",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            tournamentId: selectedTournament,
-            qualifiedTeams: totalGanadores,
-            bestOfCuartos: 1,
-            bestOfSemifinal: 1,
-            bestOfFinal: 1,
-            tiebreakMode: playoffConfig.tiebreakMode,
-          }),
-        })
-
-        const saveJson = (await saveRes.json().catch(() => null)) as any
-        if (!saveRes.ok) {
-          setError(saveJson?.error ?? "No se pudo guardar la configuración de Zona Ganadores")
-          return
-        }
       }
 
+      // El cupo de Ganadores no es un cupo de playoffs (que solo admite 2/4/8).
       const res = await fetch("/api/admin/phases/generate", {
         method: "POST",
         headers: {
@@ -533,6 +580,8 @@ export default function FasesPage() {
         },
         body: JSON.stringify({
           tournamentId: selectedTournament,
+          ...(isOlympic && !hasOlympicZones ? { teamsToQualify: Number(qualifiedTeamsInput) } : {}),
+          ...(isOlympic && hasOlympicZones ? { seededTeamIds: olympicPlayoffPreview?.seeds } : {}),
         }),
       })
 
@@ -544,7 +593,7 @@ export default function FasesPage() {
 
       setShowConfirmDialog(false)
 
-      const refetch = await fetch(`/api/admin/matches?tournamentId=${encodeURIComponent(selectedTournament)}`, {
+      const refetch = await fetch(`/api/admin/matches?tournamentId=${encodeURIComponent(selectedTournament)}&officialScores=true`, {
         headers: { Authorization: `Bearer ${token}` },
       })
       const refetchJson = (await refetch.json().catch(() => null)) as any
@@ -553,6 +602,36 @@ export default function FasesPage() {
       }
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  const handleReconcilePlayoffs = async () => {
+    if (!selectedTournament) return
+    setReconciling(true)
+    setError(null)
+    setReconcileNotice(null)
+    try {
+      const { data } = await supabase.auth.getSession()
+      const token = data.session?.access_token
+      if (!token) {
+        setError("Tenés que iniciar sesión para revisar las llaves.")
+        return
+      }
+      const response = await fetch("/api/admin/playoff/reconcile", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ tournamentId: selectedTournament }),
+      })
+      const result = (await response.json().catch(() => null)) as any
+      if (!response.ok) {
+        setError(result?.error ?? "No se pudieron revisar los playoffs.")
+        return
+      }
+      setShowReconcileDialog(false)
+      setReconcileNotice(`Se revisaron ${result.reviewed} series terminadas. Actualizá Programación para ver los cruces vigentes.`)
+      setRefreshVersion((version) => version + 1)
+    } finally {
+      setReconciling(false)
     }
   }
 
@@ -571,7 +650,10 @@ export default function FasesPage() {
           )}
         </div>
         <div className="flex gap-2">
-          <Select value={selectedTournament} onValueChange={setSelectedTournament}>
+          <Select value={selectedTournament} onValueChange={(id) => {
+            setSelectedTournament(id)
+            setReconcileNotice(null)
+          }}>
             <SelectTrigger className="w-[240px]">
               <SelectValue placeholder="Seleccionar torneo" />
             </SelectTrigger>
@@ -588,6 +670,7 @@ export default function FasesPage() {
       </div>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
+      {reconcileNotice && <p className="text-sm text-emerald-700">{reconcileNotice}</p>}
 
       {loading ? (
         <Card>
@@ -611,7 +694,10 @@ export default function FasesPage() {
             </CardHeader>
             <CardContent>
               <div className="flex items-center justify-between">
-                {(["fase_regular", "cuartos", "semifinal", "final"] as TournamentPhase[]).map((phase, index, arr) => (
+                {((isOlympic && (hasOctavos || olympicPlayoffPreview?.phase === "octavos")
+                  ? ["fase_regular", "octavos", "cuartos", "semifinal", "final"]
+                  : ["fase_regular", "cuartos", "semifinal", "final"]
+                ) as TournamentPhase[]).map((phase, index, arr) => (
                   <div key={phase} className="flex items-center">
                     <div className="flex flex-col items-center">
                       <div
@@ -648,14 +734,22 @@ export default function FasesPage() {
               <CardContent>
                 {distinctZones.length >= 2 ? (
                   <div className="space-y-6">
-                    {standingsByZone.map((zone) => {
+                    {standingsByZone.map((zone, zoneIndex) => {
                       const zonesCount = distinctZones.length
-                      const perZone = zonesCount > 0 ? playoffConfig.qualifiedTeams / zonesCount : 0
+                      const perZone = isOlympic
+                        ? hasOlympicZones
+                          ? Number(zone.zoneCode === "G" ? joFromGInput : joFromPInput)
+                          : olympicClassification?.perZone[zoneIndex] ?? 0
+                        : zonesCount > 0 ? playoffConfig.qualifiedTeams / zonesCount : 0
                       const perZoneValid = Number.isFinite(perZone) && Number.isInteger(perZone)
 
                       return (
                         <div key={zone.zoneCode} className="space-y-2">
-                          <div className="text-sm font-medium">Zona {zone.zoneCode}</div>
+                          <div className="text-sm font-medium">
+                            {isOlympic && hasOlympicZones
+                              ? zone.zoneCode === "G" ? "Zona de Ganadores" : "Zona de Perdedores"
+                              : `Zona ${zone.zoneCode}`}
+                          </div>
                           {zone.standings.length === 0 ? (
                             <p className="text-center text-muted-foreground py-2">No hay datos de posiciones</p>
                           ) : (
@@ -859,8 +953,8 @@ export default function FasesPage() {
                           onChange={(e) => {
                             const next = e.target.value
                             setQualifiedTeamsInput(next)
-                            const n = Number.parseInt(next, 10)
-                            if (Number.isFinite(n) && [2, 4, 8].includes(n)) {
+                            const n = Number(next)
+                            if (next.trim() !== "" && [2, 4, 8].includes(n)) {
                               setPlayoffConfig((prev) => ({
                                 ...prev,
                                 qualifiedTeams: n as 2 | 4 | 8,
@@ -877,64 +971,41 @@ export default function FasesPage() {
                       </div>
 
                       <div className="grid gap-4 sm:grid-cols-3">
-                        <div className="space-y-2">
-                          <Label>Cuartos (best-of)</Label>
-                          <Input
-                            type="number"
-                            min={1}
-                            max={9}
-                            value={bestOfCuartosInput}
-                            onChange={(e) => {
-                              const next = e.target.value
-                              setBestOfCuartosInput(next)
-                              const n = Number.parseInt(next, 10)
-                              if (Number.isFinite(n) && n >= 1 && n <= 9) {
-                                setPlayoffConfig((prev) => ({
-                                  ...prev,
-                                  bestOfCuartos: n,
-                                }))
-                              }
-                            }}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label>Semifinal (best-of)</Label>
-                          <Input
-                            type="number"
-                            min={1}
-                            max={9}
-                            value={bestOfSemifinalInput}
-                            onChange={(e) => {
-                              const next = e.target.value
-                              setBestOfSemifinalInput(next)
-                              const n = Number.parseInt(next, 10)
-                              if (Number.isFinite(n) && n >= 1 && n <= 9) {
-                                setPlayoffConfig((prev) => ({
-                                  ...prev,
-                                  bestOfSemifinal: n,
-                                }))
-                              }
-                            }}
-                          />
-                        </div>
+                        {startPhase === "cuartos" && (
+                          <div className="space-y-2">
+                            <Label>Cuartos (best-of)</Label>
+                            <Input
+                              type="number"
+                              min={1}
+                              max={9}
+                              step={1}
+                              value={bestOfCuartosInput}
+                              onChange={(e) => setBestOfCuartosInput(e.target.value)}
+                            />
+                          </div>
+                        )}
+                        {startPhase !== "final" && (
+                          <div className="space-y-2">
+                            <Label>Semifinal (best-of)</Label>
+                            <Input
+                              type="number"
+                              min={1}
+                              max={9}
+                              step={1}
+                              value={bestOfSemifinalInput}
+                              onChange={(e) => setBestOfSemifinalInput(e.target.value)}
+                            />
+                          </div>
+                        )}
                         <div className="space-y-2">
                           <Label>Final (best-of)</Label>
                           <Input
                             type="number"
                             min={1}
                             max={9}
+                            step={1}
                             value={bestOfFinalInput}
-                            onChange={(e) => {
-                              const next = e.target.value
-                              setBestOfFinalInput(next)
-                              const n = Number.parseInt(next, 10)
-                              if (Number.isFinite(n) && n >= 1 && n <= 9) {
-                                setPlayoffConfig((prev) => ({
-                                  ...prev,
-                                  bestOfFinal: n,
-                                }))
-                              }
-                            }}
+                            onChange={(e) => setBestOfFinalInput(e.target.value)}
                           />
                         </div>
                       </div>
@@ -1068,14 +1139,7 @@ export default function FasesPage() {
                               return <p className="text-xs text-muted-foreground">Ingresá cuántos equipos pasan.</p>
                             }
 
-                            // Aproximación: repartimos basePerZone igual que en el backend
-                            const basePerZone = Math.floor(
-                              totalGanadores / Math.max(1, distinctZones.length),
-                            )
-
-                            const ganadoresFlat = standingsByZone.flatMap((zone) =>
-                              zone.standings.slice(0, basePerZone).map((s) => s.teamId),
-                            )
+                            const ganadoresFlat = olympicClassification?.winners.map((s) => s.teamId) ?? []
 
                             if (ganadoresFlat.length === 0) {
                               return <p className="text-xs text-muted-foreground">Sin equipos.</p>
@@ -1140,19 +1204,7 @@ export default function FasesPage() {
                               return <p className="text-xs text-muted-foreground">Ingresá cuántos equipos pasan.</p>
                             }
 
-                            const basePerZone = Math.floor(
-                              totalGanadores / Math.max(1, distinctZones.length),
-                            )
-
-                            const ganadoresSet = new Set(
-                              standingsByZone.flatMap((zone) =>
-                                zone.standings.slice(0, basePerZone).map((s) => s.teamId),
-                              ),
-                            )
-
-                            const perdedoresFlat = categoryStandings
-                              .map((s) => s.teamId)
-                              .filter((id) => !ganadoresSet.has(id))
+                            const perdedoresFlat = olympicClassification?.losers.map((s) => s.teamId) ?? []
 
                             if (perdedoresFlat.length === 0) {
                               return <p className="text-xs text-muted-foreground">Sin equipos.</p>
@@ -1212,25 +1264,99 @@ export default function FasesPage() {
                     </div>
                   </>
                 ) : (
-                  <>
-                    {/* JO PASO 2: aquí mantenés tu UI de total / desde G / desde P para Playoffs JO */}
-                  </>
+                  <div className="space-y-5">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="from-g">Clasifican desde Ganadores</Label>
+                        <Input id="from-g" type="number" min={0} max={standingsByZone[0]?.standings.length ?? 0}
+                          value={joFromGInput} onChange={(e) => setJoFromGInput(e.target.value)} disabled={hasKnockout} />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="from-p">Clasifican desde Perdedores</Label>
+                        <Input id="from-p" type="number" min={0} max={standingsByZone[1]?.standings.length ?? 0}
+                          value={joFromPInput} onChange={(e) => setJoFromPInput(e.target.value)} disabled={hasKnockout} />
+                      </div>
+                    </div>
+                    <div className="space-y-3">
+                      <Label>Al mejor de cuántos partidos por fase</Label>
+                      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+                        {([
+                          { phase: "octavos", id: "jo-best-octavos", label: "Octavos", value: bestOfOctavosInput, setValue: setBestOfOctavosInput },
+                          { phase: "cuartos", id: "jo-best-cuartos", label: "Cuartos", value: bestOfCuartosInput, setValue: setBestOfCuartosInput },
+                          { phase: "semifinal", id: "jo-best-semis", label: "Semifinal", value: bestOfSemifinalInput, setValue: setBestOfSemifinalInput },
+                          { phase: "final", id: "jo-best-final", label: "Final", value: bestOfFinalInput, setValue: setBestOfFinalInput },
+                        ] as const).filter(({ phase }) => activeOlympicPhases.includes(phase)).map(({ id, label, value, setValue }) => (
+                          <div key={id} className="space-y-2">
+                            <Label htmlFor={id}>{label}</Label>
+                            <Input id={id} type="number" min={1} max={9} step={1}
+                              value={value} onChange={(e) => setValue(e.target.value)} disabled={hasKnockout} />
+                          </div>
+                        ))}
+                      </div>
+                      {!olympicBestOfValid && (
+                        <p className="text-sm text-destructive">Ingresá un número entero del 1 al 9 para cada fase.</p>
+                      )}
+                    </div>
+                    {olympicPlayoffPreview ? (
+                      <>
+                        <p className="text-sm text-muted-foreground">
+                          {olympicPlayoffPreview.fromG + olympicPlayoffPreview.fromP} equipos:
+                          {" "}{phaseConfig[olympicPlayoffPreview.phase].label}.
+                          {olympicPlayoffPreview.bracket.some((series) => !series.away) &&
+                            " Las mejores semillas pasan libres a la siguiente ronda."}
+                        </p>
+                        <div className="space-y-2">
+                          <Label>Cruces por semilla</Label>
+                          {[...olympicPlayoffPreview.bracket].sort((a, b) =>
+                            olympicPlayoffPreview.seeds.indexOf(a.home) - olympicPlayoffPreview.seeds.indexOf(b.home),
+                          ).map((series) => (
+                            <div key={series.index} className="rounded-lg border bg-muted/30 p-3 text-sm">
+                              <span className="mr-2 text-muted-foreground">
+                                #{olympicPlayoffPreview.seeds.indexOf(series.home) + 1}
+                              </span>
+                              {getTeamName(series.home)} vs{" "}
+                              {series.away
+                                ? `#${olympicPlayoffPreview.seeds.indexOf(series.away) + 1} ${getTeamName(series.away)}`
+                                : "Libre"}
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <p className="text-sm text-destructive">
+                        Seleccioná entre 2 y 16 equipos en total, sin superar los disponibles en cada zona.
+                      </p>
+                    )}
+                    {olympicZonesPending && (
+                      <p className="text-sm text-muted-foreground">
+                        Terminá los partidos pendientes de Ganadores y Perdedores antes de generar playoffs.
+                      </p>
+                    )}
+                  </div>
                 )}
 
                 <Button
                   className="w-full"
                   onClick={() => setShowConfirmDialog(true)}
                   disabled={
-                    !isOlympic && (qualifiedTeams.length < 2 || !isQualifiedTeamsValid || !isQualifiedTeamsDivisibleByZones)
+                    isOlympic && !hasOlympicZones
+                      ? !olympicClassification
+                      : isOlympic ? !olympicPlayoffPreview || !olympicBestOfValid || hasKnockout || olympicZonesPending
+                      : hasKnockout || matchups.length === 0 || !isQualifiedTeamsValid || !isQualifiedTeamsDivisibleByZones
                   }
                 >
                   <Trophy className="mr-2 h-4 w-4" />
                   {isOlympic
                     ? hasOlympicZones
-                      ? "Generar Playoffs Juegos Olímpicos"
+                      ? hasKnockout ? "Playoffs ya generados" : "Generar Playoffs Juegos Olímpicos"
                       : "Generar Zonas de Ganadores y Perdedores"
-                    : `Generar ${phaseConfig[startPhase].label}`}
+                    : hasKnockout ? "Playoffs ya generados" : `Generar ${phaseConfig[startPhase].label}`}
                 </Button>
+                {!isOlympic && hasKnockout && (
+                  <Button variant="outline" className="w-full" onClick={() => setShowReconcileDialog(true)}>
+                    Revisar llaves y fases pendientes
+                  </Button>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -1241,8 +1367,11 @@ export default function FasesPage() {
               <AlertDialogHeader>
                 <AlertDialogTitle>Confirmar Generación de Fase</AlertDialogTitle>
                 <AlertDialogDescription>
-                  Se generarán {matchups.length} series para {phaseConfig[startPhase].label}.
-                  Esta acción creará los cruces según la tabla de posiciones actual. ¿Deseas continuar?
+                  {isOlympic && !hasOlympicZones
+                    ? `Pasarán ${olympicClassification?.winners.length ?? 0} equipos a Ganadores y ${olympicClassification?.losers.length ?? 0} a Perdedores. Se conservarán los resultados y se crearán solo los cruces pendientes entre las zonas originales. ¿Querés continuar?`
+                    : isOlympic
+                      ? `Clasificarán ${olympicPlayoffPreview?.fromG ?? 0} de Ganadores y ${olympicPlayoffPreview?.fromP ?? 0} de Perdedores. Se crearán ${phaseConfig[olympicPlayoffPreview?.phase ?? "final"].label} con los cruces y los mejores de configurados. ¿Querés continuar?`
+                    : `Se generarán ${matchups.length} series para ${phaseConfig[startPhase].label}. Esta acción creará los cruces según la tabla de posiciones actual. ¿Deseas continuar?`}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -1250,6 +1379,24 @@ export default function FasesPage() {
                 <AlertDialogAction onClick={handleGeneratePhase} disabled={submitting}>
                   {submitting ? "Generando..." : "Confirmar"}
                 </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+          <AlertDialog open={showReconcileDialog} onOpenChange={setShowReconcileDialog}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Revisar playoffs del torneo</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Se registrarán ganadores de series ya definidas, se crearán cruces faltantes
+                  y los partidos que no corresponden quedarán fuera de Programación.
+                  No se borrarán resultados ni actas.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={reconciling}>Cancelar</AlertDialogCancel>
+                <Button onClick={handleReconcilePlayoffs} disabled={reconciling}>
+                  {reconciling ? "Revisando..." : "Confirmar revisión"}
+                </Button>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>

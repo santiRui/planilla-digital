@@ -182,25 +182,23 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Se necesitan al menos 2 equipos para generar un fixture" }, { status: 400 })
     }
 
-    // Reset playoff stages so they can be regenerated from the new regular season fixture
-    const { error: deletePlayoffMatchesError } = await auth.adminClient
+    const { data: playoffMatches, error: playoffCheckError } = await auth.adminClient
       .from("matches")
-      .delete()
+      .select("id")
       .eq("tournament_id", tournamentId)
-      .in("phase", ["playoff", "cuartos", "semifinal", "final"])
-
-    if (deletePlayoffMatchesError) {
-      return NextResponse.json({ error: deletePlayoffMatchesError.message }, { status: 400 })
+      .neq("phase", "fase_regular")
+      .limit(1)
+    if (playoffCheckError) {
+      return NextResponse.json({ error: playoffCheckError.message }, { status: 400 })
     }
-
-    const { error: deleteSeriesError } = await auth.adminClient
+    const { data: playoffSeries, error: seriesCheckError } = await auth.adminClient
       .from("playoff_series")
-      .delete()
+      .select("id")
       .eq("tournament_id", tournamentId)
-      .in("phase", ["cuartos", "semifinal", "final"])
-
-    if (deleteSeriesError) {
-      return NextResponse.json({ error: deleteSeriesError.message }, { status: 400 })
+      .limit(1)
+    if (seriesCheckError) return NextResponse.json({ error: seriesCheckError.message }, { status: 400 })
+    if (playoffMatches?.length || playoffSeries?.length) {
+      return NextResponse.json({ error: "No se puede reemplazar el fixture si ya existen playoffs." }, { status: 409 })
     }
 
     // Replace only regular season fixture for this category

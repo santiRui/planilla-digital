@@ -3,6 +3,8 @@ import { z } from "zod"
 import crypto from "crypto"
 import { createSupabaseAdminClient } from "@/lib/supabase/admin"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
+import { readyNextRound } from "@/lib/olympic-playoffs"
+import { normalNextMatchups, seriesResult, SERIES_RESOLVED_REASON } from "@/lib/playoff-series"
 
 const updateResultSchema = z.object({
   status: z.enum(["programado", "en_juego", "finalizado", "suspendido", "demorado"]).optional(),
@@ -11,7 +13,7 @@ const updateResultSchema = z.object({
   statusReason: z.string().max(500).optional(),
 })
 
-type Phase = "cuartos" | "semifinal" | "final"
+type Phase = "octavos" | "cuartos" | "semifinal" | "final"
 
 type TiebreakMode = "olimpico_sorteo" | "olimpico_sin_sorteo" | "labas"
 
@@ -40,6 +42,9 @@ type SeriesRow = {
   tiebreak_applied: string | null
   random_winner_team_id: string | null
 }
+
+type SupabaseClient = ReturnType<typeof createSupabaseAdminClient>
+type PlayoffSeriesRow = SeriesRow
 
 async function assertMesaRole(accessToken: string, matchId: string) {
   const adminClient = createSupabaseAdminClient()
@@ -100,13 +105,14 @@ async function assertAssignedToMatch(
 }
 
 function nextPhaseFromCurrent(phase: Phase): Phase | null {
+  if (phase === "octavos") return "cuartos"
   if (phase === "cuartos") return "semifinal"
   if (phase === "semifinal") return "final"
   return null
 }
 
 function isPhaseValue(phase: string): phase is Phase {
-  return phase === "cuartos" || phase === "semifinal" || phase === "final"
+  return phase === "octavos" || phase === "cuartos" || phase === "semifinal" || phase === "final"
 }
 
 type MatchLite = {
@@ -201,6 +207,29 @@ function computeStandings(teamIds: string[], finalMatches: MatchLite[]): Standin
   return list
 }
 
+async function cancelUnplayedSeriesGames(adminClient: SupabaseClient, seriesId: string) {
+  const { data, error } = await adminClient
+    .from("matches")
+    .select("id, status, status_reason, started_at")
+    .eq("playoff_series_id", seriesId)
+    .neq("status", "finalizado")
+
+  if (error) throw new Error(`No se pudieron leer los partidos sobrantes: ${error.message}`)
+  const pending = data ?? []
+  if (pending.some((game) => game.status === "en_juego" || game.started_at)) {
+    throw new Error("La serie ya está definida, pero hay un partido iniciado que requiere revisión manual.")
+  }
+  const ids = pending.filter((game) => game.status_reason !== SERIES_RESOLVED_REASON).map((game) => game.id)
+  if (!ids.length) return
+
+  const { error: cancelError } = await adminClient
+    .from("matches")
+    .update({ status: "suspendido", status_reason: SERIES_RESOLVED_REASON })
+    .in("id", ids)
+    .neq("status", "finalizado")
+  if (cancelError) throw new Error(`No se pudieron cancelar los partidos sobrantes: ${cancelError.message}`)
+}
+
 export async function resolveSeriesAndMaybeAdvance(
   adminClient: ReturnType<typeof createSupabaseAdminClient>,
   match: MatchRow,
@@ -219,19 +248,11 @@ export async function resolveSeriesAndMaybeAdvance(
     .eq("id", seriesId)
     .single()
 
-  if (seriesError || !series) return
+  if (seriesError || !series) throw new Error(seriesError?.message ?? "No se encontró la serie de playoffs.")
 
   if ((series as any).winner_team_id) {
-    // La serie ya tiene un ganador guardado anteriormente. Aseguramos que
-    // no queden partidos "colgados" (por ejemplo, semi 3) eliminando
-    // cualquier match de esta serie que no esté finalizado antes de
-    // intentar avanzar de fase.
-    await adminClient
-      .from("matches")
-      .delete()
-      .eq("playoff_series_id", seriesId)
-      .neq("status", "finalizado")
-
+    // Conservar el historial de los juegos que ya no se disputan.
+    await cancelUnplayedSeriesGames(adminClient, seriesId)
     await maybeAdvancePhase(adminClient, series as any)
     return
   }
@@ -242,7 +263,7 @@ export async function resolveSeriesAndMaybeAdvance(
     .eq("playoff_series_id", seriesId)
     .order("series_game_number", { ascending: true })
 
-  if (seriesMatchesError) return
+  if (seriesMatchesError) throw new Error(seriesMatchesError.message)
 
   // Determinamos el "mejor de" para esta serie. Si la columna best_of en
   // playoff_series no está seteada o es inválida, leemos la configuración
@@ -250,15 +271,19 @@ export async function resolveSeriesAndMaybeAdvance(
   // seguro por defecto.
   let bestOf = Number((series as any).best_of)
   if (!Number.isFinite(bestOf) || bestOf <= 0) {
+    const phase = (series as any).phase as string
     const { data: config } = await adminClient
       .from("tournament_playoff_config")
-      .select("best_of_cuartos, best_of_semifinal, best_of_final")
+      .select(phase === "octavos"
+        ? "best_of_octavos"
+        : "best_of_cuartos, best_of_semifinal, best_of_final")
       .eq("tournament_id", (series as any).tournament_id)
       .maybeSingle()
 
-    const phase = (series as any).phase as string
     const rawBestOf =
-      phase === "cuartos"
+      phase === "octavos"
+        ? (config as any)?.best_of_octavos
+        : phase === "cuartos"
         ? (config as any)?.best_of_cuartos
         : phase === "semifinal"
           ? (config as any)?.best_of_semifinal
@@ -269,46 +294,21 @@ export async function resolveSeriesAndMaybeAdvance(
       bestOf = 1
     }
   }
-  const finals = (seriesMatches ?? []).filter((m: any) => m.status === "finalizado") as Array<{
-    home_team_id: string
-    away_team_id: string
-    home_score: number | null
-    away_score: number | null
-  }>
-
   const homeTeamId = (series as any).home_team_id as string
   const awayTeamId = (series as any).away_team_id as string
-
-  let homeWins = 0
-  let awayWins = 0
-  let diff = 0
-
-  for (const m of finals) {
-    if (m.home_score == null || m.away_score == null) continue
-
-    const homeIsHome = m.home_team_id === homeTeamId
-    const scoreHome = homeIsHome ? m.home_score : m.away_score
-    const scoreAway = homeIsHome ? m.away_score : m.home_score
-
-    diff += scoreHome - scoreAway
-
-    if (scoreHome > scoreAway) homeWins += 1
-    else awayWins += 1
-  }
-
-  const needed = Math.floor(bestOf / 2) + 1
+  const { diff, winner: wonByWins, allPlayed } = seriesResult(
+    { home_team_id: homeTeamId, away_team_id: awayTeamId, best_of: bestOf },
+    seriesMatches ?? [],
+  )
 
   let winner: string | null = null
   let tiebreakApplied: string | null = null
   let randomWinnerToPersist: string | null = null
 
-  if (homeWins >= needed) {
-    winner = homeTeamId
+  if (wonByWins) {
+    winner = wonByWins
     tiebreakApplied = "wins"
-  } else if (awayWins >= needed) {
-    winner = awayTeamId
-    tiebreakApplied = "wins"
-  } else if (finals.length === bestOf && bestOf % 2 === 0) {
+  } else if (allPlayed && bestOf % 2 === 0) {
     if (diff !== 0) {
       winner = diff > 0 ? homeTeamId : awayTeamId
       tiebreakApplied = "diff_series"
@@ -401,66 +401,15 @@ export async function resolveSeriesAndMaybeAdvance(
   }
 
   const { error: updateSeriesError } = await adminClient.from("playoff_series").update(update).eq("id", seriesId)
-  if (updateSeriesError) return
+  if (updateSeriesError) throw new Error(`No se pudo registrar el ganador de la serie: ${updateSeriesError.message}`)
 
-  // La serie ya tiene un ganador: eliminamos cualquier partido restante
-  // de esta serie que todavía no esté finalizado (por ejemplo el 3er
-  // juego de una semi al mejor de 3 cuando un equipo gana 2-0).
-  await adminClient
-    .from("matches")
-    .delete()
-    .eq("playoff_series_id", seriesId)
-    .neq("status", "finalizado")
+  await cancelUnplayedSeriesGames(adminClient, seriesId)
 
   await maybeAdvancePhase(adminClient, {
     ...(series as any),
     winner_team_id: winner,
   })
 
-  // Consume one membership game from each team that has remaining_games > 0 in team_memberships
-  await consumeMembershipGames(adminClient, homeTeamId, awayTeamId)
-}
-
-async function consumeMembershipGames(adminClient: SupabaseClient, homeTeamId: string, awayTeamId: string) {
-  const { data: homeMembership, error: homeMembershipError } = await adminClient
-    .from("team_memberships")
-    .select("id, remaining_games")
-    .eq("team_id", homeTeamId)
-    .maybeSingle()
-
-  if (homeMembershipError || !homeMembership || homeMembership.remaining_games <= 0) {
-    // No membership or no remaining games, do nothing
-    return
-  }
-
-  const { data: awayMembership, error: awayMembershipError } = await adminClient
-    .from("team_memberships")
-    .select("id, remaining_games")
-    .eq("team_id", awayTeamId)
-    .maybeSingle()
-
-  if (awayMembershipError || !awayMembership || awayMembership.remaining_games <= 0) {
-    // No membership or no remaining games, do nothing
-    return
-  }
-
-  // Record usage in team_membership_usages
-  await adminClient.from("team_membership_usages").insert([
-    {
-      team_membership_id: homeMembership.id,
-      game_id: null, // Assuming game_id is not required
-      used_at: new Date(),
-    },
-    {
-      team_membership_id: awayMembership.id,
-      game_id: null, // Assuming game_id is not required
-      used_at: new Date(),
-    },
-  ])
-
-  // Update remaining_games in team_memberships
-  await adminClient.from("team_memberships").update({ remaining_games: { _inc: -1 } }).eq("id", homeMembership.id)
-  await adminClient.from("team_memberships").update({ remaining_games: { _inc: -1 } }).eq("id", awayMembership.id)
 }
 
 async function maybeAdvancePhase(adminClient: SupabaseClient, series: PlayoffSeriesRow) {
@@ -475,7 +424,7 @@ async function maybeAdvancePhase(adminClient: SupabaseClient, series: PlayoffSer
     .eq("phase", phase)
     .order("series_index", { ascending: true })
 
-  if (allSeriesError) return
+  if (allSeriesError) throw new Error(`No se pudieron consultar las series: ${allSeriesError.message}`)
 
   const list = (allSeries ?? []) as Array<{ series_index: number; winner_team_id: string | null }>
   if (list.length === 0) return
@@ -487,20 +436,22 @@ async function maybeAdvancePhase(adminClient: SupabaseClient, series: PlayoffSer
   // Para otras transiciones (por ejemplo semifinal -> final) seguimos
   // requiriendo que todas las series de la fase actual tengan ganador.
 
-  const { data: existingNext } = await adminClient
+  const { data: existingNext, error: existingNextError } = await adminClient
     .from("playoff_series")
-    .select("id, series_index")
+    .select("id, series_index, home_team_id, away_team_id, best_of, winner_team_id")
     .eq("tournament_id", series.tournament_id)
     .eq("phase", next)
 
+  if (existingNextError) throw new Error(`No se pudieron consultar las series siguientes: ${existingNextError.message}`)
   const existingNextIndices = new Set<number>((existingNext ?? []).map((r: any) => Number(r.series_index)))
 
-  const { data: config } = await adminClient
+  const { data: config, error: configError } = await adminClient
     .from("tournament_playoff_config")
     .select("best_of_cuartos, best_of_semifinal, best_of_final")
     .eq("tournament_id", series.tournament_id)
     .maybeSingle()
 
+  if (configError) throw new Error(`No se pudo leer la configuración de playoffs: ${configError.message}`)
   const rawBestOf =
     next === "cuartos"
       ? (config as any)?.best_of_cuartos
@@ -515,7 +466,24 @@ async function maybeAdvancePhase(adminClient: SupabaseClient, series: PlayoffSer
 
   const nextMatchups: Array<{ home: string; away: string; index: number }> = []
 
-  if (phase === "cuartos" && next === "semifinal") {
+  const { data: tournament, error: tournamentError } = await adminClient
+    .from("tournaments")
+    .select("format")
+    .eq("id", series.tournament_id)
+    .maybeSingle()
+
+  if (tournamentError) throw new Error(`No se pudo leer el formato del torneo: ${tournamentError.message}`)
+  const { data: bracketConfig, error: bracketConfigError } = tournament?.format === "juegos_olimpicos"
+    ? await adminClient.from("tournament_playoff_config")
+      .select("jo_bracket_version").eq("tournament_id", series.tournament_id).maybeSingle()
+    : { data: null, error: null }
+
+  if (bracketConfigError) throw new Error(`No se pudo leer la configuración de llaves: ${bracketConfigError.message}`)
+  if (tournament?.format === "juegos_olimpicos" && Number(bracketConfig?.jo_bracket_version) === 2) {
+    nextMatchups.push(...readyNextRound(list))
+  } else if (phase === "semifinal" && list.length === 2) {
+    nextMatchups.push(...normalNextMatchups("semifinal", list, existingNextIndices))
+  } else if (phase === "cuartos" && next === "semifinal") {
     // Para cuartos podemos tener 2, 3 (con un libre) o 4 series.
     const totalSeries = list.length
     const byIndex = new Map<number, string>()
@@ -593,32 +561,7 @@ async function maybeAdvancePhase(adminClient: SupabaseClient, series: PlayoffSer
         }
       }
     } else if (totalSeries === 4) {
-      // Caso clásico 4 cruces de cuartos.
-      // Numeramos explícitamente:
-      //  - Cuarto 1 (series_index = 1)
-      //  - Cuarto 2 (series_index = 2)
-      //  - Cuarto 3 (series_index = 3)
-      //  - Cuarto 4 (series_index = 4)
-      // Semifinales:
-      //  - Semi 1: ganador Cuarto 1 vs ganador Cuarto 4 (series_index = 1)
-      //  - Semi 2: ganador Cuarto 2 vs ganador Cuarto 3 (series_index = 2)
-      // Cada semifinal se crea en cuanto ambos ganadores existen,
-      // aunque el otro lado de la llave todavía no esté definido.
-
-      const w1 = byIndex.get(1)
-      const w2 = byIndex.get(2)
-      const w3 = byIndex.get(3)
-      const w4 = byIndex.get(4)
-
-      // Semi 2 vs 3 (índice 2) puede generarse apenas existan ambos.
-      if (w2 && w3 && !existingNextIndices.has(2)) {
-        nextMatchups.push({ home: w2, away: w3, index: 2 })
-      }
-
-      // Semi 1 vs 4 (índice 1) se genera cuando existan esos ganadores.
-      if (w1 && w4 && !existingNextIndices.has(1)) {
-        nextMatchups.push({ home: w1, away: w4, index: 1 })
-      }
+      nextMatchups.push(...normalNextMatchups("cuartos", list, existingNextIndices))
     } else {
       // Cualquier otro caso (por compatibilidad futura): aplicamos el
       // emparejamiento genérico 1 vs último, 2 vs anteúltimo, etc.,
@@ -657,38 +600,56 @@ async function maybeAdvancePhase(adminClient: SupabaseClient, series: PlayoffSer
     }
   }
 
-  if (nextMatchups.length === 0) return
+  const unfinishedNext = (existingNext ?? []).filter((row) =>
+    !row.winner_team_id && row.home_team_id !== row.away_team_id)
+  let orphanedSeries: typeof unfinishedNext = []
+  if (unfinishedNext.length) {
+    const { data: nextGames, error: nextGamesError } = await adminClient
+      .from("matches")
+      .select("playoff_series_id")
+      .in("playoff_series_id", unfinishedNext.map((row) => row.id))
+    if (nextGamesError) throw new Error(`No se pudieron consultar los partidos siguientes: ${nextGamesError.message}`)
+    const seriesWithGames = new Set((nextGames ?? []).map((game) => game.playoff_series_id))
+    orphanedSeries = unfinishedNext.filter((row) => !seriesWithGames.has(row.id))
+  }
 
-  const seriesRows = nextMatchups.map((m) => ({
-    tournament_id: series.tournament_id,
-    phase: next,
-    series_index: m.index,
-    home_team_id: m.home,
-    away_team_id: m.away,
-    best_of: bestOf,
-    winner_team_id: null,
-    tiebreak_applied: null,
-    random_winner_team_id: null,
-  }))
+  if (nextMatchups.length === 0 && orphanedSeries.length === 0) return
 
-  const { data: insertedSeries, error: insertSeriesError } = await adminClient
-    .from("playoff_series")
-    .insert(seriesRows)
-    .select("id, series_index, home_team_id, away_team_id")
-    .order("series_index", { ascending: true })
+  let insertedSeries: typeof orphanedSeries = []
+  if (nextMatchups.length) {
+    const seriesRows = nextMatchups.map((m) => ({
+      tournament_id: series.tournament_id,
+      phase: next,
+      series_index: m.index,
+      home_team_id: m.home,
+      away_team_id: m.away,
+      best_of: bestOf,
+      winner_team_id: null,
+      tiebreak_applied: null,
+      random_winner_team_id: null,
+    }))
 
-  if (insertSeriesError) return
+    const { data, error: insertSeriesError } = await adminClient
+      .from("playoff_series")
+      .insert(seriesRows)
+      .select("id, series_index, home_team_id, away_team_id, best_of, winner_team_id")
+      .order("series_index", { ascending: true })
 
-  const seriesList = (insertedSeries ?? []) as Array<{
+    if (insertSeriesError) throw new Error(`No se pudo crear la siguiente fase: ${insertSeriesError.message}`)
+    insertedSeries = data ?? []
+  }
+
+  const seriesList = [...insertedSeries, ...orphanedSeries] as Array<{
     id: string
     series_index: number
     home_team_id: string
     away_team_id: string
+    best_of: number
   }>
 
   const matchesToInsert = seriesList.flatMap((s) => {
     const rows: any[] = []
-    for (let game = 1; game <= bestOf; game += 1) {
+    for (let game = 1; game <= s.best_of; game += 1) {
       const isEven = game % 2 === 0
       const homeTeamId = isEven ? s.away_team_id : s.home_team_id
       const awayTeamId = isEven ? s.home_team_id : s.away_team_id
@@ -696,7 +657,7 @@ async function maybeAdvancePhase(adminClient: SupabaseClient, series: PlayoffSer
         tournament_id: series.tournament_id,
         home_team_id: homeTeamId,
         away_team_id: awayTeamId,
-        round: 1,
+        round: game,
         phase: next,
         status: "programado",
         scheduled_at: null,
@@ -711,7 +672,10 @@ async function maybeAdvancePhase(adminClient: SupabaseClient, series: PlayoffSer
     return rows
   })
 
-  await adminClient.from("matches").insert(matchesToInsert)
+  if (matchesToInsert.length) {
+    const { error: insertMatchesError } = await adminClient.from("matches").insert(matchesToInsert)
+    if (insertMatchesError) throw new Error(`No se pudieron crear los partidos de la siguiente fase: ${insertMatchesError.message}`)
+  }
 }
 
 async function getRemainingMembershipGames(adminClient: SupabaseClient, teamId: string): Promise<number> {
@@ -783,13 +747,28 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     const { data: existing, error: existingError } = await auth.adminClient
       .from("matches")
       .select(
-        "id, tournament_id, phase, status, home_team_id, away_team_id, home_score, away_score, playoff_series_id, series_game_number, started_at, finished_at",
+        "id, tournament_id, phase, status, status_reason, home_team_id, away_team_id, home_score, away_score, playoff_series_id, series_game_number, started_at, finished_at",
       )
       .eq("id", id)
       .single()
 
     if (existingError || !existing) {
       return NextResponse.json({ error: existingError?.message ?? "Partido no encontrado" }, { status: 404 })
+    }
+
+    if (existing.status_reason === SERIES_RESOLVED_REASON) {
+      return NextResponse.json({ error: "La serie ya se definió: este partido no se juega." }, { status: 409 })
+    }
+    if (existing.playoff_series_id && existing.status !== "finalizado") {
+      const { data: series, error: seriesError } = await auth.adminClient
+        .from("playoff_series")
+        .select("winner_team_id")
+        .eq("id", existing.playoff_series_id)
+        .maybeSingle()
+      if (seriesError) return NextResponse.json({ error: seriesError.message }, { status: 400 })
+      if (series?.winner_team_id) {
+        return NextResponse.json({ error: "La serie ya tiene ganador. No se puede jugar otro partido." }, { status: 409 })
+      }
     }
 
     const update: any = {}

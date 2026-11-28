@@ -3,6 +3,7 @@ import { z } from "zod"
 import { createSupabaseAdminClient } from "@/lib/supabase/admin"
 import { createSupabaseServerClient } from "@/lib/supabase/server"
 import { resolveSeriesAndMaybeAdvance } from "@/app/api/mesa/matches/[id]/route"
+import { SERIES_RESOLVED_REASON } from "@/lib/playoff-series"
 
 const updateMatchSchedulingSchema = z.object({
   scheduledDate: z.string().optional().nullable(), // YYYY-MM-DD
@@ -79,7 +80,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     const { data: currentMatch, error: currentError } = await auth.adminClient
       .from("matches")
       .select(
-        "id, status, scheduled_at, tournament_id, phase, home_team_id, away_team_id, home_score, away_score, playoff_series_id, series_game_number",
+        "id, status, status_reason, scheduled_at, tournament_id, phase, home_team_id, away_team_id, home_score, away_score, playoff_series_id, series_game_number",
       )
       .eq("id", id)
       .maybeSingle()
@@ -90,6 +91,21 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
 
     if (!currentMatch) {
       return NextResponse.json({ error: "Partido no encontrado" }, { status: 404 })
+    }
+
+    if (currentMatch.status_reason === SERIES_RESOLVED_REASON) {
+      return NextResponse.json({ error: "La serie ya se definió: este partido no se juega." }, { status: 409 })
+    }
+    if (currentMatch.playoff_series_id && currentMatch.status !== "finalizado") {
+      const { data: series, error: seriesError } = await auth.adminClient
+        .from("playoff_series")
+        .select("winner_team_id")
+        .eq("id", currentMatch.playoff_series_id)
+        .maybeSingle()
+      if (seriesError) return NextResponse.json({ error: seriesError.message }, { status: 400 })
+      if (series?.winner_team_id) {
+        return NextResponse.json({ error: "La serie ya tiene ganador. No se puede programar otro partido." }, { status: 409 })
+      }
     }
 
     if (parsed.data.scheduledDate && parsed.data.scheduledTime) {
@@ -158,7 +174,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       .update(update)
       .eq("id", id)
       .select(
-        "id, tournament_id, home_team_id, away_team_id, round, phase, status, scheduled_at, venue_id, court_id, home_score, away_score, playoff_series_id, series_game_number, created_at, match_official_assignments(user_id, role)",
+        "id, tournament_id, home_team_id, away_team_id, round, phase, zone_code, status, scheduled_at, venue_id, court_id, home_score, away_score, playoff_series_id, series_game_number, created_at, match_official_assignments(user_id, role)",
       )
       .single()
 
@@ -216,7 +232,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       const { data: refreshed, error: refreshedError } = await auth.adminClient
         .from("matches")
         .select(
-          "id, tournament_id, home_team_id, away_team_id, round, phase, status, scheduled_at, venue_id, court_id, home_score, away_score, playoff_series_id, series_game_number, created_at, match_official_assignments(user_id, role)",
+          "id, tournament_id, home_team_id, away_team_id, round, phase, zone_code, status, scheduled_at, venue_id, court_id, home_score, away_score, playoff_series_id, series_game_number, created_at, match_official_assignments(user_id, role)",
         )
         .eq("id", id)
         .single()

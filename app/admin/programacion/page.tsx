@@ -20,6 +20,7 @@ import { EmptyState } from "@/components/ui/empty-state"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { createSupabaseBrowserClient } from "@/lib/supabase/browser"
 import { BadgeStatus } from "@/components/ui/badge-status"
+import { SERIES_RESOLVED_REASON } from "@/lib/playoff-series"
 
 export default function ProgramacionPage() {
   const [tournaments, setTournaments] = useState<Tournament[]>([])
@@ -184,7 +185,7 @@ export default function ProgramacionPage() {
         setError(json?.error ?? "No se pudieron cargar los partidos")
       } else {
         const rawMatches = (json.matches ?? []) as any[]
-        setMatches(rawMatches.map(mapMatchFromDb) as MatchRow[])
+        setMatches(rawMatches.filter((match) => match.status_reason !== SERIES_RESOLVED_REASON).map(mapMatchFromDb) as MatchRow[])
 
         const matchTeamIds = Array.from(
           new Set(
@@ -483,7 +484,9 @@ export default function ProgramacionPage() {
                 ) : (
                   filteredMatches.map((match) => {
                     const phaseLabel =
-                      match.phase === "cuartos"
+                      match.phase === "octavos"
+                        ? "octavos"
+                        : match.phase === "cuartos"
                         ? "cuartos"
                         : match.phase === "semifinal"
                           ? "semi"
@@ -501,6 +504,11 @@ export default function ProgramacionPage() {
                           <div className="font-medium">
                             {getTeamName(match.homeTeamId)} vs {getTeamName(match.awayTeamId)}
                           </div>
+                          {(match.zoneCode === "G" || match.zoneCode === "P") && (
+                            <div className="text-xs text-muted-foreground">
+                              Zona de {match.zoneCode === "G" ? "Ganadores" : "Perdedores"}
+                            </div>
+                          )}
                         </TableCell>
                         <TableCell>
                           {match.scheduledDate ? (
@@ -581,7 +589,9 @@ export default function ProgramacionPage() {
               {editingMatch && (
                 (() => {
                   const phaseLabel =
-                    editingMatch.phase === "cuartos"
+                    editingMatch.phase === "octavos"
+                      ? "octavos"
+                      : editingMatch.phase === "cuartos"
                       ? "cuartos"
                       : editingMatch.phase === "semifinal"
                         ? "semi"
@@ -594,6 +604,8 @@ export default function ProgramacionPage() {
                   return (
                     <>
                       {getTeamName(editingMatch.homeTeamId)} vs {getTeamName(editingMatch.awayTeamId)} - {fechaText}
+                      {(editingMatch.zoneCode === "G" || editingMatch.zoneCode === "P") &&
+                        ` - Zona de ${editingMatch.zoneCode === "G" ? "Ganadores" : "Perdedores"}`}
                     </>
                   )
                 })()
@@ -796,6 +808,7 @@ type MatchRow = {
   awayTeamId: string
   round: number
   phase: string
+  zoneCode?: string | null
   status: "programado" | "en_juego" | "finalizado"
   scheduledDate?: Date
   scheduledTime?: string
@@ -841,6 +854,7 @@ function mapMatchFromDb(row: any): MatchRow {
     awayTeamId: row.away_team_id,
     round: row.round,
     phase: row.phase,
+    zoneCode: row.zone_code ?? null,
     status: row.status,
     scheduledDate: scheduledAt,
     scheduledTime,

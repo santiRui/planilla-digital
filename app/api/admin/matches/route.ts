@@ -48,6 +48,7 @@ export async function GET(req: Request) {
     const tournamentId = searchParams.get("tournamentId")
     const categoryId = searchParams.get("categoryId")
     const hasPlanilla = searchParams.get("hasPlanilla")
+    const officialScores = searchParams.get("officialScores") === "true"
 
     let resolvedTournamentId: string | null = tournamentId
     if (!resolvedTournamentId && categoryId) {
@@ -95,7 +96,7 @@ export async function GET(req: Request) {
     let matchesWithPlanillaScores = matches
     let planillaMatchIds = new Set<string>()
 
-    if (finishedMatchIds.length > 0) {
+    if (finishedMatchIds.length > 0 && (!officialScores || hasPlanilla === "true")) {
       let statsRows: any[] = []
 
       try {
@@ -126,7 +127,7 @@ export async function GET(req: Request) {
         planillaMatchIds = new Set()
       }
 
-      if (Array.isArray(statsRows) && statsRows.length > 0) {
+      if (!officialScores && Array.isArray(statsRows) && statsRows.length > 0) {
         const totalsByMatch: Record<string, Record<string, number>> = {}
 
         for (const row of statsRows as any[]) {
